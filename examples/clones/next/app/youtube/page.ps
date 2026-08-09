@@ -1,0 +1,27 @@
+# YouTube clone RSC page (Next production track) - renders the precompiled
+# YouTubeApp.client.js "use client" island from a PythScribe server page.
+# next-plugin-pyths's loader rewrites the extensionless shared import to the
+# precompiled island automatically (see CONTRIBUTING.md); the fixtures import
+# resolves to shared/youtube/fixtures.ts through Turbopack's normal TS
+# resolution (cross-language .ts import from .ps).
+#
+# 4 dots = 3 directory levels up (youtube/ -> app/ -> next/ -> workspace
+# root), per the relative-import dot-counting note in CONTRIBUTING.md.
+#
+# NOTE: `#` comments, not a triple-quoted docstring - see CONTRIBUTING.md
+# "Known friction" (Turbopack UTF-8 char-boundary panic).
+from pyths.react import component
+from ....shared.youtube.YouTubeApp import YouTubeApp
+from ....shared.youtube.fixtures import youtube_videos
+
+
+@component
+def YouTubePage():
+    return main(
+        class_name="yt-page",
+        p(class_name="yt-home-link", a(href="/", "← home")),
+        YouTubeApp(videos=youtube_videos),
+    )
+
+
+__default__ = YouTubePage

@@ -1,0 +1,49 @@
+from react import useState, createElement as h
+
+def TodoItem(props):
+    todo = props.todo
+    on_toggle = props.onToggle
+    return h("li", {"onClick": on_toggle, "style": {"cursor": "pointer"}},
+        h("span", None, "[x] " if todo.done else "[ ] "),
+        h("span", {"style": {"textDecoration": "line-through" if todo.done else "none"}}, todo.text)
+    )
+
+def TodoApp():
+    todos, set_todos = useState([
+        {"text": "Learn PythScribe", "done": False},
+        {"text": "Build with React", "done": False},
+        {"text": "Ship to production", "done": False},
+    ])
+
+    new_text, set_new_text = useState("")
+
+    def toggle(index):
+        updated = [t for t in todos]
+        item = updated[index]
+        updated[index] = {"text": item.text, "done": not item.done}
+        set_todos(updated)
+
+    def add_todo():
+        if new_text:
+            set_todos([*todos, {"text": new_text, "done": False}])
+            set_new_text("")
+
+    pending = len([t for t in todos if not t.done])
+
+    return h("div", {"className": "app"},
+        h("h1", None, "PythScribe + React Todo"),
+        h("div", None,
+            h("input", {
+                "value": new_text,
+                "onChange": lambda e: set_new_text(e.target.value),
+                "placeholder": "Add a todo...",
+            }),
+            h("button", {"onClick": lambda e: add_todo()}, "Add"),
+        ),
+        h("ul", None,
+            *[h(TodoItem, {"key": i, "todo": todos[i], "onToggle": lambda e: toggle(i)}) for i in range(len(todos))]
+        ),
+        h("p", None, f"{pending} items remaining"),
+    )
+
+export = TodoApp

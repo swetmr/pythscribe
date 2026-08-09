@@ -1,0 +1,31 @@
+# LFK 21 - matrix * matrix product (flattened 25x25)
+def k21_matmul(n: int, loop: int) -> float:
+    px = [0.0] * (n * n)
+    vy = [0.0] * (n * n)
+    cx = [0.0] * (n * n)
+    i = 0
+    while i < n * n:
+        vy[i] = 0.001 * (i % 101 + 1)
+        cx[i] = 0.002 * (i % 103 + 1)
+        i = i + 1
+    l = 0
+    while l < loop:
+        k = 0
+        while k < n:
+            i = 0
+            while i < n:
+                j = 0
+                while j < n:
+                    px[j * n + i] = px[j * n + i] + vy[k * n + i] * cx[j * n + k]
+                    j = j + 1
+                i = i + 1
+            k = k + 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < n * n:
+        s = s + px[i]
+        i = i + 1
+    return s
+
+print(repr(k21_matmul(25, 2)))

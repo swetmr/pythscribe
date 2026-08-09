@@ -1,0 +1,37 @@
+# GatherPanel — Track-A behavioral spec component.
+#
+# Pins asyncio.gather inside a component effect: two async "sources"
+# loaded concurrently, state set once with the combined result (result
+# order follows argument order, not completion order).
+"use client"
+
+import asyncio
+
+from pyths.react import component, use_effect, use_state
+
+
+async def fetch_user():
+    await asyncio.sleep(0.02)
+    return "ada"
+
+
+async def fetch_score():
+    await asyncio.sleep(0.01)
+    return 99
+
+
+@component
+def GatherPanel():
+    combined, set_combined = use_state(None)
+
+    def load():
+        async def go():
+            user, score = await asyncio.gather(fetch_user(), fetch_score())
+            set_combined(user + ":" + str(score))
+        go()
+
+    use_effect(load, [])
+
+    if combined is None:
+        return p(data_testid="loading", "loading...")
+    return p(data_testid="combined", combined)

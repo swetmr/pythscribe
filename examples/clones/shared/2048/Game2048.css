@@ -1,0 +1,138 @@
+/* 2048 clone styles — shared by all three tracks (.tsx / .ps / .psc).
+   Layout only; the game logic and DOM structure live in the components.
+   vitest runs with css:false, so these rules affect the real apps and the
+   Playwright e2e run, not the render-parity snapshots. */
+
+.g2048 {
+  position: relative;
+  max-width: 480px;
+  margin: 0 auto;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: #776e65;
+}
+
+.g2048-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.g2048-title {
+  font-size: 40px;
+  font-weight: 800;
+  margin: 0;
+  color: #776e65;
+  flex: 1;
+}
+
+.g2048-stats {
+  display: flex;
+  gap: 8px;
+}
+
+.g2048-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #bbada0;
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 14px;
+  min-width: 56px;
+}
+
+.g2048-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.85;
+}
+
+.g2048-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.g2048-restart {
+  background: #8f7a66;
+  color: #f9f6f2;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.g2048-restart:hover {
+  background: #7c6a58;
+}
+
+.g2048-hint {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #8f7a66;
+}
+
+.g2048-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(4, 1fr);
+  gap: 12px;
+  background: #bbada0;
+  border-radius: 8px;
+  padding: 12px;
+  aspect-ratio: 1 / 1;
+}
+
+.g2048-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: rgba(238, 228, 218, 0.35);
+  font-size: 32px;
+  font-weight: 800;
+  color: #776e65;
+  user-select: none;
+}
+
+.g2048-cell--2 { background: #eee4da; }
+.g2048-cell--4 { background: #ede0c8; }
+.g2048-cell--8 { background: #f2b179; color: #f9f6f2; }
+.g2048-cell--16 { background: #f59563; color: #f9f6f2; }
+.g2048-cell--32 { background: #f67c5f; color: #f9f6f2; }
+.g2048-cell--64 { background: #f65e3b; color: #f9f6f2; }
+.g2048-cell--128 { background: #edcf72; color: #f9f6f2; font-size: 28px; }
+.g2048-cell--256 { background: #edcc61; color: #f9f6f2; font-size: 28px; }
+.g2048-cell--512 { background: #edc850; color: #f9f6f2; font-size: 28px; }
+.g2048-cell--1024 { background: #edc53f; color: #f9f6f2; font-size: 22px; }
+.g2048-cell--2048 { background: #edc22e; color: #f9f6f2; font-size: 22px; }
+
+.g2048-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(238, 228, 218, 0.73);
+  border-radius: 8px;
+}
+
+.g2048-overlay-msg {
+  font-size: 44px;
+  font-weight: 800;
+  color: #776e65;
+}
+
+.g2048-overlay-btn {
+  background: #8f7a66;
+  color: #f9f6f2;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 18px;
+  font-weight: 700;
+  cursor: pointer;
+}

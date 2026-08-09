@@ -1,0 +1,20 @@
+# lucide-react icons — .ps twin (system under test).
+#
+# Probes: capitalized component factories held in a dict + dynamically
+# selected (`Icon = ICONS[name]`), snake props on a DIRECT library import
+# (stroke_width → strokeWidth, data_testid → data-testid), and the
+# final-JS-names idiom on the dynamic tag (no conversion there — the
+# compiler cannot attribute a local variable to a library, so spread
+# **{"data-testid": ...} and write camelCase verbatim if needed).
+from pyths.react import component
+from lucide_react import Check, ChevronDown, Loader2
+
+ICONS = {"check": Check, "chevron": ChevronDown, "loader": Loader2}
+
+
+@component
+def IconDemo(name="chevron"):
+    Icon = ICONS[name]
+    return div(
+        Check(size=16, stroke_width=1.5, data_testid="static-icon"),
+        Icon(size=24, **{"data-testid": "dynamic-icon"}))

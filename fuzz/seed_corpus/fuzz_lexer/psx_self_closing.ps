@@ -1,0 +1,10 @@
+"use client"
+
+@component
+def Profile():
+    return div(class_name="profile",
+        img(src="/avatar.png", alt="Avatar"),
+        hr(),
+        br(),
+        input(type="text", placeholder="Name", auto_focus=True),
+    )

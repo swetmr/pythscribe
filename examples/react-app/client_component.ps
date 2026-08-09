@@ -1,0 +1,12 @@
+"use client"
+
+from react import use_state
+
+@component
+def ToggleButton():
+    active, set_active = use_state(False)
+
+    def toggle():
+        set_active(not active)
+
+    return None

@@ -1,0 +1,33 @@
+# react-hook-form — .ps twin (system under test).
+#
+# Probes: use_form → useForm, **register(...) spread onto an HTML input
+# (register returns camelCase keys — spread is verbatim), verbatim member
+# calls into the form API (rhf.handleSubmit, rhf.formState.errors), the
+# Controller render-prop (children-as-function receiving a JS object,
+# args.field spread into the input), optional chaining on error objects,
+# and validated-submit data consumed Pythonically (data["email"]).
+from pyths.react import component, use_state
+from react_hook_form import use_form, Controller
+
+
+@component
+def FormDemo():
+    rhf = use_form({"mode": "onSubmit"})
+    submitted, set_submitted = use_state(None)
+
+    def on_valid(data):
+        set_submitted(f"{data['email']}|{data['nickname']}")
+
+    errors = rhf.formState.errors
+    return form(on_submit=rhf.handleSubmit(on_valid),
+        input(data_testid="email", **rhf.register("email", {"required": "Email required"})),
+        p(data_testid="email-error", str(errors.email?.message)) if errors.email else None,
+        Controller(
+            control=rhf.control,
+            name="nickname",
+            default_value="",
+            rules={"required": "Nickname required"},
+            render=lambda args: input(data_testid="nickname", **args.field)),
+        p(data_testid="nickname-error", str(errors.nickname?.message)) if errors.nickname else None,
+        p(data_testid="submitted", submitted ?? "none"),
+        button(type="submit", "Send"))

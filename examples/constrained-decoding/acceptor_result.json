@@ -1,0 +1,57 @@
+{
+  "grammar": "grammar/pyths.lark",
+  "corpus": "baseline-001",
+  "tier1a": {
+    "ps": {
+      "gradeable": 241,
+      "accept": 241,
+      "ungradeable": 4,
+      "corroborated_reject": [],
+      "false_reject": []
+    },
+    "psc": {
+      "gradeable": 244,
+      "accept": 243,
+      "ungradeable": 1,
+      "corroborated_reject": [
+        "except_custom_psc_5.md"
+      ],
+      "false_reject": []
+    }
+  },
+  "tier1a_all": {
+    "gradeable": 485,
+    "accept": 484,
+    "ungradeable": 5,
+    "corroborated_reject": 1,
+    "false_reject": 0
+  },
+  "tier1b": {
+    "total": 1579,
+    "rejected": 1579,
+    "per_label": {
+      "unbalanced_paren": [
+        359,
+        359
+      ],
+      "stray_dollar": [
+        396,
+        396
+      ],
+      "dangling_op": [
+        484,
+        484
+      ],
+      "drop_colon": [
+        170,
+        170
+      ],
+      "missing_indent": [
+        170,
+        170
+      ]
+    },
+    "leaks": []
+  },
+  "sound_acceptor": true
+}

@@ -1,0 +1,61 @@
+# Stress test: dataclass with 30 validated fields
+
+from dataclasses import dataclass, field
+from pydantic import Field, validator
+
+@dataclass(frozen=True)
+class BigConfig:
+    field_01: int = Field(ge=0, le=1000)
+    field_02: float = Field(ge=0.0, le=200.0)
+    field_03: bool = True
+    field_04: str = Field(min_length=1, max_length=100)
+    field_05: int = Field(ge=0, le=5000)
+    field_06: str = Field(min_length=1, max_length=100)
+    field_07: int = Field(ge=0, le=7000)
+    field_08: float = Field(ge=0.0, le=800.0)
+    field_09: bool = True
+    field_10: str = Field(min_length=1, max_length=100)
+    field_11: int = Field(ge=0, le=11000)
+    field_12: str = Field(min_length=1, max_length=100)
+    field_13: int = Field(ge=0, le=13000)
+    field_14: float = Field(ge=0.0, le=1400.0)
+    field_15: bool = True
+    field_16: str = Field(min_length=1, max_length=100)
+    field_17: int = Field(ge=0, le=17000)
+    field_18: str = Field(min_length=1, max_length=100)
+    field_19: int = Field(ge=0, le=19000)
+    field_20: float = Field(ge=0.0, le=2000.0)
+    field_21: bool = True
+    field_22: str = Field(min_length=1, max_length=100)
+    field_23: int = Field(ge=0, le=23000)
+    field_24: str = Field(min_length=1, max_length=100)
+    field_25: int = Field(ge=0, le=25000)
+    field_26: float = Field(ge=0.0, le=2600.0)
+    field_27: bool = True
+    field_28: str = Field(min_length=1, max_length=100)
+    field_29: int = Field(ge=0, le=29000)
+    field_30: str = Field(min_length=1, max_length=100)
+
+    @validator
+    def validate_field_01(self):
+        return self.field_01
+
+    @validator
+    def validate_field_02(self):
+        return self.field_02
+
+    @validator
+    def validate_field_03(self):
+        return self.field_03
+
+    @validator
+    def validate_field_04(self):
+        return self.field_04
+
+    @validator
+    def validate_field_05(self):
+        return self.field_05
+
+    @validator
+    def validate_field_06(self):
+        return self.field_06

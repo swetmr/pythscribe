@@ -1,0 +1,23 @@
+# Netflix clone RSC page - server component that mounts the shared
+# tri-track NetflixApp "use client" island with the offline fixtures.
+#
+# NetflixApp resolves to the precompiled NetflixApp.client.js island via
+# next-plugin-pyths's rewritePsImports (see scripts/precompile-client.mjs);
+# fixtures resolve to the plain .ts module through Next's normal pipeline.
+# Fixture props are plain JSON data, so they serialize cleanly across the
+# server -> client island boundary. Dual-track with
+# app/react-reference/netflix/page.tsx.
+#
+# NOTE: `#` comments, not a triple-quoted docstring - see
+# shared/hello/HelloCard.ps (Turbopack UTF-8 char-boundary panic).
+from pyths.react import component
+from ....shared.netflix.NetflixApp import NetflixApp
+from ....shared.netflix.fixtures import netflixTitles, netflixRows, netflixHeroId
+
+
+@component
+def NetflixPage():
+    return NetflixApp(titles=netflixTitles, rows=netflixRows, hero_id=netflixHeroId)
+
+
+__default__ = NetflixPage

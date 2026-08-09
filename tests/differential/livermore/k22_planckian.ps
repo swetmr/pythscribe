@@ -1,0 +1,46 @@
+# LFK 22 - Planckian distribution. libm exp() is NOT correctly rounded and
+# differs between CPython (C libm) and JS (V8) in the last ULP, which would
+# make byte-comparison flaky - so the kernel carries its own deterministic
+# exp approximation (truncated Taylor series, identical arithmetic on every
+# backend). The kernel's division/limits structure is unchanged.
+def pexp(x: float) -> float:
+    term = 1.0
+    acc = 1.0
+    i = 1
+    while i < 14:
+        term = term * x / (1.0 * i)
+        acc = acc + term
+        i = i + 1
+    return acc
+
+def k22_planck(n: int, loop: int) -> float:
+    u = [0.0] * n
+    v = [0.0] * n
+    w = [0.0] * n
+    x = [0.0] * n
+    y = [0.0] * n
+    i = 0
+    while i < n:
+        u[i] = 0.5 + 0.001 * (i % 89)
+        v[i] = 0.2 + 0.0007 * (i % 97)
+        y[i] = 1.5 + 0.0005 * (i % 83)
+        x[i] = 0.3 + 0.0009 * (i % 79)
+        i = i + 1
+    expmax = 5.0
+    u[n - 1] = 0.99 * expmax * v[n - 1]
+    l = 0
+    while l < loop:
+        k = 0
+        while k < n:
+            y[k] = u[k] / v[k]
+            w[k] = x[k] / (pexp(y[k]) - 1.0)
+            k = k + 1
+        l = l + 1
+    s = 0.0
+    k = 0
+    while k < n:
+        s = s + w[k] + y[k]
+        k = k + 1
+    return s
+
+print(repr(k22_planck(101, 4)))

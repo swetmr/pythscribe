@@ -1,0 +1,461 @@
+# Tetris - falling-block puzzle game, PythScribe canonical track.
+#
+# Dual-track with Tetris.tsx (React oracle). Renders byte-identical DOM for
+# identical state (see Tetris.test.tsx render-parity suite).
+#
+# Deliberate stress surface for the compiler - everything 2048 has PLUS a real
+# timer-driven game loop:
+#  - a SEEDED 7-bag (Park-Miller MINSTD + Fisher-Yates, pure integer
+#    arithmetic - no Math.random, no bitwise ops, no BigInt) so the piece
+#    sequence is fully deterministic and reproducible under Playwright;
+#  - SRS rotation with the standard wall-kick tables (data in fixtures.ts);
+#  - a gravity + lock-delay reducer driven by setTimeout, controllable by a
+#    fake clock (page.clock in e2e) - the async/timer lowering path that the
+#    keyboard-only 2048 clone does not exercise;
+#  - deterministic line-clear, scoring and leveling; hold piece; next queue.
+#
+# The gravity/lock timers are large so they never fire during the fully
+# synchronous fireEvent-driven render-parity tests; the e2e interaction
+# differential advances the fake clock to fire them on purpose.
+#
+# NOTE: `#` comment block, not a triple-quoted module docstring - see
+# CONTRIBUTING.md "Known friction" (Turbopack UTF-8 char-boundary panic).
+"use client"
+
+import "./Tetris.css"
+
+from pyths.react import component, use_effect, use_state
+from .fixtures import (
+    COLS,
+    GRAVITY_MS,
+    HARD_DROP_POINTS,
+    KICKS_I_CCW,
+    KICKS_I_CW,
+    KICKS_JLSTZ_CCW,
+    KICKS_JLSTZ_CW,
+    LETTERS,
+    LOCK_MS,
+    PIECES,
+    PREVIEW,
+    ROWS,
+    SCORES,
+    SEED,
+    SOFT_DROP_POINTS,
+    SPAWN_COL,
+    SPAWN_ROW,
+)
+
+
+# --- seeded PRNG (Park-Miller MINSTD) - pure, returns the next state ---
+def prng(s):
+    return (s * 16807) % 2147483647
+
+
+# One shuffled bag of the 7 piece types (Fisher-Yates driven by the PRNG,
+# pure integer-modulo). Returns [next_state, bag].
+def new_bag(seed):
+    bag = [0, 1, 2, 3, 4, 5, 6]
+    s = seed
+    for i in range(6, 0, -1):
+        s = prng(s)
+        j = s % (i + 1)
+        tmp = bag[i]
+        bag[i] = bag[j]
+        bag[j] = tmp
+    return [s, bag]
+
+
+# Refill the upcoming-piece queue until it holds at least a full bag, so the
+# PREVIEW window and the next spawn are always available. Returns [seed, queue].
+def ensure_queue(seed, queue):
+    s = seed
+    q = queue[:]
+    while len(q) < 7:
+        s2, bag = new_bag(s)
+        s = s2
+        q = q + bag
+    return [s, q]
+
+
+# Board cells [row, col] occupied by a piece of `piece_type` at rotation `rot`
+# whose local box top-left sits at [pr, pc].
+def piece_cells(piece_type, rot, pr, pc):
+    return [[pr + m[0], pc + m[1]] for m in PIECES[piece_type][rot]]
+
+
+# A placement collides if any mino leaves the well sideways/below or overlaps a
+# settled block. Rows above the top (r < 0) are open space (spawn/kick room).
+def collides(board, cells):
+    for cell in cells:
+        r = cell[0]
+        c = cell[1]
+        if c < 0 or c >= COLS or r >= ROWS:
+            return True
+        if r >= 0 and board[r * COLS + c] != 0:
+            return True
+    return False
+
+
+# Remove full rows, dropping everything above down. Returns [board, cleared].
+def clear_lines(board):
+    kept = []
+    cleared = 0
+    for r in range(ROWS):
+        row = board[r * COLS:r * COLS + COLS]
+        full = True
+        for c in range(COLS):
+            if row[c] == 0:
+                full = False
+        if full:
+            cleared += 1
+        else:
+            kept.append(row)
+    out = []
+    for i in range(cleared):
+        for c in range(COLS):
+            out.append(0)
+    for row in kept:
+        for v in row:
+            out.append(v)
+    return [out, cleared]
+
+
+def new_game():
+    board = [0 for _ in range(ROWS * COLS)]
+    seed, queue = ensure_queue(SEED, [])
+    current = queue[0]
+    queue = queue[1:]
+    seed, queue = ensure_queue(seed, queue)
+    return {
+        "board": board,
+        "seed": seed,
+        "queue": queue,
+        "current": current,
+        "rot": 0,
+        "pr": SPAWN_ROW,
+        "pc": SPAWN_COL,
+        "hold": None,
+        "canHold": True,
+        "score": 0,
+        "lines": 0,
+        "level": 1,
+        "status": "playing",
+    }
+
+
+# Lock the active piece into the board, clear lines, score, and spawn the next
+# piece from the queue. Sets status 'over' if the fresh piece has no room.
+def lock_piece(g):
+    board = g["board"][:]
+    for cell in piece_cells(g["current"], g["rot"], g["pr"], g["pc"]):
+        board[cell[0] * COLS + cell[1]] = g["current"] + 1
+    board2, cleared = clear_lines(board)
+    lines = g["lines"] + cleared
+    level = lines // 10 + 1
+    score = g["score"] + SCORES[cleared] * g["level"]
+    seed, queue = ensure_queue(g["seed"], g["queue"])
+    next_type = queue[0]
+    queue = queue[1:]
+    seed, queue = ensure_queue(seed, queue)
+    ng = {
+        "board": board2,
+        "seed": seed,
+        "queue": queue,
+        "current": next_type,
+        "rot": 0,
+        "pr": SPAWN_ROW,
+        "pc": SPAWN_COL,
+        "hold": g["hold"],
+        "canHold": True,
+        "score": score,
+        "lines": lines,
+        "level": level,
+        "status": "playing",
+    }
+    if collides(board2, piece_cells(next_type, 0, SPAWN_ROW, SPAWN_COL)):
+        ng["status"] = "over"
+    return ng
+
+
+# Gravity/lock reducer - the setTimeout callback. Drop one row if possible,
+# otherwise lock. Returns the same reference when not playing (no re-render).
+def tick(g):
+    if g["status"] != "playing":
+        return g
+    if not collides(g["board"], piece_cells(g["current"], g["rot"], g["pr"] + 1, g["pc"])):
+        return {**g, "pr": g["pr"] + 1}
+    return lock_piece(g)
+
+
+def move(g, dc):
+    if g["status"] != "playing":
+        return g
+    if collides(g["board"], piece_cells(g["current"], g["rot"], g["pr"], g["pc"] + dc)):
+        return g
+    return {**g, "pc": g["pc"] + dc}
+
+
+def soft_drop(g):
+    if g["status"] != "playing":
+        return g
+    if collides(g["board"], piece_cells(g["current"], g["rot"], g["pr"] + 1, g["pc"])):
+        return g
+    return {**g, "pr": g["pr"] + 1, "score": g["score"] + SOFT_DROP_POINTS}
+
+
+def hard_drop(g):
+    if g["status"] != "playing":
+        return g
+    dist = 0
+    while not collides(g["board"], piece_cells(g["current"], g["rot"], g["pr"] + dist + 1, g["pc"])):
+        dist += 1
+    dropped = {**g, "pr": g["pr"] + dist, "score": g["score"] + dist * HARD_DROP_POINTS}
+    return lock_piece(dropped)
+
+
+def rotate(g, direction):
+    if g["status"] != "playing":
+        return g
+    if g["current"] == 1:
+        return g
+    new_rot = (g["rot"] + direction + 4) % 4
+    is_i = g["current"] == 0
+    if direction == 1:
+        table = KICKS_I_CW if is_i else KICKS_JLSTZ_CW
+    else:
+        table = KICKS_I_CCW if is_i else KICKS_JLSTZ_CCW
+    kicks = table[g["rot"]]
+    for k in kicks:
+        npr = g["pr"] - k[1]
+        npc = g["pc"] + k[0]
+        if not collides(g["board"], piece_cells(g["current"], new_rot, npr, npc)):
+            return {**g, "rot": new_rot, "pr": npr, "pc": npc}
+    return g
+
+
+def hold_piece(g):
+    if g["status"] != "playing" or not g["canHold"]:
+        return g
+    seed = g["seed"]
+    queue = g["queue"]
+    hold = g["current"]
+    if g["hold"] is None:
+        seed, queue = ensure_queue(seed, queue)
+        current = queue[0]
+        queue = queue[1:]
+        seed, queue = ensure_queue(seed, queue)
+    else:
+        current = g["hold"]
+    ng = {
+        **g,
+        "hold": hold,
+        "current": current,
+        "rot": 0,
+        "pr": SPAWN_ROW,
+        "pc": SPAWN_COL,
+        "canHold": False,
+        "seed": seed,
+        "queue": queue,
+    }
+    if collides(g["board"], piece_cells(current, 0, SPAWN_ROW, SPAWN_COL)):
+        ng["status"] = "over"
+    return ng
+
+
+# Discrete keyboard reducer - pure, returns the same reference on a no-op.
+def reduce_key(g, key):
+    if key == "ArrowLeft":
+        return move(g, -1)
+    if key == "ArrowRight":
+        return move(g, 1)
+    if key == "ArrowDown":
+        return soft_drop(g)
+    if key == "ArrowUp" or key == "x":
+        return rotate(g, 1)
+    if key == "z":
+        return rotate(g, -1)
+    if key == " ":
+        return hard_drop(g)
+    if key == "c":
+        return hold_piece(g)
+    return g
+
+
+HANDLED = {
+    "ArrowLeft": True,
+    "ArrowRight": True,
+    "ArrowUp": True,
+    "ArrowDown": True,
+    " ": True,
+    "x": True,
+    "z": True,
+    "c": True,
+}
+
+
+# Map of board index -> color for the active piece (cells above the top row
+# are not rendered). Used to overlay the falling piece on the settled board.
+def active_map(g):
+    m = {}
+    for cell in piece_cells(g["current"], g["rot"], g["pr"], g["pc"]):
+        if cell[0] >= 0:
+            m[cell[0] * COLS + cell[1]] = g["current"] + 1
+    return m
+
+
+# 4x4 mini-grid data for a piece preview (spawn rotation), keyed by r*4+c.
+def mini_map(piece_type):
+    m = {}
+    if piece_type is None:
+        return m
+    for cell in PIECES[piece_type][0]:
+        m[cell[0] * 4 + cell[1]] = piece_type + 1
+    return m
+
+
+@component
+def Mini(piece_type, kind):
+    m = mini_map(piece_type)
+    return div(
+        class_name="tet-mini",
+        [
+            div(
+                key=i,
+                class_name="tet-mini-cell tet-color-" + str(m.get(i, 0)),
+                data_testid=kind + "-cell-" + str(i // 4) + "-" + str(i % 4),
+                data_color=m.get(i, 0),
+            )
+            for i in range(16)
+        ],
+    )
+
+
+@component
+def Tetris():
+    game, set_game = use_state(lambda: new_game())
+
+    # Discrete keyboard control - subscribed once; every handler is a functional
+    # update over fresh state. Arrow keys + space + x/z/c are consumed
+    # (preventDefault); everything else passes through so the page stays usable.
+    def _key_effect():
+        def on_key(e):
+            if not HANDLED.get(e.key, False):
+                return
+            e.preventDefault()
+            set_game(lambda g: reduce_key(g, e.key))
+
+        window.addEventListener("keydown", on_key)
+
+        def _cleanup():
+            window.removeEventListener("keydown", on_key)
+
+        return _cleanup
+
+    use_effect(_key_effect, [])
+
+    # The timer-driven game loop. Reschedules on every state change: LOCK_MS
+    # when the piece is grounded (lock delay), GRAVITY_MS while it is still
+    # falling. Under Playwright's page.clock these fire deterministically; under
+    # vitest (synchronous fireEvent, no macrotask yield) they never fire.
+    def _gravity_effect():
+        # bare return (undefined), NOT `return None`: React 19 rejects a null
+        # effect cleanup ("destroy is not a function" at unmount)
+        if game["status"] != "playing":
+            return
+        grounded = collides(game["board"], piece_cells(game["current"], game["rot"], game["pr"] + 1, game["pc"]))
+        delay = LOCK_MS if grounded else GRAVITY_MS
+        tid = setTimeout(lambda: set_game(lambda g: tick(g)), delay)
+
+        def _cleanup():
+            clearTimeout(tid)
+
+        return _cleanup
+
+    use_effect(_gravity_effect, [game])
+
+    def restart():
+        set_game(new_game())
+
+    amap = active_map(game)
+    colors = [amap.get(i, game["board"][i]) for i in range(ROWS * COLS)]
+    queue_letters = [LETTERS[game["queue"][i]] for i in range(PREVIEW)]
+
+    return div(
+        class_name="tetris",
+        data_testid="tetris",
+        div(
+            class_name="tet-side tet-side-left",
+            div(
+                class_name="tet-panel",
+                span(class_name="tet-panel-label", "Hold"),
+                Mini(piece_type=game["hold"], kind="hold"),
+                span(class_name="tet-panel-sub", data_testid="hold-label", "-" if game["hold"] is None else LETTERS[game["hold"]]),
+            ),
+        ),
+        div(
+            class_name="tet-center",
+            div(
+                class_name="tet-toolbar",
+                h1(class_name="tet-title", "Tetris"),
+                button(class_name="tet-restart", data_testid="restart", on_click=restart, "New Game"),
+            ),
+            p(
+                class_name="tet-status",
+                data_testid="status",
+                "Game over." if game["status"] == "over" else "Arrows move, ↑/x rotate, z rotate CCW, space drop, c hold.",
+            ),
+            div(
+                class_name="tet-board",
+                data_testid="board",
+                [
+                    div(
+                        key=i,
+                        class_name="tet-cell tet-color-" + str(colors[i]),
+                        data_testid="cell-" + str(i // COLS) + "-" + str(i % COLS),
+                        data_filled=colors[i] != 0,
+                        data_color=colors[i],
+                    )
+                    for i in range(ROWS * COLS)
+                ],
+            ),
+            game["status"] == "over" and div(
+                class_name="tet-overlay",
+                data_testid="overlay",
+                div(class_name="tet-overlay-msg", data_testid="overlay-msg", "Game over"),
+                button(class_name="tet-overlay-btn", data_testid="overlay-restart", on_click=restart, "Try again"),
+            ),
+        ),
+        div(
+            class_name="tet-side tet-side-right",
+            div(
+                class_name="tet-stats",
+                div(
+                    class_name="tet-stat",
+                    data_testid="score",
+                    span(class_name="tet-panel-label", "Score"),
+                    span(class_name="tet-stat-value", data_testid="score-value", game["score"]),
+                ),
+                div(
+                    class_name="tet-stat",
+                    data_testid="lines",
+                    span(class_name="tet-panel-label", "Lines"),
+                    span(class_name="tet-stat-value", data_testid="lines-value", game["lines"]),
+                ),
+                div(
+                    class_name="tet-stat",
+                    data_testid="level",
+                    span(class_name="tet-panel-label", "Level"),
+                    span(class_name="tet-stat-value", data_testid="level-value", game["level"]),
+                ),
+            ),
+            div(
+                class_name="tet-panel",
+                span(class_name="tet-panel-label", "Next"),
+                Mini(piece_type=game["queue"][0], kind="next"),
+                span(class_name="tet-panel-sub", data_testid="next-queue", "".join(queue_letters)),
+            ),
+        ),
+    )
+
+
+__default__ = Tetris

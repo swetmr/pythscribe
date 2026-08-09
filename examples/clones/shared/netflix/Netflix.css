@@ -1,0 +1,294 @@
+/* Netflix clone — component-scoped stylesheet, imported as a side effect
+   from NetflixApp.ps via the A2 bare-string import (`import "./Netflix.css"`)
+   and the normal ESM way from the NetflixApp.tsx oracle.
+
+   Interaction-relevant rules the e2e suite depends on:
+   - .nf-card-preview uses visibility (not just opacity) so Playwright's
+     toBeVisible() flips on :hover;
+   - .nf-track is the horizontal scroll container (scrollBy target);
+   - cards have a fixed flex-basis so 10+ cards always overflow the track. */
+
+.nf-app {
+  background: #141414;
+  color: #fff;
+  min-height: 100vh;
+  overflow-x: hidden;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+/* ---------- Hero ---------- */
+.nf-hero {
+  position: relative;
+  min-height: 62vh;
+  display: flex;
+  align-items: flex-end;
+  padding: 48px 4vw 72px;
+}
+.nf-hero::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 120px;
+  background: linear-gradient(180deg, transparent, #141414);
+  pointer-events: none;
+}
+.nf-hero-content {
+  max-width: 560px;
+  position: relative;
+}
+.nf-hero-kicker {
+  letter-spacing: 3px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #e50914;
+  margin: 0 0 8px;
+}
+.nf-hero-title {
+  font-size: clamp(28px, 5vw, 56px);
+  margin: 0 0 12px;
+  line-height: 1.05;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+.nf-meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #ddd;
+}
+.nf-match {
+  color: #46d369;
+  font-weight: 700;
+}
+.nf-maturity {
+  border: 1px solid #888;
+  padding: 0 6px;
+  font-size: 12px;
+}
+.nf-hero-desc {
+  margin: 0 0 20px;
+  font-size: 16px;
+  line-height: 1.45;
+  color: #eee;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+.nf-hero-ctas {
+  display: flex;
+  gap: 10px;
+}
+.nf-btn {
+  border: 0;
+  border-radius: 4px;
+  padding: 10px 22px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nf-btn-play {
+  background: #fff;
+  color: #000;
+}
+.nf-btn-play:hover {
+  background: #e6e6e6;
+}
+.nf-btn-info {
+  background: rgba(109, 109, 110, 0.7);
+  color: #fff;
+}
+.nf-btn-info:hover {
+  background: rgba(109, 109, 110, 0.5);
+}
+
+/* ---------- Rows / carousel ---------- */
+.nf-rows {
+  padding: 0 0 60px;
+}
+.nf-row {
+  margin: 28px 0;
+}
+.nf-row-label {
+  font-size: 18px;
+  margin: 0 0 10px;
+  padding: 0 4vw;
+}
+.nf-row-body {
+  position: relative;
+}
+.nf-track {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  padding: 24px 4vw;
+  margin: -24px 0;
+  scrollbar-width: none;
+}
+.nf-track::-webkit-scrollbar {
+  display: none;
+}
+.nf-scroll {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3vw;
+  min-width: 36px;
+  z-index: 30;
+  border: 0;
+  background: rgba(20, 20, 20, 0.55);
+  color: #fff;
+  font-size: 28px;
+  cursor: pointer;
+}
+.nf-scroll:hover {
+  background: rgba(20, 20, 20, 0.85);
+}
+.nf-scroll-left {
+  left: 0;
+}
+.nf-scroll-right {
+  right: 0;
+}
+
+/* ---------- Cards ---------- */
+.nf-card {
+  flex: 0 0 220px;
+  cursor: pointer;
+  position: relative;
+  border-radius: 6px;
+  transition: transform 0.18s ease-out;
+}
+.nf-card:hover {
+  transform: scale(1.28);
+  z-index: 20;
+}
+.nf-card-art {
+  height: 124px;
+  border-radius: 6px 6px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+}
+.nf-card-name {
+  font-weight: 700;
+  font-size: 15px;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+.nf-card-preview {
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+  background: #181818;
+  border-radius: 0 0 6px 6px;
+  padding: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+.nf-card:hover .nf-card-preview {
+  visibility: visible;
+  opacity: 1;
+}
+.nf-card-meta {
+  color: #aaa;
+  font-size: 12px;
+}
+.nf-card-toggle {
+  border: 1px solid #777;
+  background: rgba(42, 42, 42, 0.8);
+  color: #fff;
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.nf-card-toggle:hover {
+  border-color: #fff;
+}
+.nf-card[data-in-list='true'] .nf-card-toggle {
+  border-color: #46d369;
+  color: #46d369;
+}
+
+/* ---------- My List ---------- */
+.nf-mylist-empty {
+  padding: 8px 4vw 0;
+  color: #999;
+}
+
+/* ---------- Detail modal (portal) ---------- */
+.nf-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 48px 16px;
+}
+.nf-modal {
+  background: #181818;
+  color: #fff;
+  width: min(760px, 100%);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+}
+.nf-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  border: 0;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  background: #181818;
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+}
+.nf-modal-art {
+  height: 280px;
+  display: flex;
+  align-items: flex-end;
+  padding: 24px;
+}
+.nf-modal-art .nf-card-name {
+  font-size: 34px;
+  text-align: left;
+}
+.nf-modal-body {
+  padding: 20px 24px 28px;
+}
+.nf-modal-preview {
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+  border-radius: 6px;
+  margin: 0 0 16px;
+  background: #000;
+  display: block;
+}
+.nf-modal-desc {
+  font-size: 15px;
+  line-height: 1.5;
+  color: #ddd;
+}
+.nf-modal-genres {
+  color: #999;
+  font-size: 13px;
+}

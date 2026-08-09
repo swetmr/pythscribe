@@ -1,0 +1,47 @@
+# Model drift gate — pins the expander facts the Lean proofs assume.
+#
+# verification/PythExpandVerify.lean quantifies over (a) the FIXED tier
+# order E → C → A → B → hooks → Dict (`expand_order`), and (b) the tables of
+# the FIVE tiers that are now CONCRETE Lean functions:
+#
+#   Dict   `$NAME` dictionary   strings.rs::ALIASES      (committedDict)
+#   B      kwarg aliases        kwargs.rs::ALIASES       (committedKwargs)
+#   A      import presets       presets.rs::PRESETS      (committedPresets)
+#   A      decorator aliases    decorators.rs::ALIASES   (committedDecorators)
+#   hooks  hook-call shorthand  hooks.rs::ALIASES        (committedHooks)
+#   E      `%NAME` idioms       (NO compiler-side table — see below)
+#
+# Each has a decided exactness theorem (`committed_*_exact`) proving the Lean
+# tier IS the shipping table, and an arm of the model-vs-implementation
+# differential (diff_harness.py --tier ...). EVERY tier of the shipped
+# expander is instantiated here — there is no abstract/opaque tier left.
+# (The PSX tag-DSL, formerly Tier C, was a recursive-descent parser with no
+# alias table and was removed from the expander; see verification/README.md.)
+#
+# TIER E: `idioms::substitute_with_map` takes its `%NAME` map from
+# `[expand.idioms]` in the user's pyths.toml, and it is EMPTY by default —
+# there is no shipped table to hash. What is pinned instead is the committed
+# FIXTURE that both sides are differentially compared over,
+# verification/idiom-table.toml, hashed as a file (CRLF-normalized).
+# `expandIdiomStr_nil` proves the default (empty-map) config is the identity.
+#
+# Checked by: cargo test -p pyths_expand --test gates
+#             (model_manifest_matches_rust_tier_order_and_dictionary)
+# The Lean side is generated from the same Rust tables and diffed in CI
+# (gen-dict-data.py / gen-kwarg-data.py / gen-tiera-data.py /
+# gen-hook-data.py / gen-idiom-data.py, each with --check), so neither side
+# can move alone.
+# If that test fails: update the Lean model FIRST, then paste the
+# test's expected block below (replacing the data lines).
+tier-order: E,A,B,hooks,Dict
+dict-entries: 61
+dict-fnv1a64: 0f3cf6eb3ce4df16
+kwarg-entries: 9
+kwarg-fnv1a64: e2cee22f834ebc3d
+preset-entries: 8
+preset-fnv1a64: 776772f465fa43cf
+decorator-entries: 5
+decorator-fnv1a64: 1a5421743f8398b3
+hook-entries: 6
+hook-fnv1a64: 9d8eb47516baa2ea
+idiom-fixture-fnv1a64: a01505eab6c56063

@@ -1,0 +1,12 @@
+# Belt-and-suspenders alongside the `files:` allowlist in package.json.
+# Everything below is excluded from the published tarball.
+.DS_Store
+*.log
+node_modules/
+tests/
+test/
+*.test.js
+.git*
+.editorconfig
+.vscode/
+*.tgz

@@ -1,0 +1,16 @@
+from pyths.react import component
+from .actions import submit
+
+
+@component
+def ActionPage():
+    return main(style={"padding": "20px"})(
+        h1()("Server action + FormData"),
+        form(action=submit)(
+            input(name="name", placeholder="your name"),
+            button(type="submit")("Send"),
+        ),
+    )
+
+
+__default__ = ActionPage

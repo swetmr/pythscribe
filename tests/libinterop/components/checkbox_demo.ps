@@ -1,0 +1,17 @@
+# Radix Checkbox — .ps twin (system under test).
+#
+# Probes: controlled checked= + on_checked_change → onCheckedChange, the
+# library callback VALUE (boolean | 'indeterminate') consumed Pythonically
+# (`checked is True`), Indicator child mount/unmount.
+from pyths.react import component, use_state
+import at_radix_ui.react_checkbox as Checkbox
+
+
+@component
+def CheckboxDemo():
+    checked, set_checked = use_state(False)
+    return div(
+        Checkbox.Root(data_testid="cb", checked=checked,
+            on_checked_change=lambda value: set_checked(value),
+            Checkbox.Indicator(data_testid="cb-indicator", "on")),
+        p(data_testid="cb-state", "yes" if checked is True else "no"))

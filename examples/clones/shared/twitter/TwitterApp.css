@@ -1,0 +1,191 @@
+/* Component-scoped stylesheet for the Twitter clone, imported as a side
+   effect from TwitterApp.ps / TwitterApp.psc (A2 — `import "./TwitterApp.css"`)
+   and the normal ESM way from TwitterApp.tsx. Uses shared/theme.css tokens. */
+
+.tw-app {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.tw-header h1 {
+  font-size: 20px;
+  margin: 0 0 12px;
+}
+
+.tw-toast {
+  position: sticky;
+  top: 8px;
+  z-index: 10;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+.tw-compose {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.tw-compose-input {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+
+.tw-compose-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.tw-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tw-count-over {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.tw-post-btn {
+  padding: 6px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tw-post-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tw-tweet {
+  display: flex;
+  gap: 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.tw-avatar {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--rule);
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tw-tweet-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.tw-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tw-name {
+  font-weight: 700;
+}
+
+.tw-handle,
+.tw-dot,
+.tw-time {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.tw-sending {
+  color: var(--accent);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.tw-text {
+  margin: 6px 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.tw-actions {
+  display: flex;
+  gap: 24px;
+}
+
+.tw-action {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.tw-action:hover {
+  color: var(--ink);
+  background: var(--rule);
+}
+
+.tw-action[data-liked='true'] {
+  color: var(--accent);
+}
+
+.tw-action[data-retweeted='true'] {
+  color: #4dd08a;
+}
+
+.tw-sentinel {
+  height: 1px;
+}
+
+.tw-feed-status,
+.tw-no-replies {
+  color: var(--muted);
+  text-align: center;
+  padding: 10px 0 20px;
+  font-size: 14px;
+}
+
+.tw-back {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+
+.tw-thread-title {
+  font-size: 16px;
+  color: var(--muted);
+  margin: 16px 0 10px;
+}

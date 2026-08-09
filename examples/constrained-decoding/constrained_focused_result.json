@@ -1,0 +1,37 @@
+{
+  "n": 6,
+  "parses": 5,
+  "syntax_error_rate": 0.16666666666666666,
+  "samples": [
+    {
+      "i": 0,
+      "grammar_ok": true,
+      "code": "def square(n):\n    return n * n\n\nresult = square(7)\nprint(result)"
+    },
+    {
+      "i": 1,
+      "grammar_ok": false,
+      "code": "The **Answer** should not in any [Python or JavaScript] or [Pandas] or [NumPy] or [Matplotlib] or [Seaborn] or [Flask] or [Django] or [FastAPI] or [TensorFlow] or [Keras] or [PyTorch] or [Jupyter] or [GoogleColab] or [AzureML] or [AWSLambda] or [AzureFunction] or [AzureWebJobs] or [AzureServiceFabric] or [AzureServiceFabricClient] or [AzureServiceFabricClient] or [AzureServiceFabricClient] or [AzureServiceFabricClient] or [AzureServiceFabricClient] or [AzureServiceFabricClient] or [AzureServiceFabricClient] or [AzureServiceFabricClient] or"
+    },
+    {
+      "i": 2,
+      "grammar_ok": true,
+      "code": ""
+    },
+    {
+      "i": 3,
+      "grammar_ok": true,
+      "code": ""
+    },
+    {
+      "i": 4,
+      "grammar_ok": true,
+      "code": ""
+    },
+    {
+      "i": 5,
+      "grammar_ok": true,
+      "code": ""
+    }
+  ]
+}

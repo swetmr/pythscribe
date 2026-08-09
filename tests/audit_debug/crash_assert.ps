@@ -1,0 +1,6 @@
+def divide_safe(a: int, b: int) -> int:
+    assert b != 0, "divisor must not be zero"
+    return a // b
+
+result = divide_safe(10, 0)
+print(result)

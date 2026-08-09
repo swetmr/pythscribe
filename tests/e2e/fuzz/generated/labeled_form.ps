@@ -1,0 +1,9 @@
+from pyths.react import component
+
+@component
+def App():
+    return form()(
+        div()(label()(f"name"), input(name=f"name")),
+        div()(label()(f"email"), input(name=f"email")),
+        div()(label()(f"age"), input(name=f"age"))
+    )

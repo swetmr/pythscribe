@@ -1,0 +1,2 @@
+<!-- model_error -->
+claude exited 1: {"type":"result","subtype":"success","is_error":true,"api_error_status":null,"duration_ms":12979,"duration_api_ms":12023,"num_turns":1,"result":"API Error: Connection closed mid-response. The response above may be incomplete.","stop_reason":"stop_sequence","session_id":"635b5132-0f3e-4271-ac9c-51810c54cf4f","total_cost_usd":0.009257,"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0,"web_fetch_request

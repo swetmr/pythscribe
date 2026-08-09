@@ -1,0 +1,519 @@
+// grammar/pyths.lark — best-effort formal Lark grammar for PythScribe (.ps)
+//
+// CONTRACT: the hand-written recursive-descent parser in
+// crates/pyths_parser/src/parser.rs is AUTHORITATIVE. This grammar is
+// validated against the tracked corpus by scripts/test-grammar.py
+// ("corpus-gated, not correct by construction"). It is intended for
+// grammar-constrained decoding (SynCode) and tooling, not as a second
+// implementation of record.
+//
+// Adapted from Lark's bundled grammars/python.lark (MIT), then modified to
+// match the .ps surface. Every deviation from stock Python is annotated with
+// a parser.rs cross-reference (line numbers as of branch loir-prelaunch).
+//
+// .ps deviations from Python 3 (each cross-checked against parser.rs):
+//   1. `??`  nullish coalescing — binary, left-assoc, binds LOOSER than `or`,
+//      tighter than `|>` (parse_nullish, parser.rs:1313).
+//   2. `|>`  pipeline — binary, left-assoc, binds looser than `??`, tighter
+//      than ternary/lambda (parse_pipeline, parser.rs:1295).
+//   3. `?.`  optional chaining — postfix trailer: `x?.attr`, `x?.[i]`,
+//      `x?.(args)` (parse_postfix, parser.rs:1710).
+//   4. `f(=name)` kwarg shorthand — keyword arg with elided value, meaning
+//      `name=name` (parse_call_args, parser.rs:1790).
+//   5. Positional args allowed AFTER keyword args — call-arg items are
+//      free-order (parse_call_args, parser.rs:1774: a single loop that
+//      accepts `**kw`, `*star`, `=name`, `k=v`, or positional at any slot).
+//   6. `import "./styles.css"` — side-effect asset import of a bare string
+//      literal (parse_import_stmt, parser.rs:548).
+//   7. Decorators are full expressions: `@` test (parse_decorated,
+//      parser.rs:1036 uses parse_expr), not Python's restricted dotted-name
+//      form. `@component`, `@app.route("/x")`, etc.
+//   8. `await` sits at unary level and may wrap another unary/power
+//      (parse_unary, parser.rs:1631) — so `await x ** 2` = `await (x**2)`.
+//   9. `yield` / `yield from` are primary expressions (parse_primary,
+//      parser.rs:2131) — usable anywhere an atom is.
+//  10. Comprehensions: one or more `for` clauses, EACH followed by zero or
+//      more `if` clauses (parse_comprehension_clauses, parser.rs:2157).
+//      Comprehension iter is at `or`-level (parser.rs:2183).
+//
+// .ps restrictions vs stock Python (grammar deliberately narrowed to match
+// parser.rs — the corpus cannot contain these anyway):
+//   a. Semicolon statement chaining ONLY inside a one-line suite
+//      (`if v: f(v); g(v)` — round-5, parse_block); top-level
+//      `a = 1; b = 2` remains unsupported.
+//   b. Inline suites (`if x: y = 1` on one line) ARE supported since
+//      round-5 — parse_block parses `;`-separated simple stmts after
+//      the colon when no NEWLINE follows.
+//   c. `return`/`raise` take a single expression, not a testlist
+//      (parse_return_stmt parser.rs:531, parse_raise_stmt parser.rs:720);
+//      `raise X from Y` IS supported (round-4 sweep, PEP 3134).
+//   d. `for x in a, b:` unsupported — iter is a single expr (parser.rs:484).
+//   e. from-import: NO `import *`; parenthesized name lists ARE supported
+//      (`from x import (a, b as c,)`, multi-line, trailing comma OK —
+//      parse_from_import_stmt, parser.rs).
+//   f. Number literals: decimal ints (leading zeros OK: lexer tokens.rs:250
+//      `[0-9][0-9_]*`), hex/oct/bin with a required first digit after the
+//      base prefix (tokens.rs:398..400: `0[xX][0-9a-fA-F][0-9a-fA-F_]*`
+//      etc.), and floats requiring digits on BOTH sides of the dot
+//      (tokens.rs:253). NO imaginary, NO `.5` / `5.`, NO `0x_`.
+//   g. String prefixes: only r/R (raw) and f (f-string) — tokens.rs:257..300.
+//      NO b/u/rb prefixes. F-string interiors are opaque at this level.
+//   h. `@` is decorator-only — no matrix-multiplication operator, no `@=`
+//      (peek_aug_assign, parser.rs:1159 has no At variant).
+//   i. NAME is PEP 3131 XID_Start XID_Continue* (tokens.rs); ASCII is a subset.
+//
+// MEASURED GAP vs the authoritative parser (scripts/grammar-fuzz.py, seed
+// 20260714). The bullets that used to sit here ("patterns are a permissive
+// superset", "targets accept general expressions") were qualitative
+// admissions; bidirectional differential fuzzing turned them into numbers and
+// then closed them. Over 3,000 random derivations FROM this grammar, checked
+// against `pyths check --syntax-only`:
+//
+//     false-accept rate   70.700%  ->  0.167%   (11 divergence classes fixed)
+//     false-reject rate            0.000%       (see the script's [B] run)
+//
+// The ONE residual class, deliberately not closed:
+//   - `yield` is an `atom`, so `atom_expr` can hang a postfix trailer off a
+//     BARE yield (`yield?.[k]`, `yield.attr`) and can place `yield` in tuple /
+//     `del` / one-line-suite positions the parser refuses. Hoisting yield_expr
+//     to `test` to prevent that is a NET LOSS — it makes `yield` derivable in
+//     every test position, and the measured false-accept rate goes 2.6% ->
+//     64.3%. Closing this properly needs a yield-aware expression level that
+//     LALR(1) cannot express without a conflict. Tracked as
+//     KNOWN_DIVERGENCES["yield-*"] in scripts/grammar-fuzz.py.
+//
+// Also still permissive, and NOT a defect (a CFG cannot express it):
+//   - backslash line continuation is %ignored (stock behavior).
+//   - everything semantic. The grammar is a SYNTACTIC acceptor: it cannot
+//     exclude undefined names, arity errors, or type errors. `x = "a" - 3` is
+//     grammar-valid AND parser-valid; only the type checker rejects it (and
+//     only sometimes — the parser relaxation). Constrained decoding on this
+//     grammar guarantees parseability, nothing more.
+
+file_input: (_NEWLINE | stmt)*
+
+// ── Functions / classes / decorators ─────────────────────────────────────
+// Deviation 7: decorator is a full expression (parser.rs:1036).
+decorator: "@" test _NEWLINE
+decorators: decorator+
+decorated: decorators (classdef | funcdef | async_funcdef)
+
+async_funcdef: "async" funcdef
+funcdef: "def" name "(" [parameters] ")" ["->" test] ":" suite
+
+// parse_params (parser.rs:317): each param is [*|**] name [: ann] [= default],
+// trailing comma allowed. No bare `*` separator, no `/`.
+// MEASURED: `def f(*, k=1)` and even `def f(*,)` parse, but `def f(*)` does
+// not — a bare `*` separator must be followed by a comma. Listing star_sep as
+// an ordinary `param` alternative allowed the trailing bare `*`.
+// B11 (#424, re-measured 2026-08-01): `**kwargs` must be LAST — `def
+// f(**kw, x)`, `def f(**a, **b)`, `def f(**kw, *a)`, `def f(**kw, /)` are
+// all rejected ("parameter after **kwargs"); a trailing comma after it is
+// fine (`def f(**kw,)`). kwargs_param therefore terminates _param_seq
+// instead of being an ordinary `param` alternative.
+parameters: _param_seq
+_param_seq: kwargs_param [","]
+          | param
+          | param ","
+          | param "," _param_seq
+          | star_sep ","
+          | star_sep "," _param_seq
+?param: star_param | typedparam | slash_sep
+// Round-2: bare `*` (keyword-only) / `/` (positional-only) separators.
+star_sep: "*"
+slash_sep: "/"
+star_param: "*" typedparam
+kwargs_param: "**" typedparam
+typedparam: name [":" test] ["=" test]
+
+lambdef: "lambda" [lambda_params] ":" test
+// parse_lambda_params (parser.rs:1330): plain names with optional defaults,
+// trailing comma tolerated. No *args/**kwargs in lambda.
+lambda_params: lambda_param ("," lambda_param)* [","]
+lambda_param: name ["=" test]
+
+// ── Statements ────────────────────────────────────────────────────────────
+?stmt: simple_stmt | compound_stmt
+// Restriction (a): no top-level `;` chaining — one small statement per
+// line (inline suites are the exception; see `suite` / round-5).
+simple_stmt: small_stmt _NEWLINE
+?small_stmt: expr_stmt | assign_stmt | del_stmt | pass_stmt | flow_stmt
+           | import_stmt | global_stmt | nonlocal_stmt | assert_stmt
+expr_stmt: testlist_star_expr
+?assign_stmt: assign | annassign | augassign
+
+// Chained assignment `a = b = 5` (parser.rs:1090, #99).
+assign: testlist_star_expr ("=" testlist_star_expr)+
+// MEASURED: a TRAILING COMMA is legal on a bare tuple that is a statement
+// (`a,`) or an assignment target (`a, = p`), but NOT immediately before an
+// annotation colon or an augmented-assignment operator: `a,: int = 1` and
+// `*(), >>= True` are both rejected (parse_expr_list stops the tuple at those
+// tokens, so the trailing comma has nothing to attach to). Splitting the
+// no-trailing-comma list (`testlist_nc`) out of `testlist_star_expr` is
+// LALR(1)-safe: the decision to reduce `testlist_nc -> testlist_star_expr`
+// is made purely on the lookahead token (`:` and the augassign operators say
+// "don't reduce"; `=`, `,` and NEWLINE say "reduce").
+annassign: testlist_nc ":" test ["=" test]
+augassign: testlist_nc augassign_op test
+// Restriction (h): no `@=` (parser.rs:1159).
+!augassign_op: "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "**=" | "//="
+
+?testlist_nc: test_or_star_expr
+            | test_or_star_expr ("," test_or_star_expr)+ -> tuple
+?testlist_star_expr: testlist_nc
+                   | testlist_nc "," -> tuple
+
+// parse_del_stmt (parser.rs:775, #101): targets are postfix expressions
+// (`del d[k]`, `del obj.attr`).
+del_stmt: "del" atom_expr ("," atom_expr)*
+pass_stmt: "pass"
+?flow_stmt: break_stmt | continue_stmt | return_stmt | raise_stmt
+break_stmt: "break"
+continue_stmt: "continue"
+// Restriction (c): single expression, no testlist; raise takes an
+// optional `from` cause (round-4 sweep, PEP 3134).
+return_stmt: "return" [test]
+raise_stmt: "raise" [test ["from" test]]
+
+// Deviation 6 + restriction (e).
+?import_stmt: import_name | import_from | import_side_effect
+import_side_effect: "import" STRING_NOF
+import_name: "import" dotted_as_names
+import_from: "from" (dots? dotted_name | dots) "import" ("*" | import_as_names | "(" (import_as_name ",")* import_as_name ","? ")")
+// parse_from_import_stmt (parser.rs:609): any mix of `.` and `...` tokens
+// (the lexer fuses `...` into an Ellipsis) — `from ....shared import x` is
+// four dots = Ellipsis + Dot.
+!dots: ("." | "...")+
+import_as_name: name ["as" name]
+dotted_as_name: dotted_name ["as" name]
+import_as_names: import_as_name ("," import_as_name)*
+dotted_as_names: dotted_as_name ("," dotted_as_name)*
+dotted_name: name ("." name)*
+global_stmt: "global" name ("," name)*
+nonlocal_stmt: "nonlocal" name ("," name)*
+assert_stmt: "assert" test ["," test]
+
+?compound_stmt: if_stmt | while_stmt | for_stmt | try_stmt | match_stmt
+              | with_stmt | funcdef | classdef | decorated | async_stmt
+async_stmt: "async" (funcdef | with_stmt | for_stmt)
+if_stmt: "if" test ":" suite elifs ["else" ":" suite]
+elifs: elif_*
+elif_: "elif" test ":" suite
+while_stmt: "while" test ":" suite ["else" ":" suite]
+// Restriction (d): iter is a single test (parser.rs:484).
+for_stmt: "for" exprlist "in" test ":" suite ["else" ":" suite]
+try_stmt: "try" ":" suite except_clauses ["else" ":" suite] [finally]
+        | "try" ":" suite finally -> try_finally
+finally: "finally" ":" suite
+except_clauses: except_clause+
+except_clause: "except" [test ["as" name]] ":" suite
+
+with_stmt: "with" with_items ":" suite
+with_items: with_item ("," with_item)*
+// MEASURED: the `as` target is a bare NAME, not a primary — `with a as b.c:`,
+// `with a as b[0]:` and `with a as b?.c:` are all rejected by parse_with_stmt.
+// (The old comment here claimed "primary"; the fuzzer showed otherwise.)
+with_item: test ["as" name]
+
+// ── match/case (soft keywords, parser.rs:824 / #79) ──────────────────────
+// Pattern rules kept from stock python.lark — a permissive superset of
+// parse_pattern (parser.rs:876); see header note.
+match_stmt: "match" test ":" _NEWLINE _INDENT case+ _DEDENT
+// PBT-323/324: the top-level case pattern may be a BARE (unbracketed)
+// sequence — `case 1, 2:`, `case a, *rest:`, `case a,:` — matching
+// parse_case's tuple-pattern support. The FIRST element must be a non-star
+// as_pattern: `case *a, b:` and `case *a,:` are rejected ("verified against
+// pyths check 2026-08-01); star elements are legal in every later position.
+case: "case" _case_pattern ["if" test] ":" suite
+_case_pattern: as_pattern ("," sequence_item_pattern)* [","]
+
+// The pattern rules were inherited wholesale from stock python.lark and were
+// a KNOWN permissive superset (see header). The differential fuzz turned that
+// admission into a list. parse_pattern (parser.rs:876) rejects, and the
+// grammar now rejects too:
+//
+//   case 1.5:           FLOAT literal pattern (in any position, incl. `[1.5]`)
+//   case -1.5:          negated float ("Expected number after '-' in pattern")
+//   case {**rest}:      double-star capture in a mapping pattern
+//   case P(x=1):        keyword sub-pattern in a class pattern
+//   case *a, b:         star as FIRST element of a bare sequence
+//
+// PBT-323 (2026-08-01): parenthesised sequence patterns are now ACCEPTED by
+// parse_pattern — `case (a, b):`, `case ():`, `case (a,):`, `case (*a,):`,
+// even lone `case (*a):` — so the paren alternative below reuses the same
+// interior as list patterns (`_sequence_pattern`), which also subsumes the
+// old grouping-only `(p)` form. Bare sequences are handled at `case` level
+// (`_case_pattern` above), where star-first stays rejected.
+//
+// Still accepted, matching the parser exactly: literals (int/str/None/True/
+// False), `-int` (and hex/oct/bin, incl. negated), capture, `_`, dotted
+// values, `|` alternation, `as`, list/tuple sequence patterns with `*rest`,
+// mapping patterns, positional class patterns, and guards.
+?pattern: as_pattern
+?as_pattern: or_pattern ("as" NAME)?
+?or_pattern: closed_pattern ("|" closed_pattern)*
+?closed_pattern: literal_pattern
+               | NAME -> capture_pattern
+               | "_" -> any_pattern
+               | attr_pattern
+               | "(" _sequence_pattern ")" -> paren_sequence_pattern
+               | "[" _sequence_pattern "]" -> sequence_pattern
+               | "{" (mapping_item_pattern ("," mapping_item_pattern)* ","?)? "}" -> mapping_pattern
+               | class_pattern
+
+literal_pattern: inner_literal_pattern
+// Integers only — a float literal is not a legal pattern.
+?inner_literal_pattern: "None" -> const_none
+                      | "True" -> const_true
+                      | "False" -> const_false
+                      | STRING_NOF -> string_pattern
+                      | pattern_number
+                      | "-" pattern_number -> neg_number
+pattern_number: DEC_NUMBER | HEX_NUMBER | OCT_NUMBER | BIN_NUMBER
+
+attr_pattern: NAME ("." NAME)+ -> value
+mapping_item_pattern: (literal_pattern | attr_pattern) ":" as_pattern
+_sequence_pattern: (sequence_item_pattern ("," sequence_item_pattern)* ","?)?
+?sequence_item_pattern: as_pattern
+                      | "*" NAME -> star_pattern
+// Positional sub-patterns only; no `x=p` keyword sub-patterns. The class
+// name is a plain NAME: `case a.b():` is rejected ("Expected :, found (")
+// even though the bare dotted VALUE pattern `case Color.RED:` is fine.
+class_pattern: NAME "(" [pos_arg_pattern ","?] ")"
+pos_arg_pattern: as_pattern ("," as_pattern)*
+
+// Round-5: suites are NEWLINE INDENT ... DEDENT, or Python's one-line
+// form — `;`-separated simple statements on the colon line (parse_block).
+suite: _NEWLINE _INDENT stmt+ _DEDENT
+     | inline_suite
+inline_suite: small_stmt (";" small_stmt)* [";"] _NEWLINE
+
+// ── Expression precedence chain ───────────────────────────────────────────
+// parser.rs: parse_expr → named_expr(:=) → ternary → lambda → pipeline(|>)
+//            → nullish(??) → or → and → not → comparison → | ^ & << >>
+//            → + - → * / % // → unary → ** → postfix → primary
+// Walrus target is any expression at this level (parser.rs:1234), value
+// recurses right (right-assoc).
+?test: pipe_expr (":=" test | "if" or_test "else" test)?
+     | lambdef
+
+?test_nocond: or_test | lambdef
+
+// Deviation 2: pipeline, left-assoc (parser.rs:1295).
+?pipe_expr: nullish_expr ("|>" nullish_expr)*
+// Deviation 1: nullish coalescing, left-assoc, looser than `or` (parser.rs:1313).
+?nullish_expr: or_test ("??" or_test)*
+
+?or_test: and_test ("or" and_test)*
+?and_test: not_test_ ("and" not_test_)*
+?not_test_: "not" not_test_ -> not_test
+          | comparison
+?comparison: expr (comp_op expr)*
+// star_expr operand is a full test (parser.rs:2127: Star → parse_expr).
+// Round-2 pythonic sweep: `"*" test` swallowed `in` comparisons, so a
+// starred COMP/FOR target (`for x, *r in pairs`) parsed `*(r in pairs)` and
+// derailed. CPython's grammar uses `'*' or_expr` for exactly this reason.
+star_expr: "*" expr
+
+?expr: or_expr
+?or_expr: xor_expr ("|" xor_expr)*
+?xor_expr: and_expr ("^" and_expr)*
+?and_expr: shift_expr ("&" shift_expr)*
+?shift_expr: arith_expr (_shift_op arith_expr)*
+?arith_expr: term (_add_op term)*
+?term: factor (_mul_op factor)*
+// Deviation 8: await at unary level (parser.rs:1631).
+?factor: _unary_op factor | "await" factor -> await_expr | power
+
+!_unary_op: "+" | "-" | "~"
+!_add_op: "+" | "-"
+!_shift_op: "<<" | ">>"
+// Restriction (h): no `@` matmul.
+!_mul_op: "*" | "/" | "%" | "//"
+!comp_op: "<" | ">" | "==" | ">=" | "<=" | "!=" | "in" | "not" "in" | "is" | "is" "not"
+
+?power: atom_expr ("**" factor)?
+
+// Deviation 3: `?.` optional chaining trailers (parser.rs:1710).
+?atom_expr: atom_expr "(" [arguments] ")" -> funccall
+          | atom_expr "?." "(" [arguments] ")" -> opt_funccall
+          | atom_expr "[" subscriptlist "]" -> getitem
+          | atom_expr "?." "[" subscriptlist "]" -> opt_getitem
+          | atom_expr "." attr_name -> getattr
+          | atom_expr "?." attr_name -> opt_getattr
+          | atom
+
+// Deviation (JS interop, parser.rs expect_attr_name): after `.` / `?.` any
+// Python keyword is a legal attribute name (`p.finally(cb)`, `s.match(re)`).
+// Keywords stay reserved everywhere else.
+!attr_name: name
+          | "False" | "None" | "True" | "and" | "as" | "assert" | "async"
+          | "await" | "break" | "class" | "continue" | "def" | "del"
+          | "elif" | "else" | "except" | "finally" | "for" | "from"
+          | "global" | "if" | "import" | "in" | "is" | "lambda"
+          | "nonlocal" | "not" | "or" | "pass" | "raise" | "return"
+          | "try" | "while" | "with" | "yield"
+
+?atom: "(" ")" -> empty_tuple
+     | "(" test ("," test)* [","] ")"
+     | "(" comprehension{test} ")" -> genexp
+     | "[" _exprlist? "]" -> list
+     | "[" comprehension{test_or_star_expr} "]" -> list_comprehension
+     | "{" _dict_exprlist? "}" -> dict
+     | "{" comprehension{key_value} "}" -> dict_comprehension
+     | "{" _exprlist "}" -> set
+     | "{" comprehension{test} "}" -> set_comprehension
+     | name -> var
+     | number
+     | string_concat
+     | "..." -> ellipsis
+     | "None" -> const_none
+     | "True" -> const_true
+     | "False" -> const_false
+     | yield_expr
+
+// MEASURED / REJECTED FIX: `yield` stays an atom. Hoisting yield_expr up to
+// `test` (so that bare `yield?.x` would stop parsing) is a NET LOSS: it makes
+// `yield` derivable in every test position — tuple elements, `with` items,
+// `del` targets, match subjects — none of which the parser accepts. Measured
+// false-accept rate went 2.6% -> 64.3%. The residual over-acceptance it would
+// have fixed (postfix trailers on a bare `yield`) is 0.15%. Left as-is; see
+// KNOWN_DIVERGENCES["yield-trailer"] in scripts/grammar-fuzz.py.
+
+// Deviation 9: yield is a primary expression (parser.rs:2131).
+yield_expr: "yield" "from" test -> yield_from
+          | "yield" [test]
+
+// Implicit adjacent-string concatenation (parser.rs:1923).
+?string_concat: string+
+
+?test_or_star_expr: test | star_expr
+
+// MEASURED: a subscript is EITHER one slice OR a comma-list of plain tests.
+// `a[1, 2]` and `a[1,]` parse; `a[:,]`, `a[1:2,]` and `a[1:2, 3]` do not.
+// The old rule let `subscript` (which includes slices) into the tuple list.
+?subscriptlist: slice
+              | test
+              | test (("," test)+ [","] | ",") -> subscript_tuple
+slice: [test] ":" [test] [sliceop]
+sliceop: ":" [test]
+// MEASURED: the loop target is NOT a general expression. parse_for_stmt
+// accepts names, starred names, and (possibly nested) parenthesised/bracketed
+// lists of them; it rejects `for o.x in p`, `for o[0] in p`, `for o?.x in p`
+// and `for -x in p`. The old `expr`-based rule admitted all four, plus
+// `for await x in p`.
+?exprlist: target_list
+target_list: target ("," target)* [","]
+?target: nonstar_target
+       | "*" nonstar_target -> star_target
+?nonstar_target: name -> var
+               | "(" target_list ")"
+               | "[" target_list "]"
+?testlist: test | testlist_tuple
+testlist_tuple: test (("," test)+ [","] | ",")
+_dict_exprlist: (key_value | "**" expr) ("," (key_value | "**" expr))* [","]
+key_value: test ":" test
+_exprlist: test_or_star_expr ("," test_or_star_expr)* [","]
+
+// MEASURED: class bases are positional or `*`-unpacked only. parse_classdef
+// rejects BOTH keyword bases (`class C(metaclass=M)`) and `**` unpacking
+// (`class C(**k)`), so reusing the full call-`arguments` rule over-accepted.
+classdef: "class" name ["(" [class_bases] ")"] ":" suite
+class_bases: class_base ("," class_base)* [","]
+?class_base: test
+           | "*" test -> class_stararg
+
+// ── Call arguments ────────────────────────────────────────────────────────
+// Deviations 4 + 5 (parse_call_args, parser.rs:1766): items are FREE-ORDER —
+// positional after keyword is legal; `=name` is shorthand for `name=name`;
+// a per-item generator expression (`f(x, y for y in z)`) is accepted.
+arguments: argitem ("," argitem)* [","]
+// MEASURED: the LHS of a keyword argument is a bare NAME. parse_call_args
+// rejects `f(() = 1)` and `f(a.b = 1)` with "Invalid keyword argument"; the
+// old `test ["=" test]` admitted an arbitrary expression there.
+?argitem: test comp_fors -> genexp_arg
+        | kwarg
+        | test
+        | "=" name -> kwarg_shorthand
+        | "*" test -> stararg
+        | "**" test -> kwargs_arg
+kwarg: name "=" test
+
+// Deviation 10: multiple for-clauses, each with zero or more ifs
+// (parser.rs:2157); iter at or-level (parser.rs:2183).
+comprehension{comp_result}: comp_result comp_fors
+comp_fors: comp_for+
+comp_for: ["async"] "for" exprlist "in" or_test comp_if*
+// MEASURED: `[i for i in p if lambda: True]` is rejected ("Unexpected token:
+// lambda"). test_nocond admitted a bare lambda here; or_test does not. A
+// parenthesised ternary still works, since that is an atom.
+comp_if: "if" or_test
+
+number: DEC_NUMBER | HEX_NUMBER | OCT_NUMBER | BIN_NUMBER | FLOAT_NUMBER
+string: STRING | LONG_STRING
+
+// ── Terminals ─────────────────────────────────────────────────────────────
+_NEWLINE: ( /\r?\n[\t ]*/ | COMMENT )+
+
+%ignore /[\t \f]+/          // WS
+%ignore /\\[\t \f]*\r?\n/   // line continuation
+%ignore COMMENT
+%declare _INDENT _DEDENT
+
+// Soft keywords. `case` really is a plain identifier to the lexer and is
+// accepted as a name everywhere (`case = 5`, `import case`, `def case()`,
+// `global case`). RE-MEASURED 2026-08-01 (issue #288 / corpus
+// i288_match_name_subscript_still_expr): `match` is now a soft keyword in
+// parser.rs too — `match = 5`, `x = match`, `match(1)`, `match[1]`,
+// `def match()`, `def f(match)`, `import match`, `global match`,
+// `for match in xs`, `class match`, `del match` are ALL accepted by
+// `pyths check`; `match x:` remains a match statement. Stock python.lark
+// models this identically (`!name: NAME | "match" | "case"`); the residual
+// LALR(1) limitation is statement-INITIAL `match(...)` / `match[...]`
+// expressions, where the contextual lexer emits the keyword token and the
+// automaton commits to match_stmt (the corpus only uses match-as-name in
+// non-statement-initial positions, matching stock python.lark's behavior).
+!name: NAME | "case" | "match"
+// PEP 3131 identifiers (tokens.rs uses XID_Start/XID_Continue). Python's
+// `re` has no \p{XID_*}; the unicode word idiom `[^\W\d]\w*` (letter-or-`_`
+// start, word continue) is the closest reference approximation — ASCII names
+// are a subset, non-ASCII names (`übervar`, `变量`) now accepted.
+// 2026-08-01: hard keywords are EXCLUDED via negative lookahead. The
+// authoritative lexer (tokens.rs) reserves them in every position; without
+// the exclusion, lark's CONTEXTUAL lexer would happily lex a keyword as a
+// NAME in any state where the keyword token is not acceptable (e.g.
+// `finally` as an expression statement inside a class body — found by
+// scripts/grammar-fuzz.py). Soft keywords `match`/`case` are deliberately
+// NOT excluded: they lex as NAME wherever the keyword token is
+// unacceptable, which is exactly the parser's soft-keyword behavior.
+NAME: /(?!(?:False|None|True|and|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield|as)\b)[^\W\d]\w*/
+COMMENT: /#[^\n]*/
+
+// Restriction (g): only r/R and f string prefixes (tokens.rs:257..300).
+// PBT-3 (PEP 701 subset): the f-branch models the custom scanner in
+// tokens.rs (scan_line_fstring) — expression parts `{...}` may contain
+// nested single-line string literals of EITHER quote (same-quote reuse,
+// CPython >= 3.12) plus one nested brace level (dict/set literals,
+// nested format specs). Balanced braces are required, matching the
+// parser's "f-string: expecting '}'" error. The r/R branch is unchanged.
+STRING: /f("([^"\\\n{]|\\.|\{\{|\{([^{}"'\n\\]|\\.|'([^'\\\n]|\\.)*'|"([^"\\\n]|\\.)*"|\{([^{}\n'"\\]|\\.|'([^'\\\n]|\\.)*'|"([^"\\\n]|\\.)*")*\})*\})*"|'([^'\\\n{]|\\.|\{\{|\{([^{}"'\n\\]|\\.|'([^'\\\n]|\\.)*'|"([^"\\\n]|\\.)*"|\{([^{}\n'"\\]|\\.|'([^'\\\n]|\\.)*'|"([^"\\\n]|\\.)*")*\})*\})*')|(r|R)?("([^"\\\n]|\\.)*"|'([^'\\\n]|\\.)*')/
+// MEASURED: two positions take a string but NOT an f-string — a `case` literal
+// pattern (`case f'a':` -> "Unexpected token in pattern: FString") and a
+// side-effect import path (`import f'a.css'` -> "Expected identifier"). Raw
+// strings are accepted in both. No parser state admits STRING and STRING_NOF
+// at the same time, so LALR's contextual lexer keeps them apart.
+STRING_NOF: /(r|R)?("([^"\\\n]|\\.)*"|'([^'\\\n]|\\.)*')/
+// PBT-3: explicit priority — lark breaks equal-priority terminal ties by
+// PATTERN length, and the PEP-701 STRING pattern above is now longer than
+// this one, which made `""` (empty STRING) shadow `"""..."""` openers.
+LONG_STRING.2: /(f|r|R)?(""".*?(?<!\\)(\\\\)*?"""|'''.*?(?<!\\)(\\\\)*?''')/s
+
+// Restriction (f): decimal ints, leading zeros OK (tokens.rs:250), plus
+// hex/oct/bin (tokens.rs:398..400 — first digit required after the base
+// prefix, underscores allowed after it: `0xFF`, `0xAB_CD`; `0x_` rejected).
+// Priority .2 so `0x0f` lexes as one HEX_NUMBER, not DEC_NUMBER `0` + NAME.
+DEC_NUMBER: /[0-9][0-9_]*/
+HEX_NUMBER.2: /0[xX][0-9a-fA-F][0-9a-fA-F_]*/
+OCT_NUMBER.2: /0[oO][0-7][0-7_]*/
+BIN_NUMBER.2: /0[bB][01][01_]*/
+FLOAT_NUMBER.2: /[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?|[0-9][0-9_]*[eE][+-]?[0-9]+/

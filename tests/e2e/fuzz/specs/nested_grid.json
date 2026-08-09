@@ -1,0 +1,8 @@
+{
+  "id": "nested_grid",
+  "kind": "grid",
+  "params": {
+    "outer": 3,
+    "inner": 2
+  }
+}

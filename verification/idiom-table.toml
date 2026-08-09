@@ -1,0 +1,56 @@
+# Tier-E idiom fixture — the COMMITTED table the Lean Tier-E model and the
+# real `pyths expand` are differentially compared over.
+#
+# Why a fixture and not a generated table (as for Tier A / B / hooks / Dict):
+# Tier E has NO compiler-side table. `idioms::substitute_with_map` takes the
+# map from `[expand.idioms]` in the user's pyths.toml (empty by default —
+# `expand_idioms_empty_by_default`), so there is nothing in the Rust source
+# to generate from. What CAN be pinned is the SCANNER: this file is the one
+# table both sides read —
+#   * verification/gen-idiom-data.py  parses it into IdiomData.lean (CI-gated
+#     with --check), and
+#   * verification/diff_harness.py --tier idioms  copies it into the scratch
+#     dir as pyths.toml, so the real `pyths expand` runs Tier E over exactly
+#     these entries.
+# Its FNV is pinned in model-manifest.txt and re-checked from Rust in
+# crates/pyths_expand/tests/gates.rs, so the fixture cannot be edited
+# silently on either side.
+#
+# CORPUS DISCIPLINE: fragments must keep the OTHER five tiers identity, so
+# that `pyths expand` reduces to Tier E alone. Therefore no fragment may
+# contain a `$NAME` dictionary sigil, a Tier-B kwarg alias in argument
+# position, a hook alias in call position, a PSX `<tag`, a preset marker on
+# its own line, or a leading `@alias` decorator line.
+
+[expand.idioms]
+# Multi-line fragment — the flagship shape (a `%NAME` expands to a code
+# fragment spanning lines, unlike `$NAME` which yields a string literal).
+HTTPCHECK = '''
+if not response.ok:
+    raise Exception("http error")
+return await response.json()'''
+
+# Single-line fragments.
+LOG = 'print("[debug] tier-e")'
+GUARD = '''
+if value is None:
+    return None'''
+PASS = 'pass'
+
+# Edge: EMPTY expands to nothing at all (the sigil is deleted).
+EMPTY = ''
+
+# Edge: a fragment that itself contains a `%` — Tier E does NOT re-scan its
+# own output, so this must survive as literal text (no second expansion).
+MODEXPR = 'rem = total % 7'
+
+# Edge: name shapes. `_priv` and `X2` exercise `_`-leading and digit-bearing
+# idiom names (the scanner's name run is [A-Za-z0-9_]+).
+_priv = 'internal = True'
+X2 = 'doubled = n * 2'
+
+# Edge / DOCUMENTED HAZARD (idioms.rs module doc): an all-digit idiom name is
+# accepted by the scanner, so a map entry "10" silently intercepts the Python
+# modulo expression `x % 10`. Pinned here deliberately: the Lean model must
+# reproduce this bug-for-bug, and the differential proves it does.
+10 = 'TEN_INTERCEPTED'

@@ -1,0 +1,27 @@
+{
+  "name": "pyths-next-app-example",
+  "private": true,
+  "version": "0.0.1",
+  "description": "End-to-end RSC integration example for PythScribe + Next.js 14/15 App Router.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "precompile-client": "pyths compile app/counter/Counter.psc -o app/counter/Counter.client.js",
+    "prebuild": "npm run precompile-client",
+    "predev": "npm run precompile-client"
+  },
+  "dependencies": {
+    "next": "^16.2.9",
+    "pyths-runtime": "file:../../runtime",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.0.0",
+    "@types/react": "19.2.17",
+    "next-plugin-pyths": "file:../../packages/next-plugin-pyths",
+    "typescript": "6.0.3"
+  }
+}

@@ -1,0 +1,5 @@
+target
+corpus
+artifacts
+coverage
+# seed_corpus/ is tracked — copy it into corpus/ before each run.

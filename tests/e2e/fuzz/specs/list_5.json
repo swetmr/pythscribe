@@ -1,0 +1,8 @@
+{
+  "id": "list_5",
+  "kind": "list",
+  "params": {
+    "title": "Items",
+    "count": 5
+  }
+}

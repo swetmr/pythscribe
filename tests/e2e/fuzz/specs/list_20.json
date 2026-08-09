@@ -1,0 +1,8 @@
+{
+  "id": "list_20",
+  "kind": "list",
+  "params": {
+    "title": "Twenty things",
+    "count": 20
+  }
+}

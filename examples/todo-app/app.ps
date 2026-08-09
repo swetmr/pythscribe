@@ -1,0 +1,26 @@
+# Todo App — PythScribe example
+class Todo:
+    def __init__(self, title, done):
+        self.title = title
+        self.done = done
+
+    def __str__(self):
+        status = "x" if self.done else " "
+        return f"[{status}] {self.title}"
+
+    def toggle(self):
+        self.done = not self.done
+
+todos = [
+    Todo("Learn PythScribe", False),
+    Todo("Build a web app", False),
+    Todo("Ship to production", False),
+]
+
+todos[0].toggle()
+
+for todo in todos:
+    print(todo)
+
+pending = [t for t in todos if not t.done]
+print(f"\n{len(pending)} items remaining")

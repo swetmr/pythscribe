@@ -1,0 +1,26 @@
+# Radix DropdownMenu — .ps twin (system under test).
+#
+# Probes: on_select → onSelect on Menu.Item, the library event object
+# consumed Pythonically (e.preventDefault() keeps the menu open — Radix
+# contract), lambda handlers on library callbacks.
+from pyths.react import component, use_state
+import at_radix_ui.react_dropdown_menu as Menu
+
+
+@component
+def DropdownDemo():
+    picked, set_picked = use_state("none")
+
+    def pick_alpha(e):
+        e.preventDefault()
+        set_picked("alpha")
+
+    return div(
+        Menu.Root(
+            Menu.Trigger(as_child=True, button(data_testid="menu-trigger", "menu")),
+            Menu.Portal(
+                Menu.Content(
+                    Menu.Item(data_testid="item-alpha", on_select=pick_alpha, "Alpha"),
+                    Menu.Item(data_testid="item-beta",
+                        on_select=lambda e: set_picked("beta"), "Beta")))),
+        p(data_testid="picked", picked))

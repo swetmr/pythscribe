@@ -1,0 +1,32 @@
+# ChainLoader — Track-A behavioral spec component.
+#
+# Pins the .then/.catch/.finally chain authoring pattern inside an
+# effect (no async def at all): Python lambdas as callbacks, .finally
+# flipping the loading flag (keyword attribute names, PR #179).
+"use client"
+
+from pyths.react import component, use_effect, use_state
+
+
+def fetch_greeting():
+    def work(resolve, reject):
+        setTimeout(lambda: resolve("hello"), 0)
+    return Promise(work)
+
+
+@component
+def ChainLoader():
+    text, set_text = use_state(None)
+    done, set_done = use_state(False)
+
+    def load():
+        (fetch_greeting()
+            .then(lambda v: set_text(v.upper()))
+            .catch(lambda e: set_text("ERR:" + str(e)))
+            .finally(lambda: set_done(True)))
+
+    use_effect(load, [])
+
+    if not done:
+        return p(data_testid="loading", "loading...")
+    return p(data_testid="text", text)

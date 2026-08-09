@@ -1,0 +1,18 @@
+[package]
+name = "pyths_lsp"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pyths-lsp"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+pyths_parser = { workspace = true }
+pyths_syntax = { workspace = true }
+pyths_diagnostic = { workspace = true }

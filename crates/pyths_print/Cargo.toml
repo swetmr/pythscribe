@@ -1,0 +1,8 @@
+[package]
+name = "pyths_print"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pyths_syntax = { path = "../pyths_syntax" }
+pyths_parser = { path = "../pyths_parser" }

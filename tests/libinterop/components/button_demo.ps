@@ -1,0 +1,58 @@
+# shadcn-style Button (cva + clsx + tailwind-merge) — .ps twin.
+#
+# Probes: cva config dicts crossing into JS as plain objects (keys verbatim —
+# library API), cn = twMerge(clsx(...)) composition, **rest passthrough on a
+# USER @component (keys verbatim at runtime — final JS names in spread dicts,
+# e.g. **{"data-testid": ...}), exact final className parity with the oracle.
+from pyths.react import component
+from class_variance_authority import cva
+from clsx import clsx
+from tailwind_merge import twMerge
+
+
+def cn(*inputs):
+    return twMerge(clsx(inputs))
+
+
+button_variants = cva(
+    "inline-flex items-center rounded-md text-sm font-medium",
+    {
+        "variants": {
+            "variant": {
+                "default": "bg-primary text-primary-foreground",
+                "destructive": "bg-destructive text-destructive-foreground",
+                "outline": "border border-input bg-background",
+            },
+            "size": {
+                "default": "h-10 px-4 py-2",
+                "sm": "h-9 px-3",
+                "lg": "h-11 px-8",
+            },
+        },
+        "defaultVariants": {"variant": "default", "size": "default"},
+    },
+)
+
+
+@component
+def Button(variant=None, size=None, class_name=None, children=None, **rest):
+    # cva distinguishes null from undefined: null OPTS OUT of defaultVariants.
+    # Python None compiles to JS null, so map None → undefined explicitly
+    # (`?? undefined`) to get the shadcn "missing prop = default variant"
+    # behavior.
+    return button(
+        class_name=cn(button_variants({
+            "variant": variant ?? undefined,
+            "size": size ?? undefined,
+        }), class_name),
+        **rest,
+        children)
+
+
+@component
+def ButtonDemo():
+    return div(
+        Button("Default"),
+        Button(variant="destructive", size="sm", "Delete"),
+        Button(variant="outline", size="lg", class_name="h-12 px-10 custom-extra",
+            disabled=True, **{"data-testid": "btn-merged"}, "Merged"))

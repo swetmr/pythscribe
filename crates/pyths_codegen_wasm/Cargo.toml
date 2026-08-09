@@ -1,0 +1,16 @@
+[package]
+name = "pyths_codegen_wasm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pyths_syntax = { workspace = true }
+pyths_types = { workspace = true }
+pyths_hir = { workspace = true }
+wasm-encoder = { workspace = true }
+wasmparser = "0.225"
+
+[dev-dependencies]
+pyths_parser = { workspace = true }
+wasmi = "0.42"
+wasmparser = "0.225"

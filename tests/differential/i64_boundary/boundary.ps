@@ -1,0 +1,73 @@
+# #358 differential fixture — WASM-eligible integer functions exercised at
+# and across the i64 boundary. Valid CPython AND valid PythScribe, run three
+# ways (CPython / --target js / --target js+wasm) and byte-compared by
+# run.mjs. Every function is pure typed-int arithmetic, so the auto-router
+# sends it to WASM; the checked ops + JS-twin fallback (#358) must make the
+# js+wasm output identical to CPython's arbitrary-precision result.
+
+def prod(a: int, b: int) -> int:
+    return a * b
+
+def summ(a: int, b: int) -> int:
+    return a + b
+
+def diff(a: int, b: int) -> int:
+    return a - b
+
+def shl(a: int, b: int) -> int:
+    return a << b
+
+def shr(a: int, b: int) -> int:
+    return a >> b
+
+def powr(a: int, b: int) -> int:
+    return a ** b
+
+def modr(a: int, b: int) -> int:
+    return a % b
+
+def fdiv(a: int, b: int) -> int:
+    return a // b
+
+def negr(a: int) -> int:
+    return -a
+
+def absr(a: int) -> int:
+    return abs(a)
+
+def chain(a: int, b: int) -> int:
+    # a*b overflows i64 but a*b - a*b == 0 fits: the sticky __ovf flag must
+    # still force the exact-twin fallback rather than return a wrapped value.
+    return a * b - a * b
+
+# --- products (the original repro) ---
+print(prod(4294967296, 4294967297))     # 18446744078004518912
+print(prod(3037000500, 3037000501))     # 9223372040037250500 (> 2^63)
+print(prod(3037000499, 3037000499))     # 9223372030926249001 (fits i64)
+print(prod(1000000, 2000000))           # 2000000000000 (small, exact WASM)
+print(prod(-9223372036854775808, 1))    # i64::MIN, exact
+# --- sums / diffs across the boundary ---
+print(summ(9223372036854775807, 1))     # 9223372036854775808
+print(diff(-9223372036854775808, 1))    # -9223372036854775809
+print(summ(100, 200))                   # 300, exact
+# --- shifts ---
+print(shl(1, 62))                       # exact
+print(shl(1, 63))                       # 9223372036854775808 (past i64)
+print(shl(1, 70))                       # 1180591620717411303424
+print(shr(-8, 1))                       # -4
+print(shr(-8, 100))                     # -1 (Python saturates)
+# --- pow ---
+print(powr(2, 10))                      # 1024, exact
+print(powr(10, 18))                     # exact
+print(powr(10, 20))                     # 100000000000000000000 (past i64)
+print(powr(2, 63))                      # 9223372036854775808
+# --- floordiv / mod (Python floor/sign semantics) ---
+print(fdiv(-7, 2))                      # -4
+print(fdiv(9223372036854775807, 3))     # exact past 2^53
+print(modr(-7, 3))                      # 2
+print(modr(7, -3))                      # -2
+# --- unary edge cases ---
+print(negr(-9223372036854775808))       # 9223372036854775808
+print(absr(-9223372036854775808))       # 9223372036854775808
+# --- intermediate overflow, final result fits ---
+print(chain(4294967296, 4294967297))    # 0

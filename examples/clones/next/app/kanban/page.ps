@@ -1,0 +1,23 @@
+# Kanban RSC page (Next production track) - renders the precompiled
+# KanbanBoard.client.js "use client" interactive island from a PythScribe
+# server component. next-plugin-pyths's loader rewrites the extensionless
+# relative import below to the precompiled island automatically (see
+# CONTRIBUTING.md '"use client" islands in the Next shell').
+# Dual-track with app/react-reference/kanban/page.tsx.
+#
+# NOTE: `#` comments, not a triple-quoted docstring - see CONTRIBUTING.md
+# "Known friction" (Turbopack UTF-8 char-boundary panic).
+from pyths.react import component
+from ....shared.kanban.KanbanBoard import KanbanBoard
+
+
+@component
+def KanbanPage():
+    return main(
+        style={"padding": "20px"},
+        p(a(href="/", "← home")),
+        KanbanBoard(),
+    )
+
+
+__default__ = KanbanPage

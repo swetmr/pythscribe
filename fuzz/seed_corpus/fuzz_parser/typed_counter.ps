@@ -1,0 +1,17 @@
+count: int = 0
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+def greet(name: str) -> str:
+    return f"Hello, {name}!"
+
+class Counter:
+    def __init__(self, start: int = 0):
+        self.value = start
+
+    def increment(self) -> None:
+        self.value += 1
+
+    def get_value(self) -> int:
+        return self.value

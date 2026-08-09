@@ -1,0 +1,19 @@
+[package]
+name = "pyths_codegen_js"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pyths_syntax = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+pyths_runtime = { workspace = true }
+insta = { workspace = true }
+pyths_lexer = { workspace = true }
+pyths_parser = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "bench_compile"
+harness = false

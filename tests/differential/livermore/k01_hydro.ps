@@ -1,0 +1,28 @@
+# LFK 1 — hydro fragment: x[k] = q + y[k]*(r*z[k+10] + t*z[k+11])
+def k01_hydro(n: int, loop: int) -> float:
+    y = [0.0] * (n + 12)
+    z = [0.0] * (n + 12)
+    x = [0.0] * n
+    i = 0
+    while i < n + 12:
+        y[i] = 0.0001 * (i + 1)
+        z[i] = 0.0002 * (i + 1)
+        i = i + 1
+    q = 0.5
+    r = 1.5
+    t = 0.25
+    l = 0
+    while l < loop:
+        k = 0
+        while k < n:
+            x[k] = q + y[k] * (r * z[k + 10] + t * z[k + 11])
+            k = k + 1
+        l = l + 1
+    s = 0.0
+    k = 0
+    while k < n:
+        s = s + x[k]
+        k = k + 1
+    return s
+
+print(repr(k01_hydro(400, 3)))

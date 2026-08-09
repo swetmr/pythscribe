@@ -1,0 +1,31 @@
+{
+  "name": "create-pyths-app",
+  "version": "0.2.1",
+  "description": "Create a new PythScribe app \u2014 React + Next.js + PythScribe",
+  "bin": {
+    "create-pyths-app": "./index.js"
+  },
+  "type": "module",
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pyths",
+    "python",
+    "react",
+    "nextjs",
+    "create-app",
+    "scaffold"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swetmr/pythscribe.git",
+    "directory": "packages/create-pyths-app"
+  }
+}

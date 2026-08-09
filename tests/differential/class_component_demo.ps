@@ -1,0 +1,42 @@
+from react import Component, createElement as h
+
+# (a) Plain class component — render() only, no __init__.
+class Hello(Component):
+    def render(self):
+        return h("h1", None, "hi " + self.props.name)
+
+
+# (b) constructor + self.state + setState.
+class Counter(Component):
+    def __init__(self, props):
+        super().__init__(props)
+        self.state = {"count": 0}
+
+    def bump(self):
+        self.setState({"count": self.state["count"] + 1})
+
+    def render(self):
+        return h("div", None, "count=" + str(self.state["count"]))
+
+
+# (c) Error boundary — static getDerivedStateFromError + componentDidCatch.
+class Boundary(Component):
+    def __init__(self, props):
+        super().__init__(props)
+        self.state = {"hasError": False}
+
+    @staticmethod
+    def getDerivedStateFromError(error):
+        return {"hasError": True}
+
+    def componentDidCatch(self, error, info):
+        pass
+
+    def render(self):
+        if self.state["hasError"]:
+            return h("p", None, "fallback")
+        return self.props.children
+
+
+def Boom(props):
+    raise Exception("kaboom")

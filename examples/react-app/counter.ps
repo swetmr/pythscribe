@@ -1,0 +1,17 @@
+from react import useState, createElement as h
+
+def Counter():
+    count, set_count = useState(0)
+
+    def increment():
+        set_count(count + 1)
+
+    def decrement():
+        set_count(count - 1)
+
+    return h("div", None,
+        h("h1", None, "PythScribe Counter"),
+        h("p", None, f"Count: {count}"),
+        h("button", {"onClick": lambda e: decrement()}, "-"),
+        h("button", {"onClick": lambda e: increment()}, "+"),
+    )

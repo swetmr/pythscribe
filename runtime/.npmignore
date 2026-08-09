@@ -1,0 +1,16 @@
+# Belt-and-suspenders alongside the `files:` allowlist in package.json.
+# `files: ["src/", "README.md"]` is the source of truth; this is a safety
+# net against stray scratch files in the runtime/ root.
+.DS_Store
+*.log
+node_modules/
+tests/
+test/
+*.test.js
+*.test.mjs
+.git*
+.editorconfig
+.vscode/
+*.tgz
+# Stray top-level files not yet ported under src/.
+asyncio.js

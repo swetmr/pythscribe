@@ -1,0 +1,40 @@
+# syntactic_boundary.ps — what a CFG-constrained decoder CANNOT exclude.
+#
+# THIS FILE IS DELIBERATE NONSENSE. It is a fixture, not an example to copy.
+#
+# Every line below is semantically meaningless, yet this file is:
+#   1. ACCEPTED by grammar/pyths.lark          (the constrained-decoding gate)
+#   2. ACCEPTED by `pyths check --syntax-only` (the authoritative parser)
+#   3. ACCEPTED by `pyths check`               (parser + type checker: NO ERRORS)
+#   4. COMPILED by `pyths compile`             (emits valid JS)
+#   5. ...and only then does it fail, at RUNTIME, under node.
+#
+# Reproduce the whole chain:  python examples/constrained-decoding/syntactic_boundary.py
+#
+# The point: grammar-constrained decoding guarantees that the emitted program
+# PARSES. It guarantees nothing else. A context-free grammar cannot express
+# "the operands of `-` have compatible types" or "this name is bound" — those
+# are not properties of the token string. Nor, as (3) shows, does PythScribe's
+# type checker close the gap: it is PARTIAL (it catches e.g. arity, but none of
+# the below). So "the model cannot emit a malformed program" means malFORMED,
+# not meaningless.
+
+# a string minus an int -> compiles to pySub("hello", 3)
+x = "hello" - 3
+
+# an attribute on None -> compiles to y.nonexistent_method(1, 2)
+y = None
+z = y.nonexistent_method(1, 2)
+
+# an unbound name -> compiles to pyAdd(a, undefined_global)
+def f(a):
+    return a + undefined_global
+
+# calling a non-callable -> compiles to w()
+w = 5
+w()
+
+# a string times a string -> compiles to pyMul("text", "text")
+result = "text" * "text"
+
+print(x)

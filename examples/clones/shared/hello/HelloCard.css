@@ -1,0 +1,28 @@
+/* Component-scoped stylesheet, imported as a side effect from HelloCard.ps
+   (A2 — `import "./HelloCard.css"`, PythScribe codegen `05e9abf`). This is
+   the real dogfood site for A2 inside the clone-demos workspace: every
+   future clone component with component-scoped CSS should follow this
+   pattern rather than growing shared/theme.css unboundedly. */
+.hello-card {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 20px;
+  max-width: 360px;
+}
+
+.hello-like-btn {
+  margin-top: 12px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.hello-like-btn[data-liked='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}

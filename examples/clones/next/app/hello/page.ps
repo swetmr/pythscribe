@@ -1,0 +1,31 @@
+# HelloCard RSC page - renders the precompiled HelloCard.client.js
+# "use client" interactive island from a PythScribe server component.
+#
+# THE KEY PROOF (Next production track): a .ps server page imports a shared
+# tri-track component by its extensionless relative path; next-plugin-pyths's
+# loader rewrites that import to `HelloCard.client.js` (the precompiled
+# island - see scripts/precompile-client.mjs) automatically, no per-app
+# import-path change needed. Dual-track with
+# app/react-reference/hello/page.tsx.
+#
+# Props mirror shared/hello/fixtures.ts's helloFixture (kept in sync by
+# hand for this trivial scaffold proof; real clones should prefer fetching
+# fixtures directly once cross-language .ts imports from .ps are proven).
+#
+# NOTE: `#` comments, not a triple-quoted docstring - see HelloCard.ps for
+# why (Turbopack UTF-8 char-boundary panic on non-ASCII docstring statements).
+from pyths.react import component
+from ....shared.hello.HelloCard import HelloCard
+
+
+@component
+def HelloPage():
+    return main(
+        style={"padding": "20px"},
+        p(a(href="/", "← home")),
+        h1("HelloCard (PythScribe, production)"),
+        HelloCard(title="Hello, Clones!", subtitle="tri-track scaffold proof"),
+    )
+
+
+__default__ = HelloPage

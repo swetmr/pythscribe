@@ -1,0 +1,309 @@
+# YouTube clone - canonical PythScribe track, dual-track with YouTubeApp.tsx
+# (the React oracle; see the *.test.tsx parity suites in this directory).
+#
+# SINGLE-MODULE DESIGN (deliberate): all five components live in one
+# tri-track module because `pyths compile` emits extensionless relative
+# imports and scripts/precompile-client.mjs does not rewrite them - a
+# multi-file island's `import './VideoCard'` inside YouTubeApp.client.js
+# would resolve to the `.tsx` ORACLE in the Next client graph (bundler
+# extension order puts .tsx first), silently un-dogfooding the production
+# track. One module per track sidesteps the whole class of problem.
+#
+# Cross-track prop names are snake_case (`on_open`, `on_back`, ...) so the
+# SAME props mount every track in the parity tests.
+#
+# NOTE: `#` comment block, not a triple-quoted module docstring - avoids the
+# Next.js 16 Turbopack UTF-8 char-boundary panic on non-ASCII docstrings
+# (see CONTRIBUTING.md "Known friction").
+"use client"
+
+import "./YouTubeApp.css"
+
+from pyths.react import component, use_state, use_effect, use_ref, use_memo
+
+
+def fmt_time(t):
+    m = Math.floor(t / 60)
+    s = Math.floor(t % 60)
+    return f"{m}:0{s}" if s < 10 else f"{m}:{s}"
+
+
+@component
+def SearchHeader(query, on_change):
+    return header(
+        class_name="yt-header",
+        data_testid="yt-header",
+        div(
+            class_name="yt-logo",
+            span(class_name="yt-logo-mark", "▶"),
+            span(class_name="yt-logo-text", "MyTube"),
+        ),
+        form(
+            class_name="yt-search-form",
+            on_submit=lambda e: e.preventDefault(),
+            input(
+                class_name="yt-search",
+                data_testid="yt-search",
+                type="search",
+                placeholder="Search",
+                value=query,
+                on_change=lambda e: on_change(e.target.value),
+            ),
+            button(class_name="yt-search-btn", type="submit", "Search"),
+        ),
+    )
+
+
+@component
+def VideoCard(item, on_open):
+    hovering, set_hovering = use_state(False)
+    return article(
+        class_name="yt-card",
+        data_testid="yt-card",
+        on_click=lambda: on_open(item),
+        on_mouse_enter=lambda: set_hovering(True),
+        on_mouse_leave=lambda: set_hovering(False),
+        div(
+            class_name="yt-thumb",
+            style={"backgroundImage": f"url({item['thumb']})", "backgroundSize": "cover", "backgroundColor": item["color"]},
+            video(
+                class_name="yt-preview",
+                data_testid="yt-preview",
+                src="/media/sample.webm",
+                auto_play=True,
+                muted=True,
+                loop=True,
+                plays_inline=True,
+            ) if hovering else span(class_name="yt-thumb-icon", "▶"),
+            span(class_name="yt-duration", item["duration"]),
+        ),
+        div(
+            class_name="yt-meta",
+            div(class_name="yt-avatar", style={"background": item["color"]}, item["channel"][0]),
+            div(
+                class_name="yt-info",
+                h3(class_name="yt-card-title", data_testid="yt-card-title", item["title"]),
+                p(class_name="yt-channel", item["channel"]),
+                p(class_name="yt-stats", f"{item['views']} views • {item['age']}"),
+            ),
+        ),
+    )
+
+
+@component
+def VideoFeed(videos, on_open):
+    visible_count, set_visible_count = use_state(12)
+    sentinel_ref = use_ref(None)
+
+    def reset():
+        set_visible_count(12)
+
+    use_effect(reset, [videos])
+
+    def observe():
+        node = sentinel_ref.current
+        if not node:
+            return
+        def on_intersect(entries):
+            if entries[0].isIntersecting:
+                set_visible_count(lambda n: Math.min(n + 12, videos.length))
+        obs = IntersectionObserver(on_intersect, {"rootMargin": "200px"})
+        obs.observe(node)
+        return lambda: obs.disconnect()
+
+    use_effect(observe, [videos])
+
+    shown = videos.slice(0, visible_count)
+    return section(
+        class_name="yt-feed",
+        data_testid="yt-feed",
+        videos.length == 0 and p(class_name="yt-empty", data_testid="yt-empty", "No videos match your search."),
+        div(
+            class_name="yt-grid",
+            data_testid="yt-grid",
+            *[VideoCard(key=v["id"], item=v, on_open=on_open) for v in shown],
+        ),
+        visible_count < videos.length and div(class_name="yt-sentinel", data_testid="yt-sentinel", ref=sentinel_ref, "Loading more…"),
+    )
+
+
+@component
+def WatchView(item, related, subscribed, on_toggle_subscribe, on_open, on_back):
+    playing, set_playing = use_state(False)
+    current_time, set_current_time = use_state(0)
+    duration, set_duration = use_state(0)
+    video_ref = use_ref(None)
+
+    def toggle_play():
+        el = video_ref.current
+        if not el:
+            return
+        if playing:
+            el.pause()
+            set_playing(False)
+        else:
+            pr = el.play()
+            if pr and pr.catch:
+                pr.catch(lambda err: None)
+            set_playing(True)
+
+    def seek_by(delta):
+        el = video_ref.current
+        if not el:
+            return
+        d = el.duration or 0
+        t = Math.max(0, Math.min(d, el.currentTime + delta))
+        el.currentTime = t
+        set_current_time(t)
+
+    def handle_seek(e):
+        t = parseFloat(e.target.value)
+        el = video_ref.current
+        if el:
+            el.currentTime = t
+        set_current_time(t)
+
+    def handle_key(e):
+        tag = e.target and e.target.tagName
+        if tag == "INPUT" or tag == "TEXTAREA" or tag == "BUTTON":
+            return
+        if e.key == " " or e.code == "Space":
+            e.preventDefault()
+            toggle_play()
+        elif e.key == "ArrowRight":
+            e.preventDefault()
+            seek_by(5)
+        elif e.key == "ArrowLeft":
+            e.preventDefault()
+            seek_by(-5)
+
+    def bind_keys():
+        window.addEventListener("keydown", handle_key)
+        return lambda: window.removeEventListener("keydown", handle_key)
+
+    use_effect(bind_keys, [playing])
+
+    return section(
+        class_name="yt-watch",
+        data_testid="yt-watch",
+        button(class_name="yt-back", data_testid="yt-back", on_click=lambda: on_back(), "← Back to feed"),
+        div(
+            class_name="yt-watch-body",
+            div(
+                class_name="yt-primary",
+                video(
+                    class_name="yt-video",
+                    data_testid="yt-video",
+                    ref=video_ref,
+                    src="/media/sample.webm",
+                    auto_play=True,
+                    muted=True,
+                    loop=True,
+                    plays_inline=True,
+                    on_time_update=lambda e: set_current_time(e.target.currentTime),
+                    on_loaded_metadata=lambda e: set_duration(e.target.duration or 0),
+                    on_play=lambda: set_playing(True),
+                    on_pause=lambda: set_playing(False),
+                ),
+                div(
+                    class_name="yt-controls",
+                    button(class_name="yt-play", data_testid="yt-play", on_click=lambda: toggle_play(), "Pause" if playing else "Play"),
+                    input(
+                        class_name="yt-seek",
+                        data_testid="yt-seek",
+                        type="range",
+                        min=0,
+                        max=duration or 0,
+                        step=0.1,
+                        value=current_time,
+                        on_change=handle_seek,
+                    ),
+                    span(class_name="yt-time", data_testid="yt-time", f"{fmt_time(current_time)} / {fmt_time(duration)}"),
+                ),
+                h1(class_name="yt-watch-title", data_testid="yt-watch-title", item["title"]),
+                div(
+                    class_name="yt-channel-row",
+                    div(class_name="yt-avatar", style={"background": item["color"]}, item["channel"][0]),
+                    div(
+                        class_name="yt-channel-info",
+                        p(class_name="yt-channel", item["channel"]),
+                        p(class_name="yt-stats", f"{item['views']} views • {item['age']}"),
+                    ),
+                    button(
+                        class_name="yt-subscribe" + (" subscribed" if subscribed else ""),
+                        data_testid="yt-subscribe",
+                        on_click=lambda: on_toggle_subscribe(item["channel"]),
+                        "Subscribed" if subscribed else "Subscribe",
+                    ),
+                ),
+            ),
+            aside(
+                class_name="yt-related",
+                data_testid="yt-related",
+                h2(class_name="yt-related-heading", "Up next"),
+                *[
+                    div(
+                        key=v["id"],
+                        class_name="yt-related-item",
+                        data_testid="yt-related-item",
+                        on_click=lambda: on_open(v),
+                        div(class_name="yt-related-thumb", style={"backgroundImage": f"url({v['thumb']})", "backgroundSize": "cover", "backgroundColor": v["color"]}, span(class_name="yt-duration", v["duration"])),
+                        div(
+                            class_name="yt-related-meta",
+                            p(class_name="yt-related-title", v["title"]),
+                            p(class_name="yt-related-channel", v["channel"]),
+                        ),
+                    )
+                    for v in related
+                ],
+            ),
+        ),
+    )
+
+
+@component
+def YouTubeApp(videos):
+    query, set_query = use_state("")
+    current, set_current = use_state(None)
+    subscribed_channels, set_subscribed_channels = use_state([])
+
+    filtered = use_memo(
+        lambda: videos.filter(
+            lambda v: v["title"].toLowerCase().includes(query.toLowerCase())
+            or v["channel"].toLowerCase().includes(query.toLowerCase())
+        ),
+        [videos, query],
+    )
+
+    def handle_query(q):
+        set_query(q)
+        set_current(None)
+
+    def open_video(v):
+        set_current(v)
+
+    def toggle_subscribe(channel):
+        if subscribed_channels.includes(channel):
+            set_subscribed_channels(subscribed_channels.filter(lambda c: c != channel))
+        else:
+            set_subscribed_channels([*subscribed_channels, channel])
+
+    related = videos.filter(lambda v: v["id"] != current["id"]).slice(0, 10) if current else []
+
+    return div(
+        class_name="yt-app",
+        data_testid="yt-app",
+        SearchHeader(query=query, on_change=handle_query),
+        WatchView(
+            key=current["id"],
+            item=current,
+            related=related,
+            subscribed=subscribed_channels.includes(current["channel"]),
+            on_toggle_subscribe=toggle_subscribe,
+            on_open=open_video,
+            on_back=lambda: set_current(None),
+        ) if current else VideoFeed(videos=filtered, on_open=open_video),
+    )
+
+
+__default__ = YouTubeApp

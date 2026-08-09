@@ -1,0 +1,60 @@
+# LFK 18 - 2-D explicit hydrodynamics (flattened kn x jn grids)
+def k18_hydro2d(jn: int, loop: int) -> float:
+    kn = 6
+    za = [0.0] * (kn * jn)
+    zb = [0.0] * (kn * jn)
+    zm = [0.0] * (kn * jn)
+    zp = [0.0] * (kn * jn)
+    zq = [0.0] * (kn * jn)
+    zr = [0.0] * (kn * jn)
+    zu = [0.0] * (kn * jn)
+    zv = [0.0] * (kn * jn)
+    zz = [0.0] * (kn * jn)
+    i = 0
+    while i < kn * jn:
+        zp[i] = 0.001 * (i % 61 + 1)
+        zq[i] = 0.0007 * (i % 67 + 1)
+        zr[i] = 0.0013 * (i % 71 + 1)
+        zm[i] = 0.0011 * (i % 73 + 1)
+        zz[i] = 0.0009 * (i % 77 + 1)
+        i = i + 1
+    t = 0.0037
+    sfac = 0.0041
+    l = 0
+    while l < loop:
+        k = 1
+        while k < kn - 1:
+            j = 1
+            while j < jn - 1:
+                c = k * jn + j
+                za[c] = (zp[c + jn - 1] + zq[c + jn - 1] - zp[c - 1] - zq[c - 1]) * (zr[c] + zr[c - 1]) / (zm[c - 1] + zm[c + jn - 1] + 0.5)
+                zb[c] = (zp[c - 1] + zq[c - 1] - zp[c - jn] - zq[c - jn]) * (zr[c] + zr[c - jn]) / (zm[c - jn] + zm[c - 1] + 0.5)
+                j = j + 1
+            k = k + 1
+        k = 1
+        while k < kn - 1:
+            j = 1
+            while j < jn - 1:
+                c = k * jn + j
+                zu[c] = zu[c] + sfac * (za[c] * (zz[c] - zz[c + 1]) - za[c - 1] * (zz[c] - zz[c - 1]) - zb[c] * (zz[c] - zz[c - jn]) + zb[c + jn] * (zz[c] - zz[c + jn]))
+                zv[c] = zv[c] + sfac * (za[c] * (zr[c] - zr[c + 1]) - za[c - 1] * (zr[c] - zr[c - 1]) - zb[c] * (zr[c] - zr[c - jn]) + zb[c + jn] * (zr[c] - zr[c + jn]))
+                j = j + 1
+            k = k + 1
+        k = 1
+        while k < kn - 1:
+            j = 1
+            while j < jn - 1:
+                c = k * jn + j
+                zr[c] = zr[c] + t * zu[c]
+                zz[c] = zz[c] + t * zv[c]
+                j = j + 1
+            k = k + 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < kn * jn:
+        s = s + zr[i] + zz[i]
+        i = i + 1
+    return s
+
+print(repr(k18_hydro2d(90, 2)))

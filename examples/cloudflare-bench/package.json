@@ -1,0 +1,9 @@
+{
+  "name": "pyths-cloudflare-bench",
+  "private": true,
+  "type": "module",
+  "description": "Benchmark + eval harnesses for PythScribe (cold-start, tokens, generation eval, Livermore perf)",
+  "dependencies": {
+    "autocannon": "^8.0.0"
+  }
+}

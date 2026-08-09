@@ -1,0 +1,137 @@
+{
+  "exp": "macrov2-haiku",
+  "label": "haiku-v2",
+  "overall": {
+    "ps": {
+      "pass": 34,
+      "n": 45,
+      "rate": 0.7555555555555555
+    },
+    "psc": {
+      "pass": 26,
+      "n": 45,
+      "rate": 0.5777777777777777
+    }
+  },
+  "perTask": {
+    "macro_hello_card": {
+      "ps": {
+        "pass": 5,
+        "n": 5,
+        "rate": 1
+      },
+      "psc": {
+        "pass": 5,
+        "n": 5,
+        "rate": 1
+      }
+    },
+    "macro_counter_panel": {
+      "ps": {
+        "pass": 5,
+        "n": 5,
+        "rate": 1
+      },
+      "psc": {
+        "pass": 5,
+        "n": 5,
+        "rate": 1
+      }
+    },
+    "macro_todo_list": {
+      "ps": {
+        "pass": 5,
+        "n": 5,
+        "rate": 1
+      },
+      "psc": {
+        "pass": 5,
+        "n": 5,
+        "rate": 1
+      }
+    },
+    "macro_kanban_lite": {
+      "ps": {
+        "pass": 2,
+        "n": 5,
+        "rate": 0.4
+      },
+      "psc": {
+        "pass": 1,
+        "n": 5,
+        "rate": 0.2
+      }
+    },
+    "macro_video_grid": {
+      "ps": {
+        "pass": 3,
+        "n": 5,
+        "rate": 0.6
+      },
+      "psc": {
+        "pass": 2,
+        "n": 5,
+        "rate": 0.4
+      }
+    },
+    "macro_tweet_composer": {
+      "ps": {
+        "pass": 5,
+        "n": 5,
+        "rate": 1
+      },
+      "psc": {
+        "pass": 3,
+        "n": 5,
+        "rate": 0.6
+      }
+    },
+    "macro_playlist_player": {
+      "ps": {
+        "pass": 1,
+        "n": 5,
+        "rate": 0.2
+      },
+      "psc": {
+        "pass": 1,
+        "n": 5,
+        "rate": 0.2
+      }
+    },
+    "macro_course_cards": {
+      "ps": {
+        "pass": 5,
+        "n": 5,
+        "rate": 1
+      },
+      "psc": {
+        "pass": 3,
+        "n": 5,
+        "rate": 0.6
+      }
+    },
+    "macro_movie_rows": {
+      "ps": {
+        "pass": 3,
+        "n": 5,
+        "rate": 0.6
+      },
+      "psc": {
+        "pass": 1,
+        "n": 5,
+        "rate": 0.2
+      }
+    }
+  },
+  "tokens_among_behaviorally_correct": {
+    "ps": {
+      "median_o200k": 519,
+      "n": 34
+    },
+    "psc": {
+      "median_o200k": 228.5,
+      "n": 26
+    },
+    "median_saving_psc_vs_ps": 0.5597302504816956
+  }
+}

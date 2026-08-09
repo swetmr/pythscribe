@@ -1,0 +1,10 @@
+[package]
+name = "pyths_lexer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+logos = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

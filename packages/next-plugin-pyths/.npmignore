@@ -1,0 +1,11 @@
+# Belt-and-suspenders alongside the `files:` allowlist in package.json.
+.DS_Store
+*.log
+node_modules/
+tests/
+test/
+*.test.js
+.git*
+.editorconfig
+.vscode/
+*.tgz

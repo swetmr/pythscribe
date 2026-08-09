@@ -1,0 +1,14 @@
+from pyths.react import component
+
+
+@component
+def RootLayout(children=None):
+    return html(lang="en")(
+        head()(
+            title()("PythScribe + Next.js RSC example"),
+        ),
+        body()(children),
+    )
+
+
+__default__ = RootLayout

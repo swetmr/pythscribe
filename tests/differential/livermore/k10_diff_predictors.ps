@@ -1,0 +1,42 @@
+# LFK 10 - difference predictors (flattened px, stride 13)
+def k10_diff(n: int, loop: int) -> float:
+    px = [0.0] * (n * 13)
+    cx = [0.0] * (n * 13)
+    i = 0
+    while i < n * 13:
+        px[i] = 0.0001 * (i % 83 + 1)
+        cx[i] = 0.0002 * (i % 79 + 1)
+        i = i + 1
+    l = 0
+    while l < loop:
+        i = 0
+        while i < n:
+            b = i * 13
+            ar = cx[b + 4]
+            br = ar - px[b + 4]
+            px[b + 4] = ar
+            cr = br - px[b + 5]
+            px[b + 5] = br
+            ar = cr - px[b + 6]
+            px[b + 6] = cr
+            br = ar - px[b + 7]
+            px[b + 7] = ar
+            cr = br - px[b + 8]
+            px[b + 8] = br
+            ar = cr - px[b + 9]
+            px[b + 9] = cr
+            br = ar - px[b + 10]
+            px[b + 10] = ar
+            cr = br - px[b + 11]
+            px[b + 11] = br
+            px[b + 12] = cr
+            i = i + 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < n * 13:
+        s = s + px[i]
+        i = i + 1
+    return s
+
+print(repr(k10_diff(300, 3)))

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <!--
+    PythScribe icon — PS knot in Violet & Amber.
+    p (indigo) upper-left; d (amber) lower-right.
+    Bowls interlock at the center (overlap zone ~x:116-140, y:106-150).
+    Tails diagonal-out to accent dots at opposite corners.
+  -->
+
+  <!-- Indigo p -->
+  <g stroke="#4F46E5" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- Bowl: large-arc, clockwise — from (90,52) bulging right to (90,148) -->
+    <path d="M 90 52 A 48 48 0 1 1 90 148" />
+    <!-- Stem + descender + tail to dot -->
+    <path d="M 90 52 L 90 202 Q 90 220 52 216" />
+  </g>
+  <circle cx="52" cy="216" r="11" fill="#4F46E5" />
+
+  <!-- Amber d (mirror of p) -->
+  <g stroke="#F59E0B" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- Bowl: large-arc, clockwise — from (166,204) bulging left to (166,108) -->
+    <path d="M 166 204 A 48 48 0 1 1 166 108" />
+    <!-- Stem + ascender + ear to dot -->
+    <path d="M 166 204 L 166 54 Q 166 36 204 40" />
+  </g>
+  <circle cx="204" cy="40" r="11" fill="#F59E0B" />
+</svg>

@@ -1,0 +1,177 @@
+/* Tetris clone styles — shared by all three tracks (.tsx / .ps / .psc).
+   Layout only; the game logic and DOM structure live in the components.
+   vitest runs with css:false, so these rules affect the real apps and the
+   Playwright e2e run, not the render-parity snapshots. */
+
+.tetris {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: center;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: #d7dce3;
+}
+
+.tet-center {
+  display: flex;
+  flex-direction: column;
+}
+
+.tet-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.tet-title {
+  font-size: 32px;
+  font-weight: 800;
+  margin: 0;
+  flex: 1;
+  color: #e8ecf1;
+}
+
+.tet-restart,
+.tet-overlay-btn {
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tet-restart:hover,
+.tet-overlay-btn:hover {
+  background: #2f6fd6;
+}
+
+.tet-status {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #9aa4b2;
+}
+
+.tet-board {
+  display: grid;
+  grid-template-columns: repeat(10, 24px);
+  grid-template-rows: repeat(20, 24px);
+  gap: 1px;
+  background: #1a1f29;
+  border: 2px solid #2b323f;
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.tet-cell,
+.tet-mini-cell {
+  width: 24px;
+  height: 24px;
+  border-radius: 3px;
+  background: #10141c;
+}
+
+.tet-mini {
+  display: grid;
+  grid-template-columns: repeat(4, 16px);
+  grid-template-rows: repeat(4, 16px);
+  gap: 1px;
+}
+
+.tet-mini-cell {
+  width: 16px;
+  height: 16px;
+}
+
+/* piece colors, indexed by data-color 1..7 (I O T S Z J L) */
+.tet-color-0 {
+  background: #10141c;
+}
+.tet-color-1 {
+  background: #2dd4bf;
+}
+.tet-color-2 {
+  background: #facc15;
+}
+.tet-color-3 {
+  background: #a855f7;
+}
+.tet-color-4 {
+  background: #4ade80;
+}
+.tet-color-5 {
+  background: #f87171;
+}
+.tet-color-6 {
+  background: #3b82f6;
+}
+.tet-color-7 {
+  background: #fb923c;
+}
+
+.tet-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 84px;
+}
+
+.tet-panel,
+.tet-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #1a1f29;
+  border: 1px solid #2b323f;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.tet-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tet-panel-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #7b8494;
+}
+
+.tet-panel-sub {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.tet-stat-value {
+  font-size: 22px;
+  font-weight: 800;
+  color: #e8ecf1;
+}
+
+.tetris {
+  position: relative;
+}
+
+.tet-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(16, 20, 28, 0.82);
+  border-radius: 8px;
+}
+
+.tet-overlay-msg {
+  font-size: 40px;
+  font-weight: 800;
+  color: #e8ecf1;
+}

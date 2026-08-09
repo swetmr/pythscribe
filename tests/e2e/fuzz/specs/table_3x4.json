@@ -1,0 +1,8 @@
+{
+  "id": "table_3x4",
+  "kind": "table",
+  "params": {
+    "rows": 3,
+    "cols": 4
+  }
+}

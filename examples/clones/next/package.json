@@ -1,0 +1,25 @@
+{
+  "name": "clones-next",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3999",
+    "precompile-client": "node ../scripts/precompile-client.mjs",
+    "prebuild": "npm run precompile-client",
+    "predev": "npm run precompile-client"
+  },
+  "dependencies": {
+    "next": "^16.2.9",
+    "pyths-runtime": "file:../../../runtime",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "@types/react": "^19.2.17",
+    "next-plugin-pyths": "file:../../../packages/next-plugin-pyths",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,10 @@
+# Fetch API example — demonstrates async/await
+async def fetch_user(user_id):
+    response = await fetch(f"https://jsonplaceholder.typicode.com/users/{user_id}")
+    data = await response.json()
+    return data
+
+async def main():
+    user = await fetch_user(1)
+    print(f"Name: {user.name}")
+    print(f"Email: {user.email}")

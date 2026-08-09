@@ -1,0 +1,35 @@
+# LFK 2 — ICCG excerpt (incomplete Cholesky conjugate gradient inner loop)
+def k02_iccg(n: int, loop: int) -> float:
+    x = [0.0] * n
+    v = [0.0] * n
+    i = 0
+    while i < n:
+        x[i] = 0.001 * (i + 1)
+        v[i] = 0.0005 * (n - i)
+        i = i + 1
+    l = 0
+    while l < loop:
+        ii = n
+        ipntp = 0
+        while ii > 1:
+            ipnt = ipntp
+            ipntp = ipntp + ii
+            ii = ii // 2
+            i = ipnt + 1
+            k = ipnt + 2
+            while k < ipntp:
+                if i < n and k < n and k + 1 <= n:
+                    a = x[k - 1]
+                    b = v[k - 1]
+                    x[i] = x[i] * 0.5 + a * b
+                i = i + 1
+                k = k + 2
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < n:
+        s = s + x[i]
+        i = i + 1
+    return s
+
+print(repr(k02_iccg(256, 3)))

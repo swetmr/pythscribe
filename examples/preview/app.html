@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Customer CRM — PythScribe Preview</title>
+    <style>body { margin: 0; font-family: system-ui, sans-serif; }</style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "react":                "./runtime-shim.js",
+          "react-real":           "https://esm.sh/react@18.3.1",
+          "react-dom":            "https://esm.sh/react-dom@18.3.1?external=react",
+          "react-dom/client":     "https://esm.sh/react-dom@18.3.1/client?external=react",
+          "pyths-runtime":        "./runtime-shim.js",
+          "pyths-runtime/react":  "./runtime-shim.js",
+          "pyths-runtime/asyncio":"./runtime-shim.js"
+        }
+      }
+    </script>
+
+    <script type="module">
+      const showError = (err) => {
+        const root = document.getElementById("root");
+        const msg = (err && err.message) ? err.message : String(err);
+        const stack = (err && err.stack) ? err.stack : "(no stack)";
+        const html =
+          '<pre style="padding:1rem;color:#b91c1c;font:12px ui-monospace,monospace;white-space:pre-wrap">' +
+          '<strong>' + msg.replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])) +
+          '</strong>\n\n' + stack + '</pre>';
+        root.innerHTML = html;
+      };
+      window.addEventListener("error", (e) => showError(e.error || new Error(e.message)));
+      window.addEventListener("unhandledrejection", (e) => showError(e.reason));
+      try {
+        const { createRoot } = await import("react-dom/client");
+        const { createElement } = await import("./runtime-shim.js");
+        const mod = await import(
+          "../cloudflare-bench/large-samples/pythscribe/app_1000.js"
+        );
+        const App = mod.App;
+        if (!App) {
+          document.getElementById("root").textContent =
+            "App not exported from compiled module. Available: " +
+            Object.keys(mod).join(", ");
+        } else {
+          const root = createRoot(document.getElementById("root"));
+          root.render(createElement(App));
+        }
+      } catch (e) { showError(e); throw e; }
+    </script>
+  </body>
+</html>

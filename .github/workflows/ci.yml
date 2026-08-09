@@ -1,0 +1,863 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Pinned (not "stable") so build/test/fmt/clippy are reproducible and
+        # match the locally-verified toolchain. Bumped deliberately, never floating.
+        # A root rust-toolchain.toml is intentionally forbidden (see the kani job),
+        # so the pin lives here in CI and is not imposed on downstream users.
+        rust: ["1.94.0"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Test (Rust workspace, all crates)
+        run: cargo test --workspace
+
+      - name: Build release binary smoke check
+        run: cargo build --release --bin pyths
+
+      - name: CLI smoke — compile a real fixture
+        # Compile to a scratch path so we don't clobber the committed reference
+        # .js outputs (which lack the @generated marker and are protected by the
+        # overwrite guard). This exercises the compiler on real fixtures.
+        run: |
+          ./target/release/pyths compile examples/cloudflare-bench/large-samples/pythscribe/dashboard_500.ps -o "${RUNNER_TEMP}/dashboard_500.js"
+          ./target/release/pyths compile examples/cloudflare-bench/large-samples/pythscribe/app_1000.ps -o "${RUNNER_TEMP}/app_1000.js"
+        shell: bash
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Fails fast (Node preinstalled, no Rust setup) if any package.json /
+      # Cargo.toml / lockfile version disagrees with the Cargo workspace version.
+      # Guards against the platform-template drift that broke the 0.2.1 release.
+      - name: Version-drift check
+        run: node scripts/check-versions.mjs
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # pinned via toolchain input
+        with:
+          # Pin fmt/clippy to the locally-verified version so `--check` and
+          # `-D warnings` are deterministic (no root rust-toolchain.toml — the
+          # kani job forbids one so the pin isn't imposed on downstream users).
+          toolchain: "1.94.0"
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-lint-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
+
+  bench:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-bench-
+
+      - name: Run benchmarks
+        run: cargo bench -p pyths_codegen_js
+
+  # --------------------------------------------------------------------
+  # Node + browser test layers. Cover everything that doesn't run via
+  # `cargo test`: runtime-helper unit tests, format-spec differential
+  # vs CPython, CPython semantic differential corpus, Playwright DOM
+  # and pixel parity, and the Node-side auto-routing E2E.
+  # --------------------------------------------------------------------
+  node-and-e2e:
+    name: Node + browser
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-node-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-node-
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22 (not 20): node 20's bundled npm errors EBADPLATFORM on optional
+          # platform-specific deps (e.g. rollup native binaries) during the
+          # libinterop `npm install`; node 22's npm handles them. Also matches
+          # the other frontend jobs, and node 20 is deprecated on the runners.
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build pyths binary (release)
+        run: cargo build --release --bin pyths
+
+      # --------- Node-level test layers ---------
+      - name: Runtime helper unit tests (43)
+        run: node --test crates/pyths_runtime/js/runtime.test.js
+
+      - name: decimal / fractions stdlib unit tests (27)
+        run: node --test runtime/src/stdlib/decimal.test.mjs runtime/src/stdlib/fractions.test.mjs
+
+      - name: Format-spec differential vs CPython (30)
+        run: node --test crates/pyths_runtime/js/format_diff_test.mjs
+
+      - name: CPython semantic differential corpus (1,307, incl. decimal/fraction/Sweep-A/Track-A async-gather/wave-19 string methods/wave-20 dict methods)
+        run: node tests/differential/run.mjs
+
+      - name: Promise / async-JS interop suite (43, pinned expectations)
+        run: node tests/jsinterop/run.mjs
+
+      - name: Library-interop behavioral suite (28 — shadcn stack + top React libs, TSX oracle vs .ps twin)
+        run: node tests/libinterop/run.mjs
+
+      - name: Identifier/key sanitization suite (S1, 173 generated, 1 excluded by design)
+        run: node tests/differential/gen_identifier_cases.mjs
+
+      - name: Grammar-based differential fuzzer (S2, N=300, seed 20260703)
+        run: node tests/differential/fuzz_gen.mjs
+
+      # Livermore kernels (§7.1, after Axon): 24 LFK numeric loop nests,
+      # each byte-compared CPython vs compiled JS vs FORCED-WASM routing
+      # (the harness also asserts the auto-router actually sent the
+      # kernel to WASM). This is the compute-path differential — the
+      # workload the WASM backend exists for. On landing day it caught
+      # 3 real WASM codegen bugs incl. a silent miscompile.
+      - name: Livermore kernel differential (24 x {cpython, js, wasm})
+        run: node tests/differential/livermore/run.mjs
+
+      # Formal Lark grammar corpus gate (grammar/pyths.lark + psc.lark vs all
+      # tracked .ps/.psc, the 584-entry differential corpus, and the clone
+      # pairs — see grammar/README.md). HARD gate since 2026-07-10 (P0 #2 of
+      # the testing gap-closure plan): the soft-fail launch-week hedge never
+      # fired, and a soft gate that never fails is not a gate.
+      - name: Formal grammar corpus gate
+        run: |
+          pip install lark
+          python scripts/test-grammar.py
+
+      # Constrained-decoding acceptor gate (P1 #4): the grammar must be a
+      # SOUND ACCEPTOR on the committed corpus — accept every gradeable
+      # real completion (485/485 since the 2026-08 grammar sync brought in
+      # hex/oct/bin literals, match-as-name and tuple patterns; the one
+      # former reject is now grammar-valid) and reject 100% of the 1,584
+      # guaranteed-malformed mutations. The LIVE SynCode decoder remains
+      # experimental and is NOT gated; this pins the grammar-coverage floor.
+      - name: Constrained-decoding acceptor gate (485/485 accept, 1584/1584 reject)
+        run: python examples/constrained-decoding/acceptor_demo.py
+
+      # Bidirectional differential fuzz: grammar/pyths.lark vs the AUTHORITATIVE
+      # recursive-descent parser (see grammar/grammar-fuzz-results.md).
+      #
+      # The corpus gate above only proves the grammar ACCEPTS a fixed corpus. It
+      # is blind in both of the directions that matter for constrained decoding:
+      #   - FALSE ACCEPT: strings the grammar accepts but `pyths check` rejects
+      #     (a decoder would emit them and the compiler would refuse them).
+      #     Measured by generating random derivations FROM the grammar.
+      #   - FALSE REJECT: parser-valid programs the grammar rejects (a decoder
+      #     would needlessly block them). Measured on the in-repo corpora plus
+      #     semantics-preserving mutations, each re-validated by the parser.
+      #
+      # --fail-on-new is the contract: the measured gap may SHRINK, never
+      # silently grow. Any false reject fails; any false-accept signature not in
+      # the triaged KNOWN_DIVERGENCES ledger fails. Deterministic (fixed seed).
+      #
+      # 2000 (not the 10000 used for the headline numbers) keeps this at a few
+      # minutes; the divergence classes saturate long before 2000.
+      - name: Grammar differential fuzz (false-accept / false-reject gate)
+        run: python scripts/grammar-fuzz.py --generate 2000 --fail-on-new
+
+      # Dictionary / alias audit reports. These are token-savings REPORTS
+      # (exit 0 on a healthy tree) — the hard reversibility invariants are
+      # `cargo test -p pyths_expand --test gates` (dict_audit_* + the Lean
+      # model-manifest drift gate). Running the reports here means a crash
+      # (table drift, import error) fails CI and the savings tables stay
+      # inspectable in the job logs.
+      - name: Dictionary / alias token audits (report; crash = failure)
+        run: |
+          pip install tiktoken
+          python examples/cloudflare-bench/bench/audit_dict.py
+          python examples/cloudflare-bench/bench/audit_aliases.py
+
+      - name: README/docs code blocks execute verbatim (S4)
+        run: node scripts/test-readme.mjs
+
+      - name: Auto-routing E2E (8) — JS for DOM, WASM for compute
+        run: node --test tests/differential/auto_route_test.mjs
+
+      - name: Class components / error boundaries — real react render (A3)
+        working-directory: tests/differential/react_render_pkg
+        run: |
+          npm install
+          node --test class_component_test.mjs
+
+      # --------- Playwright DOM + pixel parity ---------
+      - name: Install Playwright
+        working-directory: tests/e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Compile demo fixtures
+        run: |
+          ./target/release/pyths compile examples/cloudflare-bench/large-samples/pythscribe/dashboard_500.ps
+          ./target/release/pyths compile examples/cloudflare-bench/large-samples/pythscribe/app_1000.ps
+
+      - name: Generate + compile fuzz fixtures
+        working-directory: tests/e2e
+        run: |
+          node fuzz/generate.mjs
+          for f in fuzz/generated/*.ps; do
+            ../../target/release/pyths compile "$f"
+          done
+
+      - name: Playwright parity tests (28)
+        working-directory: tests/e2e
+        run: npx playwright test
+        env:
+          CI: 'true'
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright-report/
+          retention-days: 14
+
+  # --------------------------------------------------------------------
+  # Fresh-install packaging test (S6). npm-packs each publishable package
+  # and installs the TARBALLS into fresh temp projects (Vite hello app
+  # with a .ps component + create-pyths-app scaffold). Runs on pushes to
+  # main only — packaging drifts slowly and the job pulls from the npm
+  # registry, so it isn't worth every PR push.
+  # --------------------------------------------------------------------
+  packaging:
+    name: Packaging (fresh install)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-packaging-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-packaging-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build pyths binary (release)
+        run: cargo build --release --bin pyths
+
+      - name: Fresh-install packaging test (S6)
+        run: node scripts/test-packaging.mjs
+
+  # --------------------------------------------------------------------
+  # Formal verification (Lean 4). Builds the machine-checked rewrite-
+  # system proofs (determinism / zone-safety / alias round-trip) on
+  # every push + PR — P0 #1 of the testing gap-closure plan (2026-07-10):
+  # a proof that is not continuously enforced is a proof that can rot.
+  # The companion drift gate (cargo test -p pyths_expand --test gates)
+  # fails the `test` job if the Rust tier order / dictionary diverges
+  # from the model manifest, so the two jobs together keep the proofs
+  # ABOUT the shipping expander.
+  # --------------------------------------------------------------------
+  verification:
+    name: Lean proofs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Cache elan + lake build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.elan
+            verification/.lake
+          key: ${{ runner.os }}-lean-${{ hashFiles('verification/lean-toolchain', 'verification/lakefile.toml') }}
+
+      - name: Install elan (toolchain pinned by verification/lean-toolchain)
+        run: |
+          if ! command -v lake >/dev/null 2>&1 && [ ! -x "$HOME/.elan/bin/lake" ]; then
+            curl -sSfL https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-unknown-linux-gnu.tar.gz | tar xz
+            ./elan-init -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: DictData.lean in sync with strings.rs (generated-file gate)
+        run: python verification/gen-dict-data.py --check
+
+      # Same drift gate for the CONCRETE Tier-B instantiation: the Lean
+      # kwarg table is generated from kwargs.rs::ALIASES, so the proved
+      # tier cannot silently diverge from the shipping one. The Rust side
+      # of the same pin lives in tests/gates.rs (kwarg-fnv1a64), so
+      # neither side can move alone.
+      - name: KwargData.lean in sync with kwargs.rs (generated-file gate)
+        run: python verification/gen-kwarg-data.py --check
+
+      # Same drift gate for the three tiers made concrete in the 2026-07-14
+      # gap-closure: Tier A (presets + decorators), the hooks tier, and
+      # Tier E (whose table is a committed FIXTURE — Tier E has no
+      # compiler-side table; see verification/model-manifest.txt).
+      - name: TierAData.lean in sync with presets.rs/decorators.rs (generated-file gate)
+        run: python verification/gen-tiera-data.py --check
+
+      - name: HookData.lean in sync with hooks.rs (generated-file gate)
+        run: python verification/gen-hook-data.py --check
+
+      - name: IdiomData.lean in sync with idiom-table.toml (generated-file gate)
+        run: python verification/gen-idiom-data.py --check
+
+      - name: Build proofs + executable model
+        working-directory: verification
+        run: lake build
+
+      # Lean<->Python spec-transliteration DRIFT gate (§ lean-spec-quality C10):
+      # executes the real Lean model functions via `lake env lean` and diffs
+      # them against the `spec_validate_*.py` transliterations on a shared
+      # corpus, so a later Lean edit that drifts from its Python twin fails here.
+      # The script forces a fresh `lake build` first, so it can never compare
+      # against a stale .olean. (A SYNCHRONIZED Lean/Python bug is caught only by
+      # the CPython differentials below, not by this gate — see the script.)
+      - name: Lean/Python transliteration drift gate
+        working-directory: verification
+        run: python spec_lean_drift.py
+
+      # The CPython differential arms that bind the Python transliterations to
+      # real CPython (the other half of the model==CPython chain).
+      - name: Spec-validate string methods (Python twin vs CPython)
+        run: python verification/spec_validate_strmethods.py
+
+      - name: Spec-validate dict methods (Python twin vs CPython)
+        run: python verification/spec_validate_dictmethods.py
+
+      - name: Install Rust (for the model-vs-implementation differential)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-verification-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-verification-
+
+      - name: Build pyths binary (release)
+        run: cargo build --release --bin pyths
+
+      # §7.8 binding: each Lean executable tier model must be byte-identical
+      # to the real `pyths expand` on a generated corpus — proofs about a
+      # model only bind if the model demonstrably IS the implementation.
+      # FIVE arms, one per concrete tier (2,017 cases total):
+      #   dict   strings.rs                418 cases
+      #   kwargs kwargs.rs                 432 cases
+      #   hooks  hooks.rs                  400 cases
+      #   idioms idioms.rs                 373 cases  (over the committed fixture)
+      #   tiera  presets.rs/decorators.rs  394 cases
+      # Every tier of the shipped expander has an arm — none is left abstract.
+      - name: Model-vs-implementation differential (Lean exe vs pyths expand)
+        run: python verification/diff_harness.py
+
+      # §7.2 credible compilation: the subscript-routing decision table
+      # must match between the Lean RouteModel (proved read-safe) and
+      # cert.rs (checked by cargo test route_table_matches_committed_fixture
+      # in the `test` job). Both compare against the same committed fixture.
+      - name: Route-table binding (Lean RouteModel vs committed fixture)
+        working-directory: verification
+        run: ./.lake/build/bin/expanddiff --check-route-table route-table.txt
+
+      # WASM-admission soundness: the boundary admission/lowering table must
+      # match between the Lean WasmAdmission model (proving
+      # `wasm_admission_sound`: admitted => lowerable) and the shipping
+      # `is_wasm_eligible` + `to_wasm_type` (checked by cargo test
+      # wasm_admission_table_matches_committed_fixture in the `test` job).
+      # Both compare against the same committed fixture.
+      - name: WASM-admission table binding (Lean WasmAdmission vs committed fixture)
+        working-directory: verification
+        run: ./.lake/build/bin/expanddiff --check-wasm-admission-table wasm-admission-table.txt
+
+      - name: Trust-base audit — no sorry/admit/axiom/native_decide
+        working-directory: verification
+        run: |
+          # F-6: scan EVERY verification/*.lean, not just PythExpandVerify.lean, so a
+          # sorry hidden in a sibling module (generated *Data.lean, Main.lean, future
+          # files) cannot slip past the trust-base audit.
+          if grep -nE '\bsorry\b|\badmit\b|^ *axiom |native_decide' *.lean; then
+            echo "::error::escape hatch found in the Lean development"
+            exit 1
+          fi
+          echo "clean: propext-only trust base preserved (all verification/*.lean)"
+
+      # Comparator axiom-footprint gate (ten-proofs Part B / lean_strategies B1-B3):
+      # runs `#print axioms` in the REAL Lean env over every Paper-C headline
+      # claim (+ its *_stub_fails witness) and FAILS if any uses an axiom
+      # outside the pinned footprint {propext, Classical.choice, Quot.sound}, or
+      # if any sorry/admit/axiom/native_decide slipped in. This is the
+      # machine-checkable backbone of verification/formalization.yaml — the
+      # manifest cannot claim a tighter footprint than the kernel reports.
+      # `--no-build` because `lake build` already ran above (fresh .olean).
+      - name: Comparator axiom-footprint gate (formalization.yaml)
+        working-directory: verification
+        run: python comparator/axiom_footprint.py gate --no-build
+
+      # formalization.yaml must stay in sync with the source: regenerate it and
+      # fail if it drifts (same discipline as the generated-*Data.lean gates).
+      - name: formalization.yaml is in sync with the source
+        working-directory: verification
+        run: |
+          cp formalization.yaml /tmp/formalization.committed.yaml
+          python comparator/axiom_footprint.py emit --no-build
+          if ! diff -u /tmp/formalization.committed.yaml formalization.yaml; then
+            echo "::error::formalization.yaml is stale — run 'python comparator/axiom_footprint.py emit' and commit"
+            exit 1
+          fi
+          echo "clean: formalization.yaml matches the source"
+
+  # --------------------------------------------------------------------
+  # Bounded model checking (Kani / CBMC) of the shared zone classifier —
+  # `crates/pyths_expand/src/zones.rs`, the core every tier's zone-safety
+  # rests on. Added 2026-07-14.
+  #
+  # WHY, in one sentence: the Lean proofs are about a *model*, bound to the
+  # Rust only by the 2,039-case differential — and a differential cannot find
+  # a bug that BOTH sides share. One such bug was in the shipped source:
+  # `string_step` could advance past the end of the buffer on a truncated
+  # multi-byte lead byte. It was LATENT, not live — real callers pass `&str`
+  # bytes, so the overrun was unreachable — but it was an invariant the
+  # `&[u8]` signature does not carry, i.e. a trap for the next caller. Kani
+  # found it in 0.3s, exhaustively, and now pins the fix.
+  #
+  # EPISTEMIC STATUS: bounded model checking is exhaustive for all inputs up
+  # to N bytes. Strictly stronger than the differential corpus, strictly
+  # weaker than the Lean proofs. It does NOT license the word "verified".
+  # See KANI.md.
+  #
+  # OFF THE NORMAL BUILD PATH: every harness is `#[cfg(kani)]`, the workspace
+  # has NO Kani dependency (the `kani` crate is injected by `cargo kani`), and
+  # the first step below PROVES that rather than asserting it — a downstream
+  # `cargo build --release` never needs Kani.
+  # --------------------------------------------------------------------
+  kani:
+    name: Kani (bounded model checking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.kani/
+            target/
+          key: ${{ runner.os }}-cargo-kani-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-kani-
+
+      # Kani is a DEV-ONLY tool. Demonstrated, not asserted: the crate builds
+      # in release with no Kani installed at this point, and `kani` appears
+      # nowhere in its dependency graph.
+      - name: Kani is not on the build path (no Kani installed yet)
+        run: |
+          # The user's build, on stable, with no Kani on the machine.
+          cargo build --release -p pyths_cli
+          cargo test -p pyths_expand
+
+          # No package NAMED kani in either graph. Match the package name
+          # exactly (`grep -x` on the first column) — a substring grep would
+          # also match a checkout path that happens to contain "kani".
+          for p in pyths_cli pyths_expand; do
+            if cargo tree -p "$p" --prefix none | awk '{print $1}' | sort -u | grep -qx kani; then
+              echo "::error::kani leaked into the $p dependency graph"
+              exit 1
+            fi
+          done
+
+          # No nightly leak: cargo-kani needs a pinned nightly, but it must
+          # never reach a downstream user via a root toolchain file.
+          if [ -f rust-toolchain.toml ] || [ -f rust-toolchain ]; then
+            echo "::error::a root rust-toolchain file appeared — Kani's nightly must not leak into the user build"
+            exit 1
+          fi
+          echo "clean: pyths_cli builds on stable, and no Kani anywhere in the graph"
+
+      - name: Install Kani
+        run: |
+          # ~/.cargo/bin is cached, so cargo-kani may already be present from a
+          # prior run; `cargo install` errors ("binary already exists") rather
+          # than no-op'ing, so only install when it's actually missing.
+          command -v cargo-kani >/dev/null 2>&1 || cargo install --locked kani-verifier
+          cargo kani setup
+
+      # The GATED set is exactly the five harnesses observed to converge (each
+      # in <20s). They are the ones whose inputs are unconstrained `&[u8]`.
+      #
+      # The other four harnesses in kani_proofs.rs take `&str`, so the harness
+      # must `assume(from_utf8(buf).is_ok())` — and CBMC pays for that UTF-8
+      # validity constraint on every symbolic buffer, which is what blows up:
+      # `line_start_states` did not converge in 59 min at N=6, and `code_step`
+      # passed 15 GB of solver memory at N=8 without converging. They are NOT
+      # gated: a gate nobody has watched go green is not a gate. They stay in
+      # the source, runnable on demand, and closing them (a cheaper encoding of
+      # the UTF-8 precondition) is tracked in KANI.md.
+      - name: Bounded model check the zone classifier (5 gated harnesses)
+        run: |
+          for h in string_step_progress_and_in_bounds \
+                   string_step_is_total_on_a_truncated_lead_byte \
+                   clamp_changes_nothing_on_valid_utf8 \
+                   a_backslash_escape_never_closes_a_zone \
+                   utf8_char_len_agrees_with_the_encoded_length; do
+            echo "::group::$h"
+            cargo kani -p pyths_expand --harness "$h"
+            echo "::endgroup::"
+          done
+
+  # --------------------------------------------------------------------
+  # Comparator — INDEPENDENT-KERNEL re-check (ten-proofs B2 /
+  # lean_strategies Part B). The `verification` job's axiom-footprint gate
+  # (L1) trusts Lean's own kernel; this job (L2) does NOT. It exports the
+  # whole elaborated PythExpandVerify environment with lean4export and
+  # re-type-checks every declaration in nanoda_bin, an INDEPENDENT Rust
+  # Lean-4 kernel, with permitted_axioms pinned to the footprint. Because
+  # the core is dependency-free (no Mathlib) the export is self-contained,
+  # so this covers ALL declarations, not just the headline claims.
+  #
+  # Separate + heavier (like `kani`): lean4export must be built against the
+  # core's EXACT toolchain to read its .olean, and nanoda checks on its main
+  # thread (deep recursion) so the runner raises `ulimit -s unlimited`.
+  # See verification/comparator/comparator.md.
+  # --------------------------------------------------------------------
+  comparator:
+    name: Comparator (independent-kernel re-check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Cache elan + lake build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.elan
+            verification/.lake
+          key: ${{ runner.os }}-lean-${{ hashFiles('verification/lean-toolchain', 'verification/lakefile.toml') }}
+
+      - name: Install elan (toolchain pinned by verification/lean-toolchain)
+        run: |
+          if ! command -v lake >/dev/null 2>&1 && [ ! -x "$HOME/.elan/bin/lake" ]; then
+            curl -sSfL https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-unknown-linux-gnu.tar.gz | tar xz
+            ./elan-init -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust (for nanoda_bin)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Build the verified core (.olean the exporter reads)
+        working-directory: verification
+        run: lake build
+
+      # L1 first — the fast, always-required footprint gate. If it fails there
+      # is no point paying for the export + independent re-check.
+      - name: L1 axiom-footprint gate
+        working-directory: verification
+        run: python comparator/axiom_footprint.py gate --no-build
+
+      # lean4export MUST match the core's toolchain to read its .olean, so pin
+      # it from verification/lean-toolchain (never a hard-coded version).
+      - name: Build lean4export (pinned to the core toolchain)
+        run: |
+          git clone --depth 1 https://github.com/leanprover/lean4export.git "$RUNNER_TEMP/lean4export"
+          cp verification/lean-toolchain "$RUNNER_TEMP/lean4export/lean-toolchain"
+          ( cd "$RUNNER_TEMP/lean4export" && lake build )
+
+      - name: Build nanoda_bin (independent Rust Lean-4 kernel)
+        run: |
+          git clone --depth 1 https://github.com/ammkrn/nanoda_lib.git "$RUNNER_TEMP/nanoda_lib"
+          ( cd "$RUNNER_TEMP/nanoda_lib" && cargo build --release )
+
+      - name: Export + independent re-check (nanoda, pinned footprint)
+        working-directory: verification
+        run: |
+          ulimit -s unlimited || true
+          LEAN4EXPORT_BIN="$RUNNER_TEMP/lean4export/.lake/build/bin/lean4export" \
+          NANODA_BIN="$RUNNER_TEMP/nanoda_lib/target/release/nanoda_bin" \
+            bash comparator/run_comparator.sh
+
+  # --------------------------------------------------------------------
+  # Application-scale tri-track parity (P1 #3 of the gap-closure plan).
+  # The 17 vitest suites mount each clone component three ways — React
+  # .tsx (oracle), .ps, .psc (live-compiled via vite-plugin-pyths) — and
+  # assert byte-equal serialized DOM (initial + post-interaction), then
+  # verify the Iron Rule over the 7 clone .psc pairs, then run the
+  # Playwright behavioral e2e against the built Vite track. The Next
+  # track e2e stays local-only for CI-cost control (documented choice —
+  # the Vite track is the primary per CLAUDE.md).
+  # --------------------------------------------------------------------
+  clones:
+    name: Clone parity (tri-track)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-clones-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clones-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build pyths binary (release)
+        run: cargo build --release --bin pyths
+
+      - name: npm install (clones workspace)
+        working-directory: examples/clones
+        # `npm install`, not `npm ci`: npm ci reifies by wiping node_modules,
+        # which on Linux follows the clones-vite / clones-next workspace symlinks
+        # and deletes the vite/ + next/ SOURCE dirs (npm/cli#4838). install is
+        # incremental and keeps the source. (The EBADPLATFORM seen earlier was a
+        # stray @rollup/rollup-win32-x64-msvc devDependency in vite/package.json,
+        # now removed — rollup ships its platform binaries as optionalDeps.)
+        run: npm install --no-audit --no-fund
+
+      - name: Tri-track DOM parity (17 vitest suites, React as oracle)
+        working-directory: examples/clones
+        run: npm test
+        env:
+          PYTHS_BIN: ${{ github.workspace }}/target/release/pyths
+
+      - name: Iron Rule over clone pairs (verify:psc)
+        working-directory: examples/clones
+        run: npm run verify:psc
+        env:
+          PYTHS_BIN: ${{ github.workspace }}/target/release/pyths
+
+      - name: Install Playwright chromium
+        working-directory: examples/clones
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Vite track
+        working-directory: examples/clones/vite
+        run: npm run build
+        env:
+          PYTHS_BIN: ${{ github.workspace }}/target/release/pyths
+
+      - name: Behavioral e2e — Vite track (7 clone specs)
+        working-directory: examples/clones
+        run: npx playwright test --config e2e/playwright.vite.config.ts
+        env:
+          PYTHS_BIN: ${{ github.workspace }}/target/release/pyths
+          CI: 'true'
+
+      - name: Upload e2e report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clones-e2e-report
+          path: examples/clones/playwright-report/
+          retention-days: 14
+
+  # --------------------------------------------------------------------
+  # Lighthouse (FCP/TTI/LCP) on the built Vite clone track — dashboard
+  # metric 4/7. Warn-level budgets on first landing; tighten to error
+  # once a baseline is established. Push-to-main only (like packaging).
+  # --------------------------------------------------------------------
+  lighthouse:
+    name: Lighthouse (Vite clones)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            target/
+          key: ${{ runner.os }}-cargo-lh-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-lh-
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build pyths binary (release)
+        run: cargo build --release --bin pyths
+      - name: Build Vite track
+        working-directory: examples/clones
+        # npm install (not npm ci) — see the clones job.
+        run: |
+          npm install --no-audit --no-fund
+          cd vite && npm run build
+        env:
+          PYTHS_BIN: ${{ github.workspace }}/target/release/pyths
+      - name: Lighthouse CI
+        working-directory: examples/clones
+        run: |
+          npm install -g @lhci/cli
+          lhci autorun
+
+  # --------------------------------------------------------------------
+  # Code coverage (informational, non-gating): surfaces untested codegen
+  # branches — pyths_codegen_js is the largest correctness-critical
+  # crate. Report uploaded as an artifact.
+  # --------------------------------------------------------------------
+  coverage:
+    name: Coverage (informational)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            target/
+          key: ${{ runner.os }}-cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-cov-
+      - name: Coverage report
+        run: |
+          cargo llvm-cov --workspace --html --output-dir coverage-report
+          cargo llvm-cov report --summary-only | tee coverage-summary.txt
+          # lcov export for the change-impact coverage gate tooling
+          # (scripts/coverage-gate.py). NOTE: this is cargo-test coverage;
+          # the authoritative "differential-oracle coverage" profile is
+          # produced locally by scripts/coverage-collect.py (instrumented
+          # pyths binary driven by the corpus runners) as part of the local
+          # pre-merge checklist. Advisory only for now.
+          cargo llvm-cov report --lcov --output-path coverage.lcov
+      - name: Change-impact coverage gate (advisory)
+        # Advisory: uses cargo-test coverage (not the oracle profile) and a
+        # push-to-main diff is usually empty vs merge-base. Hard-fail flip is
+        # planned only after the local gate has a track record (scoping doc,
+        # section 2.3 "soft gate that never fails is not a gate").
+        continue-on-error: true
+        run: python scripts/coverage-gate.py --lcov coverage.lcov --base-ref origin/main
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-report
+          path: |
+            coverage-report/
+            coverage-summary.txt
+            coverage.lcov
+          retention-days: 30

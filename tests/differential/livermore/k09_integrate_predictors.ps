@@ -1,0 +1,32 @@
+# LFK 9 - integrate predictors (flattened px[i*13 + j])
+def k09_integrate(n: int, loop: int) -> float:
+    px = [0.0] * (n * 13)
+    i = 0
+    while i < n * 13:
+        px[i] = 0.0001 * (i % 89 + 1)
+        i = i + 1
+    dm22 = 0.02
+    dm23 = 0.03
+    dm24 = 0.04
+    dm25 = 0.05
+    dm26 = 0.06
+    dm27 = 0.07
+    dm28 = 0.08
+    c0 = 1.2
+    flx = 0.7
+    l = 0
+    while l < loop:
+        i = 0
+        while i < n:
+            b = i * 13
+            px[b] = dm28 * px[b + 12] + dm27 * px[b + 11] + dm26 * px[b + 10] + dm25 * px[b + 9] + dm24 * px[b + 8] + dm23 * px[b + 7] + dm22 * px[b + 6] + c0 * (px[b + 4] + px[b + 5]) + flx
+            i = i + 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < n:
+        s = s + px[i * 13]
+        i = i + 1
+    return s
+
+print(repr(k09_integrate(400, 4)))

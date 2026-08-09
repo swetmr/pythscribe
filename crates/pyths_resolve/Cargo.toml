@@ -1,0 +1,10 @@
+[package]
+name = "pyths_resolve"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pyths_syntax = { workspace = true }
+
+[dev-dependencies]
+pyths_parser = { path = "../pyths_parser" }

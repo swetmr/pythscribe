@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PythScribe Previews</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        max-width: 720px;
+        margin: 4rem auto;
+        padding: 0 1.25rem;
+        line-height: 1.55;
+        color: #1f2937;
+      }
+      h1 { font-size: 1.75rem; margin: 0 0 0.5rem 0; }
+      .subtitle { color: #6b7280; margin: 0 0 2rem 0; }
+      .card {
+        display: block;
+        padding: 1.25rem 1.5rem;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        margin-bottom: 1rem;
+        background: #ffffff;
+        text-decoration: none;
+        color: inherit;
+        transition: border-color 120ms;
+      }
+      .card:hover { border-color: #3b82f6; }
+      .card h3 { margin: 0 0 0.4rem 0; color: #111827; }
+      .card .meta { color: #6b7280; font-size: 0.9rem; margin: 0 0 0.5rem 0; }
+      .card code {
+        background: #f3f4f6;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+      }
+      footer { color: #9ca3af; margin-top: 2rem; font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <h1>PythScribe Live Previews</h1>
+    <p class="subtitle">
+      Two compiled-from-PythScribe samples running in the browser. Sources are at
+      <code>examples/cloudflare-bench/large-samples/pythscribe/</code>. The compiled
+      JS is loaded via an importmap that resolves <code>react</code> to esm.sh and
+      <code>pyths-runtime/*</code> to a local shim.
+    </p>
+
+    <a class="card" href="./dashboard.html">
+      <h3>Operations Dashboard</h3>
+      <p class="meta">From <code>dashboard_500.ps</code> · 333 lines · 11 components</p>
+      <p>Metric cards, sparkline, alerts feed, category filter, search. Mounts the <code>Dashboard</code> component.</p>
+    </a>
+
+    <a class="card" href="./app.html">
+      <h3>Customer CRM</h3>
+      <p class="meta">From <code>app_1000.ps</code> · 717 lines · routing + forms + validation</p>
+      <p>List view with paginated/filtered/sorted results, detail view, edit/create form with validation. Mounts the <code>App</code> component.</p>
+    </a>
+
+    <footer>
+      Source files are unmodified PythScribe. The browser sees only the JS the compiler emitted.
+    </footer>
+  </body>
+</html>

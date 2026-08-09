@@ -1,0 +1,11 @@
+# coverage-waivers.txt -- reviewed waiver ledger for scripts/coverage-gate.py
+# (KNOWN_DIVERGENCES-style: entries may be removed as coverage grows, but new
+# entries require an inline justification and review.)
+#
+# Format (one per line):
+#   crates/<crate>/src/<file>.rs:<start>[-<end>]  <justification>
+#
+# Example:
+#   crates/pyths_codegen_wasm/src/emit.rs:100-140  debug-only dump path, cfg-gated in practice, tracked in #NNN
+#
+# No waivers yet.

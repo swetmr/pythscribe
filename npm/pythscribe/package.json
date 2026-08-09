@@ -1,0 +1,44 @@
+{
+  "name": "pythscribe",
+  "version": "0.2.1",
+  "description": "PythScribe \u2014 Python for the browser and the edge, compiled. The pyths AOT compiler CLI (provides the `pyths` command), distributed as a prebuilt native binary.",
+  "keywords": [
+    "python",
+    "compiler",
+    "aot",
+    "wasm",
+    "react",
+    "edge",
+    "transpiler",
+    "pythscribe"
+  ],
+  "homepage": "https://github.com/swetmr/pythscribe#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swetmr/pythscribe.git",
+    "directory": "npm/pythscribe"
+  },
+  "license": "FSL-1.1-ALv2",
+  "bin": {
+    "pyths": "bin/pyths.js",
+    "pythscribe": "bin/pyths.js"
+  },
+  "files": [
+    "bin/pyths.js",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@pythscribe/cli-win32-x64": "0.2.1",
+    "@pythscribe/cli-linux-x64": "0.2.1",
+    "@pythscribe/cli-linux-arm64": "0.2.1",
+    "@pythscribe/cli-darwin-x64": "0.2.1",
+    "@pythscribe/cli-darwin-arm64": "0.2.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

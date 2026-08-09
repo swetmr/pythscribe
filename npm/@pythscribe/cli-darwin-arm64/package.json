@@ -1,0 +1,25 @@
+{
+  "name": "@pythscribe/cli-darwin-arm64",
+  "version": "0.2.1",
+  "description": "The darwin-arm64 native binary for the pyths (PythScribe) compiler. Installed automatically as an optional dependency of `pyths`.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swetmr/pythscribe.git",
+    "directory": "npm/@pythscribe/cli-darwin-arm64"
+  },
+  "license": "FSL-1.1-ALv2",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/",
+    "LICENSE.md"
+  ],
+  "preferUnplugged": true,
+  "publishConfig": {
+    "access": "public"
+  }
+}

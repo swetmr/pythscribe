@@ -1,0 +1,717 @@
+from pyths.react import component, use_state, use_effect, use_callback, use_memo
+from pyths.asyncio import gather, sleep
+from dataclasses import dataclass, Field
+
+
+# ============================================================================
+# Domain models
+# ============================================================================
+
+@dataclass
+class Customer:
+    id: int
+    name: str = Field(min_length=2, max_length=100)
+    email: str = Field(email=True)
+    phone: str = Field(min_length=5)
+    status: str
+    plan: str
+    monthly_value: float = Field(ge=0.0)
+    created_at: str
+    notes: str
+
+
+@dataclass
+class CustomerDraft:
+    name: str = Field(min_length=2, max_length=100)
+    email: str = Field(email=True)
+    phone: str
+    status: str
+    plan: str
+    monthly_value: float = Field(ge=0.0)
+    notes: str
+
+
+@dataclass
+class Activity:
+    id: int
+    customer_id: int
+    kind: str
+    summary: str
+    timestamp: str
+
+
+@dataclass
+class Page:
+    items: list
+    total: int
+    page: int
+    page_size: int
+
+
+@dataclass
+class FilterState:
+    query: str
+    status: str
+    plan: str
+    sort_by: str
+    sort_dir: str
+
+
+# ============================================================================
+# Validation helpers
+# ============================================================================
+
+def validate_email(email):
+    if "@" not in email:
+        return "Email must contain @"
+    if "." not in email.split("@")[1]:
+        return "Email domain looks invalid"
+    return ""
+
+
+def validate_required(value, label):
+    if value == "" or value is None:
+        return f"{label} is required"
+    return ""
+
+
+def validate_phone(phone):
+    digits = ""
+    for c in phone:
+        if c.isdigit():
+            digits = digits + c
+    if len(digits) < 7:
+        return "Phone must have at least 7 digits"
+    return ""
+
+
+def validate_money(value):
+    if value < 0:
+        return "Amount must be non-negative"
+    if value > 1000000:
+        return "Amount looks too large; double-check"
+    return ""
+
+
+def validate_draft(draft):
+    errors = {}
+    e = validate_required(draft.name, "Name")
+    if e != "":
+        errors["name"] = e
+    e = validate_email(draft.email)
+    if e != "":
+        errors["email"] = e
+    e = validate_phone(draft.phone)
+    if e != "":
+        errors["phone"] = e
+    e = validate_money(draft.monthly_value)
+    if e != "":
+        errors["monthly_value"] = e
+    return errors
+
+
+# ============================================================================
+# Synthetic API (in production these would hit a real backend)
+# ============================================================================
+
+async def api_list_customers(filters, page, page_size):
+    await sleep(0.05)
+    base = []
+    for i in range(120):
+        base.append(Customer(
+            id=i + 1,
+            name=f"Customer {i + 1}",
+            email=f"c{i + 1}@example.com",
+            phone=f"+1-555-{1000 + i:04d}",
+            status="active" if i % 3 != 0 else "trial" if i % 3 == 1 else "churned",
+            plan="enterprise" if i % 5 == 0 else "pro" if i % 2 == 0 else "starter",
+            monthly_value=49.0 + (i % 11) * 50.0,
+            created_at=f"2026-{(i % 12) + 1:02d}-{(i % 28) + 1:02d}",
+            notes="",
+        ))
+    filtered = []
+    q = filters.query.lower()
+    for c in base:
+        if filters.status != "all" and c.status != filters.status:
+            continue
+        if filters.plan != "all" and c.plan != filters.plan:
+            continue
+        if q != "":
+            if q not in c.name.lower() and q not in c.email.lower():
+                continue
+        filtered.append(c)
+
+    if filters.sort_by == "name":
+        filtered = sorted(filtered, key=lambda x: x.name)
+    elif filters.sort_by == "monthly_value":
+        filtered = sorted(filtered, key=lambda x: x.monthly_value)
+    elif filters.sort_by == "created_at":
+        filtered = sorted(filtered, key=lambda x: x.created_at)
+
+    if filters.sort_dir == "desc":
+        filtered = list(reversed(filtered))
+
+    start = page * page_size
+    end = start + page_size
+    return Page(items=filtered[start:end], total=len(filtered), page=page, page_size=page_size)
+
+
+async def api_get_customer(customer_id):
+    await sleep(0.03)
+    return Customer(
+        id=customer_id,
+        name=f"Customer {customer_id}",
+        email=f"c{customer_id}@example.com",
+        phone=f"+1-555-{1000 + customer_id - 1:04d}",
+        status="active",
+        plan="pro",
+        monthly_value=149.0,
+        created_at="2026-01-15",
+        notes="Long-time customer; renewal upcoming.",
+    )
+
+
+async def api_save_customer(draft, existing_id):
+    await sleep(0.08)
+    new_id = existing_id if existing_id is not None else 99999
+    return Customer(
+        id=new_id,
+        name=draft.name,
+        email=draft.email,
+        phone=draft.phone,
+        status=draft.status,
+        plan=draft.plan,
+        monthly_value=draft.monthly_value,
+        created_at="2026-05-07",
+        notes=draft.notes,
+    )
+
+
+async def api_delete_customer(customer_id):
+    await sleep(0.04)
+    return True
+
+
+async def api_get_activity(customer_id):
+    await sleep(0.04)
+    return [
+        Activity(id=1, customer_id=customer_id, kind="login", summary="Logged in", timestamp="14:23"),
+        Activity(id=2, customer_id=customer_id, kind="upgrade", summary="Upgraded to pro", timestamp="13:10"),
+        Activity(id=3, customer_id=customer_id, kind="payment", summary="Paid invoice #5021", timestamp="2026-05-01"),
+    ]
+
+
+# ============================================================================
+# Routing helpers (hash-based for static-host friendliness)
+# ============================================================================
+
+def parse_route(hash_str):
+    if hash_str == "" or hash_str == "#":
+        return ("list", None)
+    h = hash_str.lstrip("#").lstrip("/")
+    parts = h.split("/")
+    if parts[0] == "customers":
+        if len(parts) == 1:
+            return ("list", None)
+        if len(parts) == 2 and parts[1] == "new":
+            return ("create", None)
+        if len(parts) == 2:
+            cid = parts[1]
+            if cid.isdigit():
+                return ("detail", int(cid))
+        if len(parts) == 3 and parts[2] == "edit":
+            cid = parts[1]
+            if cid.isdigit():
+                return ("edit", int(cid))
+    return ("list", None)
+
+
+def route_to_hash(name, customer_id):
+    if name == "list":
+        return "#/customers"
+    if name == "create":
+        return "#/customers/new"
+    if name == "detail":
+        return f"#/customers/{customer_id}"
+    if name == "edit":
+        return f"#/customers/{customer_id}/edit"
+    return "#/customers"
+
+
+# ============================================================================
+# UI primitives
+# ============================================================================
+
+@component
+def Field(text, error, children):
+    error_color = "#dc2626"
+    return div(style={"margin_bottom": "12px"})(
+        label(style={"display": "block", "font_size": "12px", "color": "#374151", "margin_bottom": "4px"})(text),
+        children,
+        div(style={"font_size": "11px", "color": error_color, "margin_top": "4px", "min_height": "14px"})(
+            error if error != "" else "",
+        ),
+    )
+
+
+@component
+def TextInput(value, on_change, placeholder):
+    def handle(e):
+        on_change(e.target.value)
+    return input(
+        type="text",
+        value=value,
+        placeholder=placeholder,
+        on_change=handle,
+        style={"width": "100%", "padding": "8px 10px", "border": "1px solid #d1d5db", "border_radius": "6px"},
+    )
+
+
+@component
+def NumberInput(value, on_change, placeholder):
+    def handle(e):
+        try:
+            on_change(float(e.target.value))
+        except ValueError:
+            on_change(0.0)
+    return input(
+        type="number",
+        value=value,
+        placeholder=placeholder,
+        on_change=handle,
+        style={"width": "100%", "padding": "8px 10px", "border": "1px solid #d1d5db", "border_radius": "6px"},
+    )
+
+
+@component
+def Select(value, options, on_change):
+    def handle(e):
+        on_change(e.target.value)
+    return select(
+        value=value,
+        on_change=handle,
+        style={"width": "100%", "padding": "8px 10px", "border": "1px solid #d1d5db", "border_radius": "6px"},
+    )(*[option(value=o, key=o)(o) for o in options])
+
+
+@component
+def Button(label, on_click, kind):
+    bg = "#3b82f6" if kind == "primary" else "#ffffff" if kind == "default" else "#dc2626"
+    color = "#ffffff" if kind != "default" else "#374151"
+    return button(
+        on_click=on_click,
+        style={
+            "padding": "8px 16px",
+            "background": bg,
+            "color": color,
+            "border": "1px solid #d1d5db",
+            "border_radius": "6px",
+            "cursor": "pointer",
+        },
+    )(label)
+
+
+@component
+def Toolbar(children):
+    return div(style={"display": "flex", "gap": "8px", "padding": "12px 0"})(*children)
+
+
+@component
+def Card(children):
+    return div(style={
+        "padding": "16px",
+        "border": "1px solid #e5e7eb",
+        "border_radius": "8px",
+        "background": "#ffffff",
+        "margin_bottom": "16px",
+    })(*children)
+
+
+@component
+def StatusBadge(status):
+    color = "#16a34a" if status == "active" else "#f59e0b" if status == "trial" else "#9ca3af"
+    return span(style={
+        "display": "inline-block",
+        "padding": "2px 8px",
+        "border_radius": "12px",
+        "background": color,
+        "color": "#ffffff",
+        "font_size": "11px",
+    })(status)
+
+
+@component
+def PlanBadge(plan):
+    color = "#7c3aed" if plan == "enterprise" else "#3b82f6" if plan == "pro" else "#9ca3af"
+    return span(style={
+        "display": "inline-block",
+        "padding": "2px 8px",
+        "border_radius": "12px",
+        "background": color,
+        "color": "#ffffff",
+        "font_size": "11px",
+    })(plan)
+
+
+# ============================================================================
+# Customer list view
+# ============================================================================
+
+@component
+def CustomerListRow(customer, on_open):
+    def handle():
+        on_open(customer.id)
+    return tr(on_click=handle, style={"cursor": "pointer", "border_bottom": "1px solid #e5e7eb"})(
+        td(style={"padding": "10px"})(str(customer.id)),
+        td(style={"padding": "10px"})(customer.name),
+        td(style={"padding": "10px"})(customer.email),
+        td(style={"padding": "10px"})(StatusBadge(status=customer.status)),
+        td(style={"padding": "10px"})(PlanBadge(plan=customer.plan)),
+        td(style={"padding": "10px", "text_align": "right"})("$", f"{customer.monthly_value:.2f}"),
+        td(style={"padding": "10px"})(customer.created_at),
+    )
+
+
+@component
+def Pagination(page, total_pages, on_change):
+    def make_handler(p):
+        return lambda: on_change(p)
+
+    pages = []
+    start = max(0, page - 2)
+    end = min(total_pages, page + 3)
+    for p in range(start, end):
+        pages.append(p)
+
+    return div(style={"display": "flex", "gap": "4px", "align_items": "center"})(
+        Button(label="Prev", on_click=make_handler(max(0, page - 1)), kind="default"),
+        *[Button(label=str(p + 1), on_click=make_handler(p), kind="primary" if p == page else "default") for p in pages],
+        Button(label="Next", on_click=make_handler(min(total_pages - 1, page + 1)), kind="default"),
+        span(style={"margin_left": "12px", "font_size": "12px", "color": "#6b7280"})(
+            "Page ", page + 1, " of ", total_pages
+        ),
+    )
+
+
+@component
+def Filters(state, on_change):
+    def update(field, value):
+        new_state = FilterState(
+            query=state.query if field != "query" else value,
+            status=state.status if field != "status" else value,
+            plan=state.plan if field != "plan" else value,
+            sort_by=state.sort_by if field != "sort_by" else value,
+            sort_dir=state.sort_dir if field != "sort_dir" else value,
+        )
+        on_change(new_state)
+
+    return Card()(
+        h3(style={"margin": "0 0 12px 0", "font_size": "14px"})("Filters"),
+        Field(text="Search", error="")(
+            TextInput(value=state.query, on_change=lambda v: update("query", v), placeholder="name or email"),
+        ),
+        Field(text="Status", error="")(
+            Select(value=state.status, options=["all", "active", "trial", "churned"], on_change=lambda v: update("status", v)),
+        ),
+        Field(text="Plan", error="")(
+            Select(value=state.plan, options=["all", "starter", "pro", "enterprise"], on_change=lambda v: update("plan", v)),
+        ),
+        Field(text="Sort by", error="")(
+            Select(value=state.sort_by, options=["name", "monthly_value", "created_at"], on_change=lambda v: update("sort_by", v)),
+        ),
+        Field(text="Direction", error="")(
+            Select(value=state.sort_dir, options=["asc", "desc"], on_change=lambda v: update("sort_dir", v)),
+        ),
+    )
+
+
+@component
+def CustomerList(on_open, on_create):
+    customers, set_customers = use_state([])
+    total, set_total = use_state(0)
+    page, set_page = use_state(0)
+    page_size = 20
+    filter_state, set_filter_state = use_state(FilterState(
+        query="", status="all", plan="all", sort_by="name", sort_dir="asc"
+    ))
+    loading, set_loading = use_state(True)
+
+    async def load():
+        set_loading(True)
+        result = await api_list_customers(filter_state, page, page_size)
+        set_customers(result.items)
+        set_total(result.total)
+        set_loading(False)
+
+    use_effect(lambda: load(), [filter_state, page])
+
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
+    return div(style={"display": "grid", "grid_template_columns": "260px 1fr", "gap": "16px"})(
+        Filters(state=filter_state, on_change=set_filter_state),
+        div()(
+            Toolbar()(
+                Button(label="+ New Customer", on_click=on_create, kind="primary"),
+                span(style={"flex": 1})(""),
+                span(style={"font_size": "12px", "color": "#6b7280"})(total, " total"),
+            ),
+            Card()(
+                table(style={"width": "100%", "border_collapse": "collapse"})(
+                    thead()(
+                        tr(style={"background": "#f9fafb", "text_align": "left"})(
+                            th(style={"padding": "10px"})("ID"),
+                            th(style={"padding": "10px"})("Name"),
+                            th(style={"padding": "10px"})("Email"),
+                            th(style={"padding": "10px"})("Status"),
+                            th(style={"padding": "10px"})("Plan"),
+                            th(style={"padding": "10px", "text_align": "right"})("Monthly"),
+                            th(style={"padding": "10px"})("Created"),
+                        ),
+                    ),
+                    tbody()(
+                        *[CustomerListRow(customer=c, on_open=on_open) for c in customers],
+                    ),
+                ),
+                div(style={"text_align": "center", "padding": "12px", "color": "#9ca3af"})(
+                    "Loading..." if loading else "",
+                ),
+            ),
+            Pagination(page=page, total_pages=total_pages, on_change=set_page),
+        ),
+    )
+
+
+# ============================================================================
+# Customer detail view
+# ============================================================================
+
+@component
+def ActivityList(activities):
+    if len(activities) == 0:
+        return div(style={"color": "#9ca3af"})("No recent activity")
+    return ul(style={"list_style": "none", "padding": 0})(
+        *[
+            li(key=str(a.id), style={"padding": "8px 0", "border_bottom": "1px solid #f3f4f6"})(
+                div(style={"font_weight": "600"})(a.kind),
+                div(style={"font_size": "13px"})(a.summary),
+                div(style={"font_size": "11px", "color": "#9ca3af"})(a.timestamp),
+            )
+            for a in activities
+        ],
+    )
+
+
+@component
+def CustomerDetail(customer_id, on_back, on_edit, on_delete):
+    customer, set_customer = use_state(None)
+    activities, set_activities = use_state([])
+    loading, set_loading = use_state(True)
+
+    async def load():
+        set_loading(True)
+        c = await api_get_customer(customer_id)
+        a = await api_get_activity(customer_id)
+        set_customer(c)
+        set_activities(a)
+        set_loading(False)
+
+    use_effect(lambda: load(), [customer_id])
+
+    if loading or customer is None:
+        return div(style={"padding": "32px", "text_align": "center"})("Loading...")
+
+    return div()(
+        Toolbar()(
+            Button(label="â† Back", on_click=on_back, kind="default"),
+            Button(label="Edit", on_click=lambda: on_edit(customer_id), kind="primary"),
+            Button(label="Delete", on_click=lambda: on_delete(customer_id), kind="danger"),
+        ),
+        Card()(
+            h2(style={"margin": "0 0 8px 0"})(customer.name),
+            div(style={"color": "#6b7280", "margin_bottom": "12px"})(customer.email),
+            div(style={"display": "flex", "gap": "8px", "margin_bottom": "16px"})(
+                StatusBadge(status=customer.status),
+                PlanBadge(plan=customer.plan),
+            ),
+            div(style={"display": "grid", "grid_template_columns": "1fr 1fr", "gap": "12px"})(
+                div()(
+                    div(style={"font_size": "11px", "color": "#9ca3af"})("Phone"),
+                    div()(customer.phone),
+                ),
+                div()(
+                    div(style={"font_size": "11px", "color": "#9ca3af"})("Monthly value"),
+                    div()("$", f"{customer.monthly_value:.2f}"),
+                ),
+                div()(
+                    div(style={"font_size": "11px", "color": "#9ca3af"})("Created"),
+                    div()(customer.created_at),
+                ),
+            ),
+            div(style={"margin_top": "16px"})(
+                div(style={"font_size": "11px", "color": "#9ca3af"})("Notes"),
+                div(style={"white_space": "pre-wrap"})(customer.notes if customer.notes != "" else "(none)"),
+            ),
+        ),
+        Card()(
+            h3(style={"margin": "0 0 12px 0", "font_size": "14px"})("Recent activity"),
+            ActivityList(activities=activities),
+        ),
+    )
+
+
+# ============================================================================
+# Customer edit / create form
+# ============================================================================
+
+@component
+def CustomerForm(customer_id, on_back, on_saved):
+    is_create = customer_id is None
+    name, set_name = use_state("")
+    email, set_email = use_state("")
+    phone, set_phone = use_state("")
+    status, set_status = use_state("active")
+    plan, set_plan = use_state("starter")
+    monthly_value, set_monthly_value = use_state(49.0)
+    notes, set_notes = use_state("")
+    errors, set_errors = use_state({})
+    saving, set_saving = use_state(False)
+
+    async def load():
+        if customer_id is not None:
+            c = await api_get_customer(customer_id)
+            set_name(c.name)
+            set_email(c.email)
+            set_phone(c.phone)
+            set_status(c.status)
+            set_plan(c.plan)
+            set_monthly_value(c.monthly_value)
+            set_notes(c.notes)
+
+    use_effect(lambda: load(), [customer_id])
+
+    async def save():
+        draft = CustomerDraft(
+            name=name, email=email, phone=phone, status=status,
+            plan=plan, monthly_value=monthly_value, notes=notes,
+        )
+        validation_errors = validate_draft(draft)
+        if len(validation_errors) > 0:
+            set_errors(validation_errors)
+            return
+        set_saving(True)
+        saved = await api_save_customer(draft, customer_id)
+        set_saving(False)
+        on_saved(saved.id)
+
+    return div()(
+        Toolbar()(
+            Button(label="â† Back", on_click=on_back, kind="default"),
+            span(style={"flex": 1})(""),
+            Button(label="Save" if not saving else "Saving...", on_click=lambda: save(), kind="primary"),
+        ),
+        Card()(
+            h2(style={"margin": "0 0 16px 0"})("New Customer" if is_create else "Edit Customer"),
+            Field(text="Name", error=errors.get("name", ""))(
+                TextInput(value=name, on_change=set_name, placeholder="Acme Inc."),
+            ),
+            Field(text="Email", error=errors.get("email", ""))(
+                TextInput(value=email, on_change=set_email, placeholder="contact@acme.com"),
+            ),
+            Field(text="Phone", error=errors.get("phone", ""))(
+                TextInput(value=phone, on_change=set_phone, placeholder="+1-555-0100"),
+            ),
+            div(style={"display": "grid", "grid_template_columns": "1fr 1fr", "gap": "12px"})(
+                Field(text="Status", error="")(
+                    Select(value=status, options=["active", "trial", "churned"], on_change=set_status),
+                ),
+                Field(text="Plan", error="")(
+                    Select(value=plan, options=["starter", "pro", "enterprise"], on_change=set_plan),
+                ),
+            ),
+            Field(text="Monthly value (USD)", error=errors.get("monthly_value", ""))(
+                NumberInput(value=monthly_value, on_change=set_monthly_value, placeholder="0.00"),
+            ),
+            Field(text="Notes", error="")(
+                textarea(
+                    value=notes,
+                    on_change=lambda e: set_notes(e.target.value),
+                    rows=4,
+                    style={"width": "100%", "padding": "8px 10px", "border": "1px solid #d1d5db", "border_radius": "6px"},
+                ),
+            ),
+        ),
+    )
+
+
+# ============================================================================
+# Top-level App
+# ============================================================================
+
+@component
+def App():
+    route, set_route = use_state(("list", None))
+
+    def navigate_to(name, customer_id):
+        new_route = (name, customer_id)
+        set_route(new_route)
+        # In a real app we'd also push to window.location.hash
+        # window.location.hash = route_to_hash(name, customer_id)
+
+    use_effect(lambda: parse_initial_route(set_route), [])
+
+    async def delete_customer(customer_id):
+        ok = await api_delete_customer(customer_id)
+        if ok:
+            navigate_to("list", None)
+
+    name = route[0]
+    cid = route[1]
+
+    body = None
+    if name == "list":
+        body = CustomerList(
+            on_open=lambda c: navigate_to("detail", c),
+            on_create=lambda: navigate_to("create", None),
+        )
+    elif name == "detail":
+        body = CustomerDetail(
+            customer_id=cid,
+            on_back=lambda: navigate_to("list", None),
+            on_edit=lambda c: navigate_to("edit", c),
+            on_delete=lambda c: delete_customer(c),
+        )
+    elif name == "create":
+        body = CustomerForm(
+            customer_id=None,
+            on_back=lambda: navigate_to("list", None),
+            on_saved=lambda c: navigate_to("detail", c),
+        )
+    elif name == "edit":
+        body = CustomerForm(
+            customer_id=cid,
+            on_back=lambda: navigate_to("detail", cid),
+            on_saved=lambda c: navigate_to("detail", c),
+        )
+
+    return div(style={"font_family": "system-ui, sans-serif", "background": "#f9fafb", "min_height": "100vh"})(
+        header(style={
+            "padding": "16px 24px",
+            "background": "#ffffff",
+            "border_bottom": "1px solid #e5e7eb",
+            "display": "flex",
+            "align_items": "center",
+        })(
+            h1(style={"margin": 0, "font_size": "20px"})("Customer CRM"),
+            span(style={"flex": 1})(""),
+            span(style={"font_size": "12px", "color": "#6b7280"})("v0.1 · 2026-05-07"),
+        ),
+        main(style={"padding": "24px", "max_width": "1280px", "margin": "0 auto"})(
+            body,
+        ),
+    )
+
+
+def parse_initial_route(set_route):
+    # In a browser this would read window.location.hash
+    set_route(("list", None))
+    return None

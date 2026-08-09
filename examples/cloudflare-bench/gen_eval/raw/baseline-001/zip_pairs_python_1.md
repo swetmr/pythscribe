@@ -1,0 +1,6 @@
+<!-- exp=baseline-001 task=zip_pairs cond=python sample=1 model=claude-opus-4-8 cost_usd=0.011950500000000001 -->
+```python
+names = ["ada", "grace", "alan"]
+scores = [95, 87, 92]
+print(list(zip(names, scores)))
+```

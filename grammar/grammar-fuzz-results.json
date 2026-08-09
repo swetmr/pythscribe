@@ -1,0 +1,52 @@
+{
+  "seed": 20260714,
+  "jobs": 16,
+  "extra_corpus": [
+    "C:\\Users\\DELL\\reference-app"
+  ],
+  "false_accept": {
+    "generated": 10000,
+    "render_artifacts": 2961,
+    "false_accepts": 12,
+    "rate": 0.0012,
+    "by_signature": {
+      "Unexpected token: ,": 1,
+      "Unexpected token: .": 1,
+      "Unexpected token: ;": 3,
+      "Unexpected token: ?.": 7
+    },
+    "minimal_reproducers": {
+      "Unexpected token: ,": "def foo ():\n    del  False [:], yield,  ( )\n    global case\n",
+      "Unexpected token: .": "del yield.as\n",
+      "Unexpected token: ;": "try:pass\nfinally:   [    ], yield;  \n",
+      "Unexpected token: ?.": "del yield?.from\n"
+    }
+  },
+  "false_reject": {
+    "population": 21033,
+    "base_sources": 4750,
+    "mutants": 16283,
+    "splits": {
+      "dev": {
+        "accepted": 4760,
+        "total": 4760,
+        "false_rejects": 0,
+        "rate": 0.0
+      },
+      "held-A": {
+        "accepted": 8039,
+        "total": 8039,
+        "false_rejects": 0,
+        "rate": 0.0
+      },
+      "held-B": {
+        "accepted": 8234,
+        "total": 8234,
+        "false_rejects": 0,
+        "rate": 0.0
+      }
+    },
+    "false_rejects": 0,
+    "rejects": []
+  }
+}

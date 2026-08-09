@@ -1,0 +1,357 @@
+# TwitterApp - Twitter clone ("Chirper"), PythScribe canonical track.
+#
+# Dual-track with TwitterApp.tsx (React oracle). Renders identical DOM for
+# identical props (see TwitterApp.test.tsx render-parity suite).
+#
+# Stress-test surface exercised here, deliberately:
+#   - IntersectionObserver infinite feed (sentinel div + use_ref/use_effect)
+#   - optimistic compose: tweet appears with "Sending..." instantly, a
+#     simulated async send (Promise + setTimeout) confirms it; text containing
+#     "#fail" raises PostFailedError (Tier-7 custom exception class) and the
+#     tweet is rolled back with an error toast
+#   - optimistic like/retweet counters with the same "#fail" rollback
+#   - client-side thread view (click replies -> thread, back button)
+#   - relative timestamps computed with the Python `datetime` stdlib module
+#     (datetime.fromtimestamp subtraction -> timedelta), deterministic from
+#     fixture offsets against the fixed now_ts prop
+#
+# NOTE: module docs are `#` comments, never a triple-quoted docstring - see
+# shared/hello/HelloCard.ps (Turbopack UTF-8 char-boundary panic).
+#
+# NOTE: the datetime import below uses the plain-Python `from datetime import`
+# form on purpose: `from pyths.datetime import ...` currently emits the import
+# path "pyths-runtime/datetime", which is NOT in pyths-runtime's package.json
+# exports map (only "./stdlib/datetime" is) and fails to resolve. The plain
+# form emits "pyths-runtime/stdlib/datetime" correctly. Logged in the build
+# report for upstream triage.
+"use client"
+
+import "./TwitterApp.css"
+
+from pyths.react import component, use_state, use_effect, use_ref
+from datetime import datetime, timedelta
+
+BATCH = 10
+SEND_MS = 600
+TOAST_MS = 3000
+
+
+# Deliberate stdlib exercise: fixture offsets -> timedelta via datetime
+# subtraction. Mirrors relative_time in TwitterApp.tsx exactly ("now",
+# "2m", "3h", "1d" buckets, truncating division).
+def relative_time(created_ts, now_ts):
+    delta = datetime.fromtimestamp(now_ts) - datetime.fromtimestamp(created_ts)
+    secs = delta.total_seconds()
+    if secs < 60:
+        return "now"
+    if secs < 3600:
+        return f"{int(secs // 60)}m"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h"
+    return f"{delta.days}d"
+
+
+def initials(name):
+    return "".join([w[0] for w in name.split(" ")])
+
+
+def sleep_ms(ms):
+    return Promise(lambda resolve, reject: setTimeout(resolve, ms))
+
+
+# Tier-7 custom exception class - raised by the simulated send, caught by
+# the optimistic-post rollback path.
+class PostFailedError(Exception):
+    def __init__(self, text):
+        super().__init__(f"post failed: {text}")
+        self.text = text
+
+
+# Simulated async send: deterministic failure when the text contains "#fail".
+async def send_tweet(text):
+    await sleep_ms(SEND_MS)
+    if "#fail" in text:
+        raise PostFailedError(text)
+    return True
+
+
+@component
+def TweetCard(t, eff, reply_count, now_ts, on_open, on_like, on_rt):
+    return article(
+        class_name="tw-tweet",
+        data_testid=f"tweet-{t.id}",
+        div(class_name="tw-avatar", initials(t.author.name)),
+        div(
+            class_name="tw-tweet-main",
+            div(
+                class_name="tw-meta",
+                span(class_name="tw-name", t.author.name),
+                span(class_name="tw-handle", "@", t.author.handle),
+                span(class_name="tw-dot", "·"),
+                span(
+                    class_name="tw-time",
+                    data_testid=f"time-{t.id}",
+                    relative_time(t.ts, now_ts),
+                ),
+                t.pending
+                and span(
+                    class_name="tw-sending",
+                    data_testid=f"sending-{t.id}",
+                    "Sending…",
+                ),
+            ),
+            p(class_name="tw-text", t.text),
+            div(
+                class_name="tw-actions",
+                button(
+                    class_name="tw-action",
+                    data_testid=f"replies-{t.id}",
+                    on_click=lambda: on_open(t),
+                    "💬 ",
+                    reply_count,
+                ),
+                button(
+                    class_name="tw-action",
+                    data_liked=eff.liked,
+                    data_testid=f"like-{t.id}",
+                    on_click=lambda: on_like(t),
+                    "♥" if eff.liked else "♡",
+                    " ",
+                    eff.likes,
+                ),
+                button(
+                    class_name="tw-action",
+                    data_retweeted=eff.retweeted,
+                    data_testid=f"rt-{t.id}",
+                    on_click=lambda: on_rt(t),
+                    "⇄ ",
+                    eff.retweets,
+                ),
+            ),
+        ),
+    )
+
+
+@component
+def ComposeBox(on_post):
+    text, set_text = use_state("")
+    remaining = 280 - len(text)
+    disabled = len(text.strip()) == 0 or remaining < 0
+
+    def submit():
+        on_post(text)
+        set_text("")
+
+    return div(
+        class_name="tw-compose",
+        data_testid="compose",
+        textarea(
+            class_name="tw-compose-input",
+            data_testid="compose-input",
+            placeholder="What is happening?!",
+            value=text,
+            on_change=lambda e: set_text(e.target.value),
+        ),
+        div(
+            class_name="tw-compose-row",
+            span(
+                class_name="tw-count tw-count-over" if remaining < 0 else "tw-count",
+                data_testid="char-count",
+                remaining,
+            ),
+            button(
+                class_name="tw-post-btn",
+                data_testid="compose-post",
+                disabled=disabled,
+                on_click=submit,
+                "Post",
+            ),
+        ),
+    )
+
+
+@component
+def TwitterApp(tweets, now_ts, me):
+    extra, set_extra = use_state([])
+    overrides, set_overrides = use_state({})
+    count, set_count = use_state(BATCH)
+    view, set_view = use_state(None)
+    toast, set_toast = use_state(None)
+    sentinel = use_ref(None)
+    next_id = use_ref(1)
+
+    all_tweets = [*extra, *tweets]
+    feed = [t for t in all_tweets if not t.replyTo]
+    visible = feed[:count]
+    has_more = count < len(feed)
+
+    def setup_observer():
+        # bare return (undefined), NOT `return None`: React 19 rejects a
+        # null effect cleanup ("destroy is not a function" at unmount)
+        if not window.IntersectionObserver:
+            return
+
+        def on_intersect(entries, obs):
+            if entries[0].isIntersecting:
+                set_count(lambda c: c + BATCH)
+
+        obs = IntersectionObserver(on_intersect, {"rootMargin": "200px"})
+        if sentinel.current:
+            obs.observe(sentinel.current)
+        return lambda: obs.disconnect()
+
+    use_effect(setup_observer, [count, view])
+
+    def show_toast(msg):
+        set_toast(msg)
+        setTimeout(lambda: set_toast(None), TOAST_MS)
+
+    def effective(t):
+        o = overrides.get(t.id) or {}
+        return {
+            "liked": o.get("liked", False),
+            "retweeted": o.get("retweeted", False),
+            "likes": o.get("likes", t.likes),
+            "retweets": o.get("retweets", t.retweets),
+        }
+
+    def set_override(tid, patch):
+        set_overrides(lambda o: {**o, tid: {**(o.get(tid) or {}), **patch}})
+
+    def count_replies(tid):
+        return len([x for x in all_tweets if x.replyTo == tid])
+
+    def post_tweet(text):
+        tid = f"local-{next_id.current}"
+        next_id.current += 1
+        t = {
+            "id": tid,
+            "author": me,
+            "text": text,
+            "ts": now_ts,
+            "likes": 0,
+            "retweets": 0,
+            "replyTo": None,
+            "pending": True,
+        }
+        set_extra(lambda xs: [t, *xs])
+
+        async def send():
+            try:
+                await send_tweet(text)
+                set_extra(
+                    lambda xs: [
+                        {**x, "pending": False} if x.id == tid else x for x in xs
+                    ]
+                )
+            except PostFailedError:
+                set_extra(lambda xs: [x for x in xs if x.id != tid])
+                show_toast("Post failed — rolled back")
+
+        send()
+
+    def toggle_like(t):
+        eff = effective(t)
+        liked = not eff.liked
+        delta = 1 if liked else -1
+        set_override(t.id, {"liked": liked, "likes": eff.likes + delta})
+        if liked and "#fail" in t.text:
+
+            def rollback():
+                set_override(t.id, {"liked": eff.liked, "likes": eff.likes})
+                show_toast("Like failed — rolled back")
+
+            setTimeout(rollback, SEND_MS)
+
+    def toggle_rt(t):
+        eff = effective(t)
+        retweeted = not eff.retweeted
+        delta = 1 if retweeted else -1
+        set_override(t.id, {"retweeted": retweeted, "retweets": eff.retweets + delta})
+        if retweeted and "#fail" in t.text:
+
+            def rollback():
+                set_override(t.id, {"retweeted": eff.retweeted, "retweets": eff.retweets})
+                show_toast("Retweet failed — rolled back")
+
+            setTimeout(rollback, SEND_MS)
+
+    def open_thread(t):
+        set_view(t.id)
+
+    body = None
+    if view is None:
+        body = main(
+            class_name="tw-feed",
+            data_testid="feed",
+            ComposeBox(on_post=post_tweet),
+            *[
+                TweetCard(
+                    key=t.id,
+                    t=t,
+                    eff=effective(t),
+                    reply_count=count_replies(t.id),
+                    now_ts=now_ts,
+                    on_open=open_thread,
+                    on_like=toggle_like,
+                    on_rt=toggle_rt,
+                )
+                for t in visible
+            ],
+            has_more
+            and div(class_name="tw-sentinel", data_testid="feed-sentinel", ref=sentinel),
+            div(
+                class_name="tw-feed-status",
+                data_testid="feed-count",
+                len(visible),
+                " of ",
+                len(feed),
+            ),
+        )
+    else:
+        parent_matches = [x for x in all_tweets if x.id == view]
+        parent = parent_matches[0] if len(parent_matches) > 0 else None
+        replies = [x for x in all_tweets if x.replyTo == view]
+        body = section(
+            class_name="tw-thread",
+            data_testid="thread",
+            button(
+                class_name="tw-back",
+                data_testid="thread-back",
+                on_click=lambda: set_view(None),
+                "← Back",
+            ),
+            parent
+            and TweetCard(
+                t=parent,
+                eff=effective(parent),
+                reply_count=len(replies),
+                now_ts=now_ts,
+                on_open=open_thread,
+                on_like=toggle_like,
+                on_rt=toggle_rt,
+            ),
+            h2(class_name="tw-thread-title", "Replies (", len(replies), ")"),
+            *[
+                TweetCard(
+                    key=t.id,
+                    t=t,
+                    eff=effective(t),
+                    reply_count=count_replies(t.id),
+                    now_ts=now_ts,
+                    on_open=open_thread,
+                    on_like=toggle_like,
+                    on_rt=toggle_rt,
+                )
+                for t in replies
+            ],
+            len(replies) == 0 and p(class_name="tw-no-replies", "No replies yet."),
+        )
+
+    return div(
+        class_name="tw-app",
+        data_testid="twitter-app",
+        header(class_name="tw-header", h1("Chirper")),
+        toast and div(class_name="tw-toast", data_testid="toast", role="status", toast),
+        body,
+    )

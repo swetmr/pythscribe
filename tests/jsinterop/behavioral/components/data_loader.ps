@@ -1,0 +1,32 @@
+# DataLoader — Track-A behavioral spec component.
+#
+# Pins the canonical "fetch-like load in an effect" authoring pattern:
+# a Promise (executor + setTimeout(0)) resolved inside use_effect via a
+# nested `async def` (effect callbacks cannot be async themselves — React
+# expects the return value to be a cleanup fn, not a Promise).
+"use client"
+
+from pyths.react import component, use_effect, use_state
+
+
+def fetch_items():
+    def work(resolve, reject):
+        setTimeout(lambda: resolve(["alpha", "beta", "gamma"]), 0)
+    return Promise(work)
+
+
+@component
+def DataLoader():
+    items, set_items = use_state(None)
+
+    def load():
+        async def go():
+            data = await fetch_items()
+            set_items(data)
+        go()
+
+    use_effect(load, [])
+
+    if items is None:
+        return p(data_testid="loading", "loading...")
+    return ul(data_testid="items", *[li(x) for x in items])

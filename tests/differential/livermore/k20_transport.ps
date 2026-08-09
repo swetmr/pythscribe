@@ -1,0 +1,48 @@
+# LFK 20 - discrete ordinates transport (division-heavy recurrence)
+def k20_transport(n: int, loop: int) -> float:
+    g = [0.0] * n
+    u = [0.0] * n
+    v = [0.0] * n
+    w = [0.0] * n
+    x = [0.0] * n
+    y = [0.0] * n
+    z = [0.0] * n
+    xx = [0.0] * (n + 1)
+    vx = [0.0] * n
+    i = 0
+    while i < n:
+        g[i] = 0.001 * (i % 31 + 1)
+        u[i] = 0.002 * (i % 37 + 1)
+        v[i] = 0.0015 * (i % 41 + 1)
+        w[i] = 0.0025 * (i % 43 + 1)
+        y[i] = 0.0035 * (i % 47 + 1)
+        z[i] = 0.0045 * (i % 53 + 1)
+        vx[i] = 0.0055 * (i % 59 + 1)
+        i = i + 1
+    xx[0] = 0.01
+    dk = 0.017
+    l = 0
+    while l < loop:
+        k = 0
+        while k < n:
+            di = y[k] - g[k] / (xx[k] + dk)
+            dn = 0.2
+            if di != 0.0:
+                dn = z[k] / di
+                if dn < 0.2:
+                    if dn < 0.0:
+                        dn = 0.0
+                else:
+                    dn = 0.2
+            x[k] = ((w[k] + v[k] * dn) * xx[k] + u[k]) / (vx[k] + v[k] * dn)
+            xx[k + 1] = (x[k] - xx[k]) * dn + xx[k]
+            k = k + 1
+        l = l + 1
+    s = 0.0
+    k = 0
+    while k < n:
+        s = s + x[k]
+        k = k + 1
+    return s + xx[n]
+
+print(repr(k20_transport(500, 3)))

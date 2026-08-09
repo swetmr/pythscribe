@@ -1,0 +1,6 @@
+def deep_call(items: list, key: str) -> int:
+    d = {"a": 1, "b": 2}
+    return d[key] + items[0]
+
+result = deep_call([10, 20], "missing")
+print(result)

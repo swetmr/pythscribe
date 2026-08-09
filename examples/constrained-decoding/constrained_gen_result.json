@@ -1,0 +1,81 @@
+{
+  "model": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+  "prompt": "Write a single PythScribe function named `square` that takes one argument `n` and returns n times n. Output only the function definition, no prose, no markdown fence.",
+  "results": {
+    "unconstrained": {
+      "parses": 2,
+      "n": 5,
+      "syntax_error_rate": 0.6,
+      "samples": [
+        {
+          "sample": 0,
+          "grammar_ok": false,
+          "pyths_check_ok": false,
+          "code": "Note that the function should be defined with the `def` keyword and use the `n` variable as a parameter to the function.\n\n```python\ndef square(n):\n    \"\"\"\n    Returns n times n.\n\n    Args:\n    n ("
+        },
+        {
+          "sample": 1,
+          "grammar_ok": false,
+          "pyths_check_ok": false,
+          "code": "Please provide the function with an example usage within the docstring and a simple check function with provided data points to verify correctness. \n\n```python\n# Import necessary libraries\n# (No packages are required for this task)\n\ndef square(n):"
+        },
+        {
+          "sample": 2,
+          "grammar_ok": true,
+          "pyths_check_ok": true,
+          "code": "def square(n):\n    # Your implementation goes here\n    return n * n"
+        },
+        {
+          "sample": 3,
+          "grammar_ok": false,
+          "pyths_check_ok": false,
+          "code": "The function should not be part of a class or any other Python feature. PythScribe is a scripting language used for Python and is supported by all Python interpreters and runtimes that accept PythScribe."
+        },
+        {
+          "sample": 4,
+          "grammar_ok": true,
+          "pyths_check_ok": true,
+          "code": ""
+        }
+      ]
+    },
+    "constrained": {
+      "parses": 2,
+      "n": 5,
+      "syntax_error_rate": 0.6,
+      "samples": [
+        {
+          "sample": 0,
+          "grammar_ok": true,
+          "pyths_check_ok": true,
+          "code": "Note: TheSquared is the // notation in the #include line, not // in the code. The // notation means to print the output from the // line, not the // line itself.\n\nHere is the #include line:\n\n#include <"
+        },
+        {
+          "sample": 1,
+          "grammar_ok": false,
+          "pyths_check_ok": false,
+          "code": "Remember, the not in Python  is called and and is used to square a number. \n\n**Example Usage:**\n\n```python\n>>> square(3)\n9\n>>> square(5)\n25"
+        },
+        {
+          "sample": 2,
+          "grammar_ok": false,
+          "pyths_check_ok": false,
+          "code": "No0\n\nTo  **complete** the  **function**  described in  the **prompt**  above  **in  the  code  below**  **without  changing  the**  **function signature**  **"
+        },
+        {
+          "sample": 3,
+          "grammar_ok": true,
+          "pyths_check_ok": true,
+          "code": "The not in the not in the not in the not in the not in the not in the not in the not in the"
+        },
+        {
+          "sample": 4,
+          "grammar_ok": false,
+          "pyths_check_ok": false,
+          "code": "Here is the #1 solution: #1\n\nCertainly!=square(5)\n\nThe #1 solution to the problem of squaring a number `n` is:\n\npython\ndef square(n):"
+        }
+      ]
+    }
+  },
+  "constrained_always_parses": false
+}

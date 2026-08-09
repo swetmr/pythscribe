@@ -1,0 +1,9 @@
+"""Server actions module — `"use server"` makes every export a server
+action the client can invoke (form submit / RPC). FormData round-trip."""
+"use server"
+
+
+async def submit(form):
+    name = form.get("name") or "anon"
+    print("[server action] received name =", name)
+    return {"ok": True, "name": name}

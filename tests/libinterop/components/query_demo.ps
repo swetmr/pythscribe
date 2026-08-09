@@ -1,0 +1,36 @@
+# @tanstack/react-query — .ps twin (system under test).
+#
+# Probes: scoped at_tanstack import, use_query → useQuery, useQuery options
+# dict with VERBATIM library keys (queryKey/queryFn — config dicts are
+# library API), a Promise-returning queryFn (Track-A pattern), verbatim
+# member reads (result.isLoading / result.data), loading → data transition.
+#
+# NOTE: QueryClient(...) is constructed at MODULE level — inside a
+# @component a capitalized library name is a PSX element (createElement),
+# not a constructor. Construct library class instances outside components.
+from pyths.react import component
+from at_tanstack.react_query import QueryClient, QueryClientProvider, use_query
+
+
+def fetch_greeting():
+    def work(resolve, reject):
+        setTimeout(lambda: resolve({"message": "hello from query"}), 0)
+    return Promise(work)
+
+
+client = QueryClient({"defaultOptions": {"queries": {"retry": False}}})
+
+
+@component
+def Inner():
+    result = use_query({"queryKey": ["greeting"], "queryFn": fetch_greeting})
+    if result.isLoading:
+        return p(data_testid="loading", "loading...")
+    if result.isError:
+        return p(data_testid="error", "error")
+    return p(data_testid="data", result.data["message"])
+
+
+@component
+def QueryDemo():
+    return QueryClientProvider(client=client, Inner())

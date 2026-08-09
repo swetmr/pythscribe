@@ -1,0 +1,6081 @@
+[
+ {
+  "id": "str_upper",
+  "expr": "'hello'.upper()"
+ },
+ {
+  "id": "str_lower",
+  "expr": "'WORLD'.lower()"
+ },
+ {
+  "id": "str_capitalize",
+  "expr": "'hELLO'.capitalize()"
+ },
+ {
+  "id": "str_startswith",
+  "expr": "'foobar'.startswith('foo')"
+ },
+ {
+  "id": "str_endswith",
+  "expr": "'foobar'.endswith('bar')"
+ },
+ {
+  "id": "str_find",
+  "expr": "'foobar'.find('bar')"
+ },
+ {
+  "id": "str_find_missing",
+  "expr": "'foobar'.find('xyz')"
+ },
+ {
+  "id": "str_rfind",
+  "expr": "'aXbXc'.rfind('X')"
+ },
+ {
+  "id": "str_replace",
+  "expr": "'foofoo'.replace('foo','bar')"
+ },
+ {
+  "id": "str_replace_only_one",
+  "expr": "'a-b-c'.replace('-','/')"
+ },
+ {
+  "id": "str_strip_default",
+  "expr": "'  hi  '.strip()"
+ },
+ {
+  "id": "str_lstrip_default",
+  "expr": "'  hi'.lstrip()"
+ },
+ {
+  "id": "str_rstrip_default",
+  "expr": "'hi  '.rstrip()"
+ },
+ {
+  "id": "str_strip_chars",
+  "expr": "'##hi##'.strip('#')"
+ },
+ {
+  "id": "str_isdigit_yes",
+  "expr": "'123'.isdigit()"
+ },
+ {
+  "id": "str_isdigit_no",
+  "expr": "'12a'.isdigit()"
+ },
+ {
+  "id": "str_isalpha_yes",
+  "expr": "'abc'.isalpha()"
+ },
+ {
+  "id": "str_isalpha_no",
+  "expr": "'abc1'.isalpha()"
+ },
+ {
+  "id": "str_split_default",
+  "expr": "'a b  c'.split()"
+ },
+ {
+  "id": "str_split_sep",
+  "expr": "'a,b,c'.split(',')"
+ },
+ {
+  "id": "str_join",
+  "expr": "'-'.join(['a','b','c'])"
+ },
+ {
+  "id": "str_zfill",
+  "expr": "'7'.zfill(3)"
+ },
+ {
+  "id": "str_removeprefix",
+  "expr": "'abc-foo'.removeprefix('abc-')"
+ },
+ {
+  "id": "str_removesuffix",
+  "expr": "'foo-abc'.removesuffix('-abc')"
+ },
+ {
+  "id": "str_count_substring",
+  "expr": "'ababab'.count('ab')"
+ },
+ {
+  "id": "list_append",
+  "_setup": "xs = [1,2]\nxs.append(3)",
+  "expr": "xs"
+ },
+ {
+  "id": "list_extend",
+  "_setup": "xs = [1,2]\nxs.extend([3,4])",
+  "expr": "xs"
+ },
+ {
+  "id": "list_insert",
+  "_setup": "xs = [1,3]\nxs.insert(1, 2)",
+  "expr": "xs"
+ },
+ {
+  "id": "list_count_eq",
+  "expr": "[1,2,1,1].count(1)"
+ },
+ {
+  "id": "list_index_found",
+  "expr": "[10,20,30].index(20)"
+ },
+ {
+  "id": "list_pop_default",
+  "_setup": "xs = [1,2,3]\nv = xs.pop()",
+  "expr": "[v, xs]"
+ },
+ {
+  "id": "list_pop_idx",
+  "_setup": "xs = [1,2,3]\nv = xs.pop(0)",
+  "expr": "[v, xs]"
+ },
+ {
+  "id": "list_reverse",
+  "_setup": "xs = [1,2,3]\nxs.reverse()",
+  "expr": "xs"
+ },
+ {
+  "id": "list_sort",
+  "_setup": "xs = [3,1,2]\nxs.sort()",
+  "expr": "xs"
+ },
+ {
+  "id": "dict_keys",
+  "expr": "list({'a':1,'b':2}.keys())"
+ },
+ {
+  "id": "dict_values",
+  "expr": "list({'a':1,'b':2}.values())"
+ },
+ {
+  "id": "dict_get_present",
+  "expr": "{'a':1}.get('a', 99)"
+ },
+ {
+  "id": "dict_get_default",
+  "expr": "{}.get('x', 99)"
+ },
+ {
+  "id": "dict_pop",
+  "_setup": "d = {'a':1,'b':2}\nv = d.pop('a')",
+  "expr": "v"
+ },
+ {
+  "id": "set_union",
+  "expr": "sorted({1,2,3}.union({2,3,4}))"
+ },
+ {
+  "id": "set_intersection",
+  "expr": "sorted({1,2,3}.intersection({2,3,4}))"
+ },
+ {
+  "id": "set_difference",
+  "expr": "sorted({1,2,3}.difference({2,3,4}))"
+ },
+ {
+  "id": "set_symmetric_difference",
+  "expr": "sorted({1,2,3}.symmetric_difference({2,3,4}))"
+ },
+ {
+  "id": "set_isdisjoint_no",
+  "expr": "{1,2}.isdisjoint({2,3})"
+ },
+ {
+  "id": "set_isdisjoint_yes",
+  "expr": "{1,2}.isdisjoint({3,4})"
+ },
+ {
+  "id": "set_issubset_yes",
+  "expr": "{1,2}.issubset({1,2,3})"
+ },
+ {
+  "id": "set_issuperset_yes",
+  "expr": "{1,2,3}.issuperset({1,2})"
+ },
+ {
+  "id": "fstring_decimal",
+  "expr": "f'{3.14159:.2f}'"
+ },
+ {
+  "id": "fstring_zero_pad",
+  "expr": "f'{7:03d}'"
+ },
+ {
+  "id": "fstring_thousands",
+  "expr": "f'{1234567:,}'"
+ },
+ {
+  "id": "fstring_percent",
+  "expr": "f'{0.0532:.2%}'"
+ },
+ {
+  "id": "dec_ctor_simple",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('7')"
+ },
+ {
+  "id": "dec_ctor_neg",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('-42')"
+ },
+ {
+  "id": "dec_ctor_trailing_zero",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('0.30')"
+ },
+ {
+  "id": "dec_ctor_leading_zero",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('007')"
+ },
+ {
+  "id": "dec_ctor_dot_leading",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('.5')"
+ },
+ {
+  "id": "dec_ctor_sci_pos",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('1E+2')"
+ },
+ {
+  "id": "dec_ctor_sci_neg_exp",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('0E-7')"
+ },
+ {
+  "id": "dec_ctor_from_int",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(42)"
+ },
+ {
+  "id": "dec_ctor_from_int_neg",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(-7)"
+ },
+ {
+  "id": "dec_ctor_from_float_01",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(0.1)"
+ },
+ {
+  "id": "dec_ctor_from_float_2675",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(2.675)"
+ },
+ {
+  "id": "dec_ctor_from_float_whole",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(100.0)"
+ },
+ {
+  "id": "dec_ctor_from_float_neghalf",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(-0.5)"
+ },
+ {
+  "id": "dec_add_basic",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('0.1') + Decimal('0.2')"
+ },
+ {
+  "id": "dec_add_trailing",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('1.30') + Decimal('1.20')"
+ },
+ {
+  "id": "dec_add_int",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('1.5') + 3"
+ },
+ {
+  "id": "dec_radd_int",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "3 + Decimal('1.5')"
+ },
+ {
+  "id": "dec_sub_basic",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('5') - Decimal('3.2')"
+ },
+ {
+  "id": "dec_sub_negresult",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('1') - Decimal('2')"
+ },
+ {
+  "id": "dec_mul_basic",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('2.5') * Decimal('4')"
+ },
+ {
+  "id": "dec_mul_signs",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('-2.5') * Decimal('4')"
+ },
+ {
+  "id": "dec_div_third",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(1) / Decimal(3)"
+ },
+ {
+  "id": "dec_div_seventh",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(1) / Decimal(7)"
+ },
+ {
+  "id": "dec_div_quarter",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(1) / Decimal(4)"
+ },
+ {
+  "id": "dec_div_exact_eighth",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal(1) / Decimal(8)"
+ },
+ {
+  "id": "dec_div_int",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('10') / 4"
+ },
+ {
+  "id": "dec_div_negative",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('-7') / Decimal('2')"
+ },
+ {
+  "id": "dec_eq_diff_exp",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('0.3') == Decimal('0.30')"
+ },
+ {
+  "id": "dec_eq_int",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('5') == 5"
+ },
+ {
+  "id": "dec_ne",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('5') != Decimal('6')"
+ },
+ {
+  "id": "dec_lt",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('1.1') < Decimal('1.2')"
+ },
+ {
+  "id": "dec_le_eq",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('1.1') <= Decimal('1.1')"
+ },
+ {
+  "id": "dec_gt",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('3') > Decimal('2.999')"
+ },
+ {
+  "id": "dec_ge",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('3') >= Decimal('3')"
+ },
+ {
+  "id": "dec_lt_int",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('2') < 3"
+ },
+ {
+  "id": "dec_abs",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "abs(Decimal('-5.5'))"
+ },
+ {
+  "id": "dec_neg",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "-Decimal('5.5')"
+ },
+ {
+  "id": "dec_neg_zero",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "-Decimal('0')"
+ },
+ {
+  "id": "dec_quantize_half_even_25",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('2.5').quantize(Decimal('1'))"
+ },
+ {
+  "id": "dec_quantize_half_even_15",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('1.5').quantize(Decimal('1'))"
+ },
+ {
+  "id": "dec_quantize_half_up",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('2.5').quantize(Decimal('1'), rounding=ROUND_HALF_UP)"
+ },
+ {
+  "id": "dec_quantize_down",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('2.7').quantize(Decimal('1'), rounding=ROUND_DOWN)"
+ },
+ {
+  "id": "dec_quantize_up",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('2.1').quantize(Decimal('1'), rounding=ROUND_UP)"
+ },
+ {
+  "id": "dec_quantize_floor",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('-2.1').quantize(Decimal('1'), rounding=ROUND_FLOOR)"
+ },
+ {
+  "id": "dec_quantize_ceiling",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('2.1').quantize(Decimal('1'), rounding=ROUND_CEILING)"
+ },
+ {
+  "id": "dec_quantize_frac",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('3.14159').quantize(Decimal('0.01'))"
+ },
+ {
+  "id": "dec_str_large_sci",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('123E+10')"
+ },
+ {
+  "id": "dec_str_small_sci",
+  "_setup": "from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING",
+  "expr": "Decimal('5E-10')"
+ },
+ {
+  "id": "frac_ctor_two_args",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(1,10)"
+ },
+ {
+  "id": "frac_ctor_reduce",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(2,4)"
+ },
+ {
+  "id": "frac_ctor_neg_den",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(1,-2)"
+ },
+ {
+  "id": "frac_ctor_str_frac",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction('3/10')"
+ },
+ {
+  "id": "frac_ctor_str_dec",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction('0.5')"
+ },
+ {
+  "id": "frac_ctor_str_int",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction('7')"
+ },
+ {
+  "id": "frac_ctor_from_float_half",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(0.5)"
+ },
+ {
+  "id": "frac_ctor_from_float_tenth",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(0.1)"
+ },
+ {
+  "id": "frac_ctor_from_int",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(5)"
+ },
+ {
+  "id": "frac_add",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(1,10) + Fraction(2,10)"
+ },
+ {
+  "id": "frac_add_int",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(1,2) + 1"
+ },
+ {
+  "id": "frac_radd_int",
+  "_setup": "from fractions import Fraction",
+  "expr": "1 + Fraction(1,2)"
+ },
+ {
+  "id": "frac_sub",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(3,4) - Fraction(1,4)"
+ },
+ {
+  "id": "frac_mul",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(2,3) * Fraction(3,4)"
+ },
+ {
+  "id": "frac_truediv",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(1,2) / Fraction(1,4)"
+ },
+ {
+  "id": "frac_pow_pos",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(2,3) ** 2"
+ },
+ {
+  "id": "frac_pow_neg",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(2,3) ** -1"
+ },
+ {
+  "id": "frac_neg",
+  "_setup": "from fractions import Fraction",
+  "expr": "-Fraction(1,2)"
+ },
+ {
+  "id": "frac_abs",
+  "_setup": "from fractions import Fraction",
+  "expr": "abs(Fraction(-3,4))"
+ },
+ {
+  "id": "frac_eq",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(1,2) == Fraction(2,4)"
+ },
+ {
+  "id": "frac_eq_int",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(4,1) == 4"
+ },
+ {
+  "id": "frac_lt",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(1,3) < Fraction(1,2)"
+ },
+ {
+  "id": "frac_gt_int",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(5,2) > 2"
+ },
+ {
+  "id": "frac_str",
+  "_setup": "from fractions import Fraction",
+  "expr": "str(Fraction(3,10))"
+ },
+ {
+  "id": "frac_str_whole",
+  "_setup": "from fractions import Fraction",
+  "expr": "str(Fraction(7,1))"
+ },
+ {
+  "id": "frac_float",
+  "_setup": "from fractions import Fraction",
+  "expr": "float(Fraction(1,4))"
+ },
+ {
+  "id": "frac_add_float",
+  "_setup": "from fractions import Fraction",
+  "expr": "Fraction(1,4) + 0.5"
+ },
+ {
+  "id": "a4_bool_true_repr",
+  "expr": "True"
+ },
+ {
+  "id": "a4_bool_false_repr",
+  "expr": "False"
+ },
+ {
+  "id": "a4_none_repr",
+  "expr": "None"
+ },
+ {
+  "id": "a4_tuple_pair_repr",
+  "expr": "(1, 2)"
+ },
+ {
+  "id": "a4_tuple_singleton_repr",
+  "expr": "(1,)"
+ },
+ {
+  "id": "a4_tuple_empty_repr",
+  "expr": "()"
+ },
+ {
+  "id": "a4_tuple_of_tuple_repr",
+  "expr": "((1, 2), (3, 4))"
+ },
+ {
+  "id": "a4_list_bool_none_repr",
+  "expr": "[True, None]"
+ },
+ {
+  "id": "a4_list_str_repr",
+  "expr": "['x', 'y']"
+ },
+ {
+  "id": "a4_list_empty_repr",
+  "expr": "[]"
+ },
+ {
+  "id": "a4_dict_repr",
+  "expr": "{'a': 1}"
+ },
+ {
+  "id": "a4_dict_empty_repr",
+  "expr": "{}"
+ },
+ {
+  "id": "a4_list_of_dict_repr",
+  "expr": "[{'a': 1}]"
+ },
+ {
+  "id": "a4_dict_of_list_repr",
+  "expr": "{'a': [1, 2]}"
+ },
+ {
+  "id": "a4_set_nonempty_repr",
+  "expr": "{1, 2}"
+ },
+ {
+  "id": "a4_float_whole_repr",
+  "expr": "1.0"
+ },
+ {
+  "id": "a4_float_whole_neg_repr",
+  "expr": "-1.0"
+ },
+ {
+  "id": "a4_float_zero_repr",
+  "expr": "0.0"
+ },
+ {
+  "id": "a4_float_frac_repr",
+  "expr": "3.14"
+ },
+ {
+  "id": "a4_float_frac_neg_repr",
+  "expr": "-2.5"
+ },
+ {
+  "id": "a4_float_sci_large_repr",
+  "expr": "1e16"
+ },
+ {
+  "id": "a4_float_sci_small_repr",
+  "expr": "1e-5"
+ },
+ {
+  "id": "a4_float_sci_neg_exp_repr",
+  "expr": "5e-7"
+ },
+ {
+  "id": "a4_fstring_bool_repr",
+  "expr": "f\"{True}\""
+ },
+ {
+  "id": "a4_fstring_none_repr",
+  "expr": "f\"{None}\""
+ },
+ {
+  "id": "a4_fstring_float_whole_repr",
+  "expr": "f\"{1.0}\""
+ },
+ {
+  "id": "a4_str_bool",
+  "expr": "str(True)"
+ },
+ {
+  "id": "a4_str_none",
+  "expr": "str(None)"
+ },
+ {
+  "id": "a4_str_float_whole",
+  "expr": "str(1.0)"
+ },
+ {
+  "id": "a4_str_list_bool_none",
+  "expr": "str([True, None])"
+ },
+ {
+  "id": "a4_int_in_tuple_not_floatified",
+  "expr": "(1, 2, 3)"
+ },
+ {
+  "id": "a4_int_plain_repr_regression",
+  "expr": "42"
+ },
+ {
+  "id": "except_builtin_name_match",
+  "_setup": "d = {'a': 1}\ntry:\n    v = d['missing']\nexcept KeyError:\n    v = 'caught'",
+  "expr": "v"
+ },
+ {
+  "id": "except_reraise_nonmatching",
+  "_setup": "def f():\n    try:\n        try:\n            raise KeyError('k')\n        except ValueError:\n            return 'inner wrong'\n    except Exception:\n        return 'outer caught'\nres = f()",
+  "expr": "res"
+ },
+ {
+  "id": "except_tuple_match",
+  "_setup": "try:\n    xs = [1]\n    v = xs[5]\nexcept (ValueError, IndexError):\n    v = 'tuple caught'",
+  "expr": "v"
+ },
+ {
+  "id": "isinstance_builtin_types",
+  "expr": "(isinstance([1], list), isinstance('x', str), isinstance({}, dict), isinstance((1,2), tuple), isinstance({1}, set), isinstance(True, bool))"
+ },
+ {
+  "id": "isinstance_tuple_form",
+  "expr": "(isinstance([1], (str, list)), isinstance(5, (str, list)))"
+ },
+ {
+  "id": "isinstance_negative",
+  "_setup": "class A:\n    pass\na = A()",
+  "expr": "(isinstance(a, list), isinstance('x', dict))"
+ },
+ {
+  "id": "lambda_iife_simple",
+  "expr": "(lambda a: a * 2)(21)"
+ },
+ {
+  "id": "lambda_iife_closure",
+  "_setup": "g = (lambda a: lambda: a + 1)(41)",
+  "expr": "g()"
+ },
+ {
+  "id": "f1_reserved_var",
+  "_setup": "let = 5\nnew = 7",
+  "expr": "[let, new]"
+ },
+ {
+  "id": "f1_reserved_param",
+  "_setup": "def default(void):\n    return void * 2",
+  "expr": "default(21)"
+ },
+ {
+  "id": "f1_reserved_func_name",
+  "_setup": "def delete(x):\n    return x + 1",
+  "expr": "delete(41)"
+ },
+ {
+  "id": "f1_reserved_fstring",
+  "_setup": "typeof = 3\ndelete = 4",
+  "expr": "f'{typeof}-{delete}'"
+ },
+ {
+  "id": "f1_reserved_dict_key",
+  "expr": "{'delete': 1, 'new': 2}"
+ },
+ {
+  "id": "f1_reserved_comprehension",
+  "_setup": "delete = [1, 2, 3]",
+  "expr": "[void * 10 for void in delete]"
+ },
+ {
+  "id": "f1_reserved_loop",
+  "_setup": "acc = 0\nfor instanceof in [1, 2, 3]:\n    acc += instanceof",
+  "expr": "acc"
+ },
+ {
+  "id": "f2_len_astral",
+  "expr": "len('😀')"
+ },
+ {
+  "id": "f2_len_mixed",
+  "expr": "len('a😀b')"
+ },
+ {
+  "id": "f2_len_multi",
+  "expr": "len('😀🎉xy')"
+ },
+ {
+  "id": "f2_index_astral_eq",
+  "expr": "'a😀b'[1] == '😀'"
+ },
+ {
+  "id": "f2_neg_index_astral",
+  "expr": "'a😀b'[-1]"
+ },
+ {
+  "id": "f2_first_char",
+  "expr": "'a😀b'[0]"
+ },
+ {
+  "id": "f2_slice_len",
+  "expr": "len('a😀b'[1:2])"
+ },
+ {
+  "id": "f2_reverse_astral_eq",
+  "expr": "'a😀b'[::-1] == 'b😀a'"
+ },
+ {
+  "id": "f2_len_slice_reverse",
+  "expr": "len('😀🎉xy'[::-1])"
+ },
+ {
+  "id": "f3_proto_dict_repr",
+  "expr": "{'__proto__': 1}"
+ },
+ {
+  "id": "f3_proto_read",
+  "_setup": "d = {'__proto__': 5}",
+  "expr": "d['__proto__']"
+ },
+ {
+  "id": "f3_proto_len",
+  "expr": "len({'__proto__': 1, 'a': 2})"
+ },
+ {
+  "id": "f3_hasownprop_in",
+  "_setup": "d = {}",
+  "expr": "'hasOwnProperty' in d"
+ },
+ {
+  "id": "f3_tostring_in",
+  "_setup": "d = {'a': 1}",
+  "expr": "'toString' in d"
+ },
+ {
+  "id": "f3_constructor_in",
+  "_setup": "d = {'a': 1}",
+  "expr": "'constructor' in d"
+ },
+ {
+  "id": "f3_real_key_in",
+  "_setup": "d = {'x': 1}",
+  "expr": "'x' in d"
+ },
+ {
+  "id": "f3_get_inherited",
+  "_setup": "d = {}",
+  "expr": "d.get('constructor', 'none')"
+ },
+ {
+  "id": "f4_float_inf",
+  "expr": "float('inf')"
+ },
+ {
+  "id": "f4_float_neg_inf",
+  "expr": "float('-inf')"
+ },
+ {
+  "id": "f4_float_nan",
+  "expr": "float('nan')"
+ },
+ {
+  "id": "f4_float_inf_ci_ws",
+  "expr": "float('  Infinity  ')"
+ },
+ {
+  "id": "f4_float_inf_upper",
+  "expr": "float('INF')"
+ },
+ {
+  "id": "f4_float_whole",
+  "expr": "float(2)"
+ },
+ {
+  "id": "f4_float_str",
+  "expr": "str(float(3))"
+ },
+ {
+  "id": "f4_zerodiv_float_msg",
+  "_setup": "try:\n    _x = 1.0 / 0.0\n    r = 'no-raise'\nexcept ZeroDivisionError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "f4_zerodiv_int_msg",
+  "_setup": "try:\n    _x = 1 / 0\n    r = 'no-raise'\nexcept ZeroDivisionError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "f5_list_gen",
+  "_setup": "def g():\n    yield 1\n    yield 2\n    yield 3",
+  "expr": "list(g())"
+ },
+ {
+  "id": "f5_next_twice",
+  "_setup": "def g():\n    yield 10\n    yield 20\ngen = g()\na = next(gen)\nb = next(gen)",
+  "expr": "[a, b]"
+ },
+ {
+  "id": "f5_for_over_gen",
+  "_setup": "def g():\n    yield 1\n    yield 2\n    yield 3\ntotal = 0\nfor v in g():\n    total += v",
+  "expr": "total"
+ },
+ {
+  "id": "f5_next_stopiteration",
+  "_setup": "def g():\n    yield 1\ngen = g()\nnext(gen)\ntry:\n    next(gen)\n    r = 'no-stop'\nexcept StopIteration:\n    r = 'stopped'",
+  "expr": "r"
+ },
+ {
+  "id": "f6_mutable_list_default",
+  "_setup": "def acc(x, xs=[]):\n    xs.append(x)\n    return xs\nacc(1)\nacc(2)\nr = acc(3)",
+  "expr": "r"
+ },
+ {
+  "id": "f6_dict_default",
+  "_setup": "def c(k, d={}):\n    d[k] = d.get(k, 0) + 1\n    return d\nc('a')\nc('a')\nr = c('b')",
+  "expr": "r"
+ },
+ {
+  "id": "f6_default_still_overridable",
+  "_setup": "def f(xs=[]):\n    xs.append(9)\n    return xs",
+  "expr": "f([1, 2])"
+ },
+ {
+  "id": "s3_nan_ne_self",
+  "expr": "float('nan') != float('nan')"
+ },
+ {
+  "id": "s3_nan_eq_self",
+  "expr": "float('nan') == float('nan')"
+ },
+ {
+  "id": "s3_inf_gt_large",
+  "expr": "float('inf') > 10 ** 9"
+ },
+ {
+  "id": "s3_neginf_lt_small",
+  "expr": "float('-inf') < -10 ** 9"
+ },
+ {
+  "id": "s3_inf_eq_inf",
+  "expr": "float('inf') == float('inf')"
+ },
+ {
+  "id": "s3_inf_plus_one",
+  "expr": "float('inf') + 1 == float('inf')"
+ },
+ {
+  "id": "s3_round_half_0",
+  "expr": "round(0.5)"
+ },
+ {
+  "id": "s3_round_half_1",
+  "expr": "round(1.5)"
+ },
+ {
+  "id": "s3_round_half_2",
+  "expr": "round(2.5)"
+ },
+ {
+  "id": "s3_round_half_3",
+  "expr": "round(3.5)"
+ },
+ {
+  "id": "s3_round_half_neg",
+  "expr": "round(-2.5)"
+ },
+ {
+  "id": "s3_int_leading_zero",
+  "expr": "int('07')"
+ },
+ {
+  "id": "s3_int_neg_str",
+  "expr": "int('-42')"
+ },
+ {
+  "id": "s3_int_truncates",
+  "expr": "int(3.99)"
+ },
+ {
+  "id": "s3_int_truncates_neg",
+  "expr": "int(-3.99)"
+ },
+ {
+  "id": "s3_str_of_float",
+  "expr": "str(3.0)"
+ },
+ {
+  "id": "s3_bool_add",
+  "expr": "True + True"
+ },
+ {
+  "id": "s3_bool_add_false",
+  "expr": "False + False"
+ },
+ {
+  "id": "s3_bool_mul",
+  "expr": "True * 5"
+ },
+ {
+  "id": "s3_join_genexpr",
+  "expr": "''.join(x for x in ['a', 'b', 'c'])"
+ },
+ {
+  "id": "s3_join_genexpr_method",
+  "_setup": "xs = ['a', 'b', 'c']",
+  "expr": "'-'.join(x.upper() for x in xs)"
+ },
+ {
+  "id": "s3_strip_ws",
+  "expr": "'  hi  '.strip()"
+ },
+ {
+  "id": "s3_strip_chars",
+  "expr": "'xxhixx'.strip('x')"
+ },
+ {
+  "id": "s3_split_whitespace",
+  "expr": "'  a  b   c '.split()"
+ },
+ {
+  "id": "s3_split_keeps_empties",
+  "expr": "'a,,b'.split(',')"
+ },
+ {
+  "id": "s3_rsplit_maxsplit",
+  "expr": "'a,b,c'.rsplit(',', 1)"
+ },
+ {
+  "id": "s3_zfill",
+  "expr": "'5'.zfill(3)"
+ },
+ {
+  "id": "s3_removeprefix",
+  "expr": "'foobar'.removeprefix('foo')"
+ },
+ {
+  "id": "s3_removesuffix",
+  "expr": "'foobar'.removesuffix('bar')"
+ },
+ {
+  "id": "s3_swapcase",
+  "expr": "'HeLLo'.swapcase()"
+ },
+ {
+  "id": "s3_str_count_overlapless",
+  "expr": "'banana'.count('an')"
+ },
+ {
+  "id": "s3_partition_as_list",
+  "expr": "list('a=b=c'.partition('='))"
+ },
+ {
+  "id": "s3_enumerate_start",
+  "_setup": "xs = ['x', 'y']\nresult = []\nfor i, v in enumerate(xs, start=5):\n    result.append([i, v])",
+  "expr": "result"
+ },
+ {
+  "id": "s3_zip_uneven",
+  "_setup": "xs = [1, 2, 3]\nys = [9, 8]\nresult = []\nfor a, b in zip(xs, ys):\n    result.append([a, b])",
+  "expr": "result"
+ },
+ {
+  "id": "s3_zip_star_transpose",
+  "_setup": "m = [[1, 2], [3, 4]]\nresult = []\nfor row in zip(*m):\n    result.append(list(row))",
+  "expr": "result"
+ },
+ {
+  "id": "s3_sorted_key",
+  "_setup": "xs = [3, 1, 2]",
+  "expr": "sorted(xs, key=lambda x: -x)"
+ },
+ {
+  "id": "s3_sorted_reverse",
+  "_setup": "xs = [3, 1, 2]",
+  "expr": "sorted(xs, reverse=True)"
+ },
+ {
+  "id": "s3_sorted_key_reverse",
+  "_setup": "xs = [3, 1, 2]",
+  "expr": "sorted(xs, key=lambda x: -x, reverse=True)"
+ },
+ {
+  "id": "s3_sorted_strings",
+  "expr": "sorted(['banana', 'apple', 'cherry'])"
+ },
+ {
+  "id": "s3_min_multiarg",
+  "expr": "min(3, 1, 2)"
+ },
+ {
+  "id": "s3_max_multiarg",
+  "expr": "max(3, 1, 2)"
+ },
+ {
+  "id": "s3_sum_plain",
+  "expr": "sum([1, 2, 3, 4])"
+ },
+ {
+  "id": "s3_any_empty",
+  "expr": "any([])"
+ },
+ {
+  "id": "s3_all_empty",
+  "expr": "all([])"
+ },
+ {
+  "id": "s3_any_genexpr",
+  "expr": "any(x > 2 for x in [1, 2, 3])"
+ },
+ {
+  "id": "s3_all_genexpr",
+  "expr": "all(x > 0 for x in [1, 2, 3])"
+ },
+ {
+  "id": "s3_in_str",
+  "expr": "'a' in 'abc'"
+ },
+ {
+  "id": "s3_in_list",
+  "expr": "2 in [1, 2, 3]"
+ },
+ {
+  "id": "s3_in_dict",
+  "expr": "'a' in {'a': 1}"
+ },
+ {
+  "id": "s3_in_set",
+  "expr": "2 in {1, 2, 3}"
+ },
+ {
+  "id": "s3_none_is_vs_eq",
+  "_setup": "x = None",
+  "expr": "[x is None, x == None]"
+ },
+ {
+  "id": "s3_int_is_not_none",
+  "expr": "1 is not None"
+ },
+ {
+  "id": "s3_ternary_chained",
+  "expr": "(1 if True else 2) if False else (3 if True else 4)"
+ },
+ {
+  "id": "s3_fstr_nested",
+  "_setup": "a = 3\nb = 4",
+  "expr": "f\"outer={f'{a}x{b}'}\""
+ },
+ {
+  "id": "s3_fstr_neg_2f",
+  "expr": "f'{-3.14159:.2f}'"
+ },
+ {
+  "id": "s3_fstr_neg_plus_1f",
+  "expr": "f'{-0.5:+.1f}'"
+ },
+ {
+  "id": "s3_fstr_neg_d",
+  "expr": "f'{-42:d}'"
+ },
+ {
+  "id": "s3_fstr_zero_pad",
+  "expr": "f'{7:04d}'"
+ },
+ {
+  "id": "s3_for_else_no_break",
+  "_setup": "result = None\nfor x in [1, 2, 3]:\n    if x == 99:\n        break\nelse:\n    result = 'no-break'",
+  "expr": "result"
+ },
+ {
+  "id": "s3_while_else_completes",
+  "_setup": "i = 0\nresult = None\nwhile i < 3:\n    i += 1\nelse:\n    result = 'done'",
+  "expr": "result"
+ },
+ {
+  "id": "s3_try_finally_return_override",
+  "_setup": "def g():\n    try:\n        return 1\n    finally:\n        return 2",
+  "expr": "g()"
+ },
+ {
+  "id": "s3_try_finally_side_effect",
+  "_setup": "log = []\ndef g():\n    try:\n        return 1\n    finally:\n        log.append(1)",
+  "expr": "[g(), log]"
+ },
+ {
+  "id": "s3_comp_var_no_leak",
+  "_setup": "x = 'outer'\nresult = [x for x in range(3)]",
+  "expr": "[x, result]"
+ },
+ {
+  "id": "s3_dictcomp_str_keys",
+  "expr": "{f'k{x}': x * x for x in range(4)}"
+ },
+ {
+  "id": "s3_setcomp_sorted",
+  "expr": "sorted({x % 3 for x in range(6)})"
+ },
+ {
+  "id": "s3_tuple_count",
+  "expr": "(1, 2, 3).count(2)"
+ },
+ {
+  "id": "s3_tuple_index",
+  "expr": "(1, 2, 3).index(3)"
+ },
+ {
+  "id": "s3_star_args_variadic",
+  "_setup": "def f(*args):\n    return list(args)\nxs = [1, 2, 3]",
+  "expr": "f(*xs)"
+ },
+ {
+  "id": "s3_star_args_positional",
+  "_setup": "def f(a, b, c):\n    return a + b + c\nxs = [1, 2, 3]",
+  "expr": "f(*xs)"
+ },
+ {
+  "id": "s3_str_lt_lexicographic",
+  "expr": "'abc' < 'abd'"
+ },
+ {
+  "id": "s3_str_cmp_prefix",
+  "expr": "'ab' < 'abc'"
+ },
+ {
+  "id": "s3_list_mult",
+  "expr": "[0] * 3"
+ },
+ {
+  "id": "s3_list_mult_zero",
+  "expr": "[1, 2] * 0"
+ },
+ {
+  "id": "s3_str_mult",
+  "expr": "'ab' * 3"
+ },
+ {
+  "id": "s3_mod_neg_divisor",
+  "expr": "7 % -3"
+ },
+ {
+  "id": "s3_mod_neg_dividend",
+  "expr": "-7 % 3"
+ },
+ {
+  "id": "s3_floordiv_neg",
+  "expr": "-7 // 2"
+ },
+ {
+  "id": "s3_pow_neg_exp",
+  "expr": "2 ** -2"
+ },
+ {
+  "id": "s3_chained_cmp_true",
+  "expr": "1 < 2 < 3"
+ },
+ {
+  "id": "s3_chained_cmp_false",
+  "expr": "3 < 2 < 1"
+ },
+ {
+  "id": "g_title_allcaps",
+  "expr": "'QUX'.title()"
+ },
+ {
+  "id": "g_title_apostrophe",
+  "expr": "\"it's a test\".title()"
+ },
+ {
+  "id": "g_title_digits",
+  "expr": "'x1y2z'.title()"
+ },
+ {
+  "id": "g_title_mixed",
+  "expr": "'hELLo wORLD'.title()"
+ },
+ {
+  "id": "g_split_empty_sep_raises",
+  "_setup": "try:\n    r = 'ab'.split('')\nexcept ValueError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "g_rsplit_empty_sep_raises",
+  "_setup": "try:\n    r = 'ab'.rsplit('')\nexcept ValueError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "g_int_invalid_raises",
+  "_setup": "try:\n    r = int('abc')\nexcept ValueError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "g_int_empty_raises",
+  "_setup": "try:\n    r = int('')\nexcept ValueError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "g_int_ws_ok",
+  "expr": "int(' 42 ')"
+ },
+ {
+  "id": "g_int_leading_zero",
+  "expr": "int('07')"
+ },
+ {
+  "id": "g_int_underscore",
+  "expr": "int('1_000')"
+ },
+ {
+  "id": "g_int_neg",
+  "expr": "int('-15')"
+ },
+ {
+  "id": "g_int_float_trunc",
+  "expr": "int(-7.9)"
+ },
+ {
+  "id": "g_int_base16",
+  "expr": "int('ff', 16)"
+ },
+ {
+  "id": "g_chr_basic",
+  "expr": "chr(97)"
+ },
+ {
+  "id": "g_ord_basic",
+  "expr": "ord('a')"
+ },
+ {
+  "id": "g_chr_astral",
+  "expr": "ord(chr(128512))"
+ },
+ {
+  "id": "g_ord_astral",
+  "expr": "ord('😀')"
+ },
+ {
+  "id": "g_chr_roundtrip",
+  "expr": "ord(chr(955))"
+ },
+ {
+  "id": "g_chr_range_raises",
+  "_setup": "try:\n    r = chr(1114112)\nexcept ValueError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "g_ord_len_raises",
+  "_setup": "try:\n    r = ord('ab')\nexcept TypeError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "g_divmod_pos",
+  "expr": "divmod(7, 3)"
+ },
+ {
+  "id": "g_divmod_neg_dividend",
+  "expr": "divmod(-7, 3)"
+ },
+ {
+  "id": "g_divmod_neg_divisor",
+  "expr": "divmod(7, -3)"
+ },
+ {
+  "id": "g_divmod_zero_raises",
+  "_setup": "try:\n    r = divmod(7, 0)\nexcept ZeroDivisionError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "g_sum_start_positional",
+  "expr": "sum([1, 2, 3], 10)"
+ },
+ {
+  "id": "g_sum_start_kwarg",
+  "expr": "sum([1, 2, 3], start=10)"
+ },
+ {
+  "id": "g_sum_list_start",
+  "expr": "sum([[1], [2]], [])"
+ },
+ {
+  "id": "g_sum_plain",
+  "expr": "sum([1, 2, 3])"
+ },
+ {
+  "id": "g_min_iterable",
+  "expr": "min([3, 1, 2])"
+ },
+ {
+  "id": "g_max_iterable",
+  "expr": "max([3, 1, 2])"
+ },
+ {
+  "id": "g_min_scalars",
+  "expr": "min(3, 1, 2)"
+ },
+ {
+  "id": "g_max_string",
+  "expr": "max('hello')"
+ },
+ {
+  "id": "g_min_key",
+  "expr": "min(['aaa', 'b', 'cc'], key=lambda s: len(s))"
+ },
+ {
+  "id": "g_max_key",
+  "expr": "max(['aaa', 'b', 'cc'], key=lambda s: len(s))"
+ },
+ {
+  "id": "g_min_default",
+  "expr": "min([], default=5)"
+ },
+ {
+  "id": "g_min_empty_raises",
+  "_setup": "try:\n    r = min([])\nexcept ValueError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "g_set_union_op",
+  "expr": "{1, 2, 3} | {3, 4, 5}"
+ },
+ {
+  "id": "g_set_intersection_op",
+  "expr": "{1, 2, 3} & {2, 3}"
+ },
+ {
+  "id": "g_set_difference_op",
+  "expr": "{1, 2, 3} - {2}"
+ },
+ {
+  "id": "g_set_symdiff_op",
+  "expr": "{1, 2, 3} ^ {2, 4}"
+ },
+ {
+  "id": "g_dict_merge_op",
+  "expr": "{'a': 1, 'b': 2} | {'b': 3, 'c': 4}"
+ },
+ {
+  "id": "g_bitor_int",
+  "expr": "5 | 3"
+ },
+ {
+  "id": "g_bitand_int",
+  "expr": "6 & 3"
+ },
+ {
+  "id": "g_bitxor_int",
+  "expr": "6 ^ 3"
+ },
+ {
+  "id": "g_fixed_tie_even_down",
+  "expr": "f\"{1.625:.2f}\""
+ },
+ {
+  "id": "g_fixed_not_a_tie",
+  "expr": "f\"{2.675:.2f}\""
+ },
+ {
+  "id": "g_fixed_tie_even_stay",
+  "expr": "f\"{0.125:.2f}\""
+ },
+ {
+  "id": "g_fixed_zero_prec",
+  "expr": "f\"{2.5:.0f}\""
+ },
+ {
+  "id": "g_fixed_negative",
+  "expr": "f\"{-1.625:.2f}\""
+ },
+ {
+  "id": "g_fixed_pad",
+  "expr": "f\"{3.1:.3f}\""
+ },
+ {
+  "id": "g_dunder_str_str",
+  "_setup": "class A:\n    def __init__(self):\n        self.x = 1\n    def __str__(self):\n        return 'A-str'\na = A()",
+  "expr": "str(a)"
+ },
+ {
+  "id": "g_dunder_str_fstring",
+  "_setup": "class A:\n    def __init__(self):\n        self.x = 1\n    def __str__(self):\n        return 'A-str'\na = A()",
+  "expr": "f\"{a}\""
+ },
+ {
+  "id": "g_swap_idiom",
+  "_setup": "a = 1\nb = 2\na, b = b, a",
+  "expr": "[a, b]"
+ },
+ {
+  "id": "g_unpack_reassign_twice",
+  "_setup": "x, y = 1, 2\nx, y = 3, 4",
+  "expr": "[x, y]"
+ },
+ {
+  "id": "g_nested_unpack",
+  "_setup": "c, (d, e) = 1, (2, 3)",
+  "expr": "[c, d, e]"
+ },
+ {
+  "id": "g_nested_unpack_deep",
+  "_setup": "(a, (b, (c, e))) = (1, (2, (3, 4)))",
+  "expr": "[a, b, c, e]"
+ },
+ {
+  "id": "g_chained_assign",
+  "_setup": "a = b = 5",
+  "expr": "[a, b]"
+ },
+ {
+  "id": "g_chained_assign_once",
+  "_setup": "calls = []\ndef f():\n    calls.append(1)\n    return 7\nx = y = f()",
+  "expr": "[x, y, len(calls)]"
+ },
+ {
+  "id": "g_for_else_break",
+  "_setup": "r = []\nfor x in [1, 2, 3]:\n    if x == 2:\n        break\nelse:\n    r.append('else-ran')\nr.append('after')",
+  "expr": "r"
+ },
+ {
+  "id": "g_for_else_no_break",
+  "_setup": "r = []\nfor x in [1, 2, 3]:\n    pass\nelse:\n    r.append('else-ran')",
+  "expr": "r"
+ },
+ {
+  "id": "g_while_else_break",
+  "_setup": "r = []\ni = 0\nwhile i < 3:\n    i = i + 1\n    if i == 2:\n        break\nelse:\n    r.append('else-ran')\nr.append(i)",
+  "expr": "r"
+ },
+ {
+  "id": "g_nested_for_else_break",
+  "_setup": "r = []\nfor i in [1, 2]:\n    for j in [1, 2]:\n        if j == 1:\n            break\n    else:\n        r.append('inner-else')\nelse:\n    r.append('outer-else')",
+  "expr": "r"
+ },
+ {
+  "id": "g_capitalized_fn",
+  "_setup": "def Foo():\n    return 42",
+  "expr": "Foo()"
+ },
+ {
+  "id": "g_proto_attr",
+  "_setup": "class C:\n    def __init__(self):\n        self.__proto__ = 7\nc = C()",
+  "expr": "c.__proto__"
+ },
+ {
+  "id": "g_case_identifier",
+  "_setup": "case = 1",
+  "expr": "case + 1"
+ },
+ {
+  "id": "g_del_dict_key",
+  "_setup": "d = {'a': 1, 'b': 2}\ndel d['a']",
+  "expr": "d"
+ },
+ {
+  "id": "g_del_list_index",
+  "_setup": "xs = [1, 2, 3]\ndel xs[0]",
+  "expr": "xs"
+ },
+ {
+  "id": "g_del_list_negative",
+  "_setup": "xs = [1, 2, 3]\ndel xs[-1]",
+  "expr": "xs"
+ },
+ {
+  "id": "g_del_missing_key_raises",
+  "_setup": "d = {'a': 1}\ntry:\n    del d['zz']\n    r = 'no error'\nexcept KeyError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "g_del_attr_then_set",
+  "_setup": "class C:\n    def __init__(self):\n        self.x = 1\nc = C()\ndel c.x\nc.x = 5",
+  "expr": "c.x"
+ },
+ {
+  "id": "g_escape_tab_len",
+  "expr": "len(\"a\\tb\")"
+ },
+ {
+  "id": "g_escape_tab_repr",
+  "expr": "\"a\\tb\""
+ },
+ {
+  "id": "g_escape_newline_repr",
+  "expr": "\"x\\ny\""
+ },
+ {
+  "id": "g_escape_hex",
+  "expr": "\"\\x41\\x42\""
+ },
+ {
+  "id": "g_escape_unicode",
+  "expr": "ord(\"\\u00e9\")"
+ },
+ {
+  "id": "g_escape_octal",
+  "expr": "\"\\101\""
+ },
+ {
+  "id": "g_escape_unknown_kept",
+  "expr": "\"a\\db\""
+ },
+ {
+  "id": "g_escape_backslash",
+  "expr": "len(\"a\\\\b\")"
+ },
+ {
+  "id": "g_escape_quote",
+  "expr": "\"say \\\"hi\\\"\""
+ },
+ {
+  "id": "g_escape_in_fstring_literal",
+  "expr": "f\"a\\tb{1 + 1}\""
+ },
+ {
+  "id": "g_raw_string_basic",
+  "expr": "x",
+  "_setup": "x = r\"a\\.b\""
+ },
+ {
+  "id": "g_raw_string_len",
+  "expr": "len(r\"\\n\")"
+ },
+ {
+  "id": "g_raw_string_single",
+  "expr": "y",
+  "_setup": "y = r'\\d+'"
+ },
+ {
+  "id": "g_raw_string_upper_r",
+  "expr": "z",
+  "_setup": "z = R\"a\\tb\""
+ },
+ {
+  "id": "g_raw_vs_cooked",
+  "expr": "[len(\"\\t\"), len(r\"\\t\")]"
+ },
+ {
+  "id": "d83_int_key_repr",
+  "expr": "{1: 'a', 2: 'b'}"
+ },
+ {
+  "id": "d83_int_key_lookup",
+  "expr": "d[1]",
+  "_setup": "d = {1: 'a'}"
+ },
+ {
+  "id": "d83_key_type_identity",
+  "expr": "[1 in d, '1' in d]",
+  "_setup": "d = {1: 'a'}"
+ },
+ {
+  "id": "d83_float_key_folds",
+  "expr": "d[1.0]",
+  "_setup": "d = {1: 'a'}"
+ },
+ {
+  "id": "d83_bool_key_folds",
+  "expr": "d",
+  "_setup": "d = {True: 't'}\nd[1] = 'one'"
+ },
+ {
+  "id": "d83_bool_key_repr",
+  "expr": "{True: 'a', False: 'b'}"
+ },
+ {
+  "id": "d83_none_key",
+  "expr": "{None: 1}"
+ },
+ {
+  "id": "d83_tuple_key_lookup",
+  "expr": "d[(1.0, 2)]",
+  "_setup": "d = {(1, 2): 'x'}"
+ },
+ {
+  "id": "d83_tuple_key_repr",
+  "expr": "{(1, 2): 'x'}"
+ },
+ {
+  "id": "d83_tuple_key_in",
+  "expr": "[(1, 'x') in d, (1, 'y') in d]",
+  "_setup": "d = {(1, 'x'): 5}"
+ },
+ {
+  "id": "d83_dictcomp_int_keys",
+  "expr": "{x: x * x for x in range(4)}"
+ },
+ {
+  "id": "d83_keys_list",
+  "expr": "list({1: 'a', 2: 'b'}.keys())"
+ },
+ {
+  "id": "d83_iter_order",
+  "expr": "[k for k in d]",
+  "_setup": "d = {3: 'c', 1: 'a'}"
+ },
+ {
+  "id": "d83_len",
+  "expr": "len({1: 2, 3: 4})"
+ },
+ {
+  "id": "d83_del",
+  "expr": "d",
+  "_setup": "d = {1: 'a', 2: 'b'}\ndel d[1]"
+ },
+ {
+  "id": "d83_spread_merge_mixed",
+  "expr": "{**a, **b}",
+  "_setup": "a = {1: 'x'}\nb = {'s': 2}"
+ },
+ {
+  "id": "d83_or_merge",
+  "expr": "{1: 'a'} | {2: 'b'}"
+ },
+ {
+  "id": "d83_items_roundtrip",
+  "expr": "dict(d.items())",
+  "_setup": "d = {1: 'a'}"
+ },
+ {
+  "id": "d83_items_sorted_repr",
+  "expr": "sorted(d.items())",
+  "_setup": "d = {2: 'b', 1: 'a'}"
+ },
+ {
+  "id": "d83_json_dumps_int_keys",
+  "expr": "json.loads(json.dumps(d))",
+  "_setup": "import json\nd = {1: 'a'}"
+ },
+ {
+  "id": "d83_get_default",
+  "expr": "[d.get(1), d.get(2), d.get(2, 'z')]",
+  "_setup": "d = {1: 'a'}"
+ },
+ {
+  "id": "d83_pop",
+  "expr": "[v, d]",
+  "_setup": "d = {1: 'a', 2: 'b'}\nv = d.pop(1)"
+ },
+ {
+  "id": "d83_setdefault",
+  "expr": "[x, y, d]",
+  "_setup": "d = {1: 'a'}\nx = d.setdefault(2, 'b')\ny = d.setdefault(1, 'z')"
+ },
+ {
+  "id": "d83_update",
+  "expr": "d",
+  "_setup": "d = {1: 'a'}\nd.update({2: 'b'})"
+ },
+ {
+  "id": "d83_subscript_write",
+  "expr": "d",
+  "_setup": "d = {1: 'a'}\nd[2] = 'b'\nd[1] = 'A'"
+ },
+ {
+  "id": "d83_aug_assign",
+  "expr": "d",
+  "_setup": "d = {1: 10}\nd[1] += 5"
+ },
+ {
+  "id": "d83_unannotated_crossing",
+  "expr": "[x, d]",
+  "_setup": "def f(d):\n    d[2] = 'b'\n    return d[1]\nd = {1: 'a'}\nx = f(d)"
+ },
+ {
+  "id": "d83_eq_int_vs_str_key",
+  "expr": "[{1: 'a'} == {1: 'a'}, {1: 'a'} == {'1': 'a'}]"
+ },
+ {
+  "id": "d83_eq_cross_shape",
+  "expr": "{'a': 1} == {k: 1 for k in ['a']}"
+ },
+ {
+  "id": "d83_dictcomp_inverse",
+  "expr": "{v: k for k, v in d.items()}",
+  "_setup": "d = {1: 'a', 2: 'b'}"
+ },
+ {
+  "id": "d83_proto_key_plain",
+  "expr": "{'__proto__': 1}"
+ },
+ {
+  "id": "d83_proto_key_pydict",
+  "expr": "p",
+  "_setup": "p = {x: 1 for x in ['__proto__']}"
+ },
+ {
+  "id": "d83_popitem",
+  "expr": "[t, d]",
+  "_setup": "d = {1: 'a', 2: 'b'}\nt = d.popitem()"
+ },
+ {
+  "id": "d83_copy",
+  "expr": "[d, e]",
+  "_setup": "d = {1: 'a'}\ne = d.copy()\ne[2] = 'b'"
+ },
+ {
+  "id": "d83_clear",
+  "expr": "d",
+  "_setup": "d = {1: 2}\nd.clear()"
+ },
+ {
+  "id": "d83_nested",
+  "expr": "{1: {2: 'x'}}"
+ },
+ {
+  "id": "d83_for_in_dict_str_keys",
+  "expr": "out",
+  "_setup": "d = {'a': 1, 'b': 2}\nout = []\nfor k in d:\n    out.append(k)"
+ },
+ {
+  "id": "d83_for_in_dict_int_keys",
+  "expr": "out",
+  "_setup": "d = {1: 'x', 2: 'y'}\nout = []\nfor k in d:\n    out.append(k)"
+ },
+ {
+  "id": "d83_str_of_dict",
+  "expr": "str({1: 'a'})"
+ },
+ {
+  "id": "d83_bool_of_dict",
+  "expr": "[bool({}), bool({1: 2}), bool(p)]",
+  "_setup": "p = {x: x for x in range(0)}"
+ },
+ {
+  "id": "pf_width",
+  "_setup": "x = 42",
+  "expr": "f'{x:>10}'"
+ },
+ {
+  "id": "pf_fill_center",
+  "_setup": "s = 'hi'",
+  "expr": "f'{s:*^8}'"
+ },
+ {
+  "id": "pf_fill_left",
+  "_setup": "s = 'hi'",
+  "expr": "f'{s:-<6}'"
+ },
+ {
+  "id": "pf_sign_plus",
+  "_setup": "x = 5",
+  "expr": "f'{x:+}'"
+ },
+ {
+  "id": "pf_sign_plus_neg",
+  "_setup": "x = -5",
+  "expr": "f'{x:+}'"
+ },
+ {
+  "id": "pf_sign_space",
+  "_setup": "x = 5",
+  "expr": "f'{x: }'"
+ },
+ {
+  "id": "pf_comma",
+  "_setup": "x = 1234567",
+  "expr": "f'{x:,}'"
+ },
+ {
+  "id": "pf_comma_float",
+  "_setup": "x = 1234567.891",
+  "expr": "f'{x:,.2f}'"
+ },
+ {
+  "id": "pf_underscore",
+  "_setup": "x = 1234567",
+  "expr": "f'{x:_}'"
+ },
+ {
+  "id": "pf_percent",
+  "_setup": "x = 0.256",
+  "expr": "f'{x:.2%}'"
+ },
+ {
+  "id": "pf_percent0",
+  "_setup": "x = 1.0",
+  "expr": "f'{x:.0%}'"
+ },
+ {
+  "id": "pf_e",
+  "_setup": "x = 12345.678",
+  "expr": "f'{x:e}'"
+ },
+ {
+  "id": "pf_e2",
+  "_setup": "x = 12345.678",
+  "expr": "f'{x:.2e}'"
+ },
+ {
+  "id": "pf_E",
+  "_setup": "x = 0.000123",
+  "expr": "f'{x:.3E}'"
+ },
+ {
+  "id": "pf_g",
+  "_setup": "x = 12345.678",
+  "expr": "f'{x:g}'"
+ },
+ {
+  "id": "pf_g_small",
+  "_setup": "x = 0.000012345",
+  "expr": "f'{x:g}'"
+ },
+ {
+  "id": "pf_g3",
+  "_setup": "x = 12345.678",
+  "expr": "f'{x:.3g}'"
+ },
+ {
+  "id": "pf_hex",
+  "_setup": "x = 255",
+  "expr": "f'{x:x}'"
+ },
+ {
+  "id": "pf_HEX",
+  "_setup": "x = 255",
+  "expr": "f'{x:X}'"
+ },
+ {
+  "id": "pf_hex_alt",
+  "_setup": "x = 255",
+  "expr": "f'{x:#x}'"
+ },
+ {
+  "id": "pf_oct",
+  "_setup": "x = 64",
+  "expr": "f'{x:o}'"
+ },
+ {
+  "id": "pf_oct_alt",
+  "_setup": "x = 64",
+  "expr": "f'{x:#o}'"
+ },
+ {
+  "id": "pf_bin",
+  "_setup": "x = 10",
+  "expr": "f'{x:b}'"
+ },
+ {
+  "id": "pf_bin_alt",
+  "_setup": "x = 10",
+  "expr": "f'{x:#b}'"
+ },
+ {
+  "id": "pf_bin_width",
+  "_setup": "x = 10",
+  "expr": "f'{x:08b}'"
+ },
+ {
+  "id": "pf_zero_pad",
+  "_setup": "x = 42",
+  "expr": "f'{x:05}'"
+ },
+ {
+  "id": "pf_zero_pad_neg",
+  "_setup": "x = -42",
+  "expr": "f'{x:05}'"
+ },
+ {
+  "id": "pf_zero_pad_float",
+  "_setup": "x = 3.14",
+  "expr": "f'{x:08.2f}'"
+ },
+ {
+  "id": "pf_conv_r",
+  "_setup": "s = 'hi'",
+  "expr": "f'{s!r}'"
+ },
+ {
+  "id": "pf_conv_s",
+  "_setup": "x = 42",
+  "expr": "f'{x!s}'"
+ },
+ {
+  "id": "pf_conv_r_list",
+  "_setup": "l = [1, 'a']",
+  "expr": "f'{l!r}'"
+ },
+ {
+  "id": "pf_selfdoc",
+  "_setup": "x = 42",
+  "expr": "f'{x=}'"
+ },
+ {
+  "id": "pf_selfdoc_expr",
+  "_setup": "x = 6",
+  "expr": "f'{x * 7=}'"
+ },
+ {
+  "id": "pf_selfdoc_spec",
+  "_setup": "x = 3.14159",
+  "expr": "f'{x=:.2f}'"
+ },
+ {
+  "id": "pf_selfdoc_str",
+  "_setup": "s = 'hi'",
+  "expr": "f'{s=}'"
+ },
+ {
+  "id": "pf_dict_key",
+  "_setup": "d = {'k': 7}",
+  "expr": "f\"{d['k']}\""
+ },
+ {
+  "id": "pf_escaped_braces",
+  "_setup": "x = 1",
+  "expr": "f'{{{x}}}'"
+ },
+ {
+  "id": "pf_escaped_only",
+  "expr": "f'{{}}'"
+ },
+ {
+  "id": "pf_str_width",
+  "_setup": "s = 'ab'",
+  "expr": "f'{s:10}'"
+ },
+ {
+  "id": "pf_str_trunc",
+  "_setup": "s = 'abcdef'",
+  "expr": "f'{s:.3}'"
+ },
+ {
+  "id": "pf_str_width_trunc",
+  "_setup": "s = 'abcdef'",
+  "expr": "f'{s:8.3}'"
+ },
+ {
+  "id": "pf_neg_float_f",
+  "_setup": "x = -3.14159",
+  "expr": "f'{x:.2f}'"
+ },
+ {
+  "id": "pf_neg_width",
+  "_setup": "x = -42",
+  "expr": "f'{x:>8}'"
+ },
+ {
+  "id": "pf_eq_align",
+  "_setup": "x = -42",
+  "expr": "f'{x:=8}'"
+ },
+ {
+  "id": "pf_eq_align_zero",
+  "_setup": "x = -42",
+  "expr": "f'{x:0=8}'"
+ },
+ {
+  "id": "pf_int_d",
+  "_setup": "x = 42",
+  "expr": "f'{x:d}'"
+ },
+ {
+  "id": "pf_float_default",
+  "_setup": "x = 3.14159",
+  "expr": "f'{x}'"
+ },
+ {
+  "id": "pf_ternary",
+  "_setup": "x = 5",
+  "expr": "f'{x if x > 3 else 0}'"
+ },
+ {
+  "id": "pf_method_call",
+  "_setup": "s = 'hi'",
+  "expr": "f'{s.upper()}'"
+ },
+ {
+  "id": "pf_nested_fstring_quotes",
+  "_setup": "x = 1",
+  "expr": "f\"{'a' + str(x)}\""
+ },
+ {
+  "id": "pf_bool",
+  "_setup": "b = True",
+  "expr": "f'{b}'"
+ },
+ {
+  "id": "pf_none",
+  "_setup": "n = None",
+  "expr": "f'{n}'"
+ },
+ {
+  "id": "pf_list",
+  "_setup": "l = [1, 2]",
+  "expr": "f'{l}'"
+ },
+ {
+  "id": "pf_tuple",
+  "_setup": "t = (1, 'a')",
+  "expr": "f'{t}'"
+ },
+ {
+  "id": "pf_caret_int",
+  "_setup": "x = 7",
+  "expr": "f'{x:^6}'"
+ },
+ {
+  "id": "pf_f_on_int",
+  "_setup": "x = 5",
+  "expr": "f'{x:.1f}'"
+ },
+ {
+  "id": "pf_pct_literal",
+  "_setup": "x = 50",
+  "expr": "f'{x}%'"
+ },
+ {
+  "id": "pi_chain",
+  "_setup": "from itertools import chain",
+  "expr": "list(chain([1, 2], [3], [4, 5]))"
+ },
+ {
+  "id": "pi_chain_str",
+  "_setup": "from itertools import chain",
+  "expr": "list(chain('ab', 'cd'))"
+ },
+ {
+  "id": "pi_chain_mod",
+  "_setup": "import itertools",
+  "expr": "list(itertools.chain([1], [2]))"
+ },
+ {
+  "id": "pi_chain_from_iterable",
+  "_setup": "import itertools",
+  "expr": "list(itertools.chain.from_iterable([[1, 2], [3]]))"
+ },
+ {
+  "id": "pi_islice_stop",
+  "_setup": "from itertools import islice",
+  "expr": "list(islice(range(10), 3))"
+ },
+ {
+  "id": "pi_islice_start_stop",
+  "_setup": "from itertools import islice",
+  "expr": "list(islice(range(10), 2, 6))"
+ },
+ {
+  "id": "pi_islice_step",
+  "_setup": "from itertools import islice",
+  "expr": "list(islice(range(10), 1, 9, 2))"
+ },
+ {
+  "id": "pi_islice_none",
+  "_setup": "from itertools import islice, count",
+  "expr": "list(islice(count(5), 4))"
+ },
+ {
+  "id": "pi_islice_cycle",
+  "_setup": "from itertools import islice, cycle",
+  "expr": "list(islice(cycle([1, 2, 3]), 7))"
+ },
+ {
+  "id": "pi_count_zip",
+  "_setup": "from itertools import count",
+  "expr": "list(zip(count(), 'abc'))"
+ },
+ {
+  "id": "pi_count_start_step",
+  "_setup": "from itertools import count, islice",
+  "expr": "list(islice(count(10, 3), 4))"
+ },
+ {
+  "id": "pi_repeat_times",
+  "_setup": "from itertools import repeat",
+  "expr": "list(repeat('x', 3))"
+ },
+ {
+  "id": "pi_repeat_zip",
+  "_setup": "from itertools import repeat",
+  "expr": "list(zip([1, 2], repeat(0)))"
+ },
+ {
+  "id": "pi_zip_longest",
+  "_setup": "from itertools import zip_longest",
+  "expr": "list(zip_longest([1, 2, 3], 'ab'))"
+ },
+ {
+  "id": "pi_zip_longest_fill",
+  "_setup": "from itertools import zip_longest",
+  "expr": "list(zip_longest([1, 2, 3], 'ab', fillvalue=0))"
+ },
+ {
+  "id": "pi_accumulate",
+  "_setup": "from itertools import accumulate",
+  "expr": "list(accumulate([1, 2, 3, 4]))"
+ },
+ {
+  "id": "pi_accumulate_initial",
+  "_setup": "from itertools import accumulate",
+  "expr": "list(accumulate([1, 2, 3], initial=100))"
+ },
+ {
+  "id": "pi_takewhile",
+  "_setup": "from itertools import takewhile",
+  "expr": "list(takewhile(lambda x: x < 3, [1, 2, 3, 4, 1]))"
+ },
+ {
+  "id": "pi_dropwhile",
+  "_setup": "from itertools import dropwhile",
+  "expr": "list(dropwhile(lambda x: x < 3, [1, 2, 3, 4, 1]))"
+ },
+ {
+  "id": "pi_filterfalse",
+  "_setup": "from itertools import filterfalse",
+  "expr": "list(filterfalse(lambda x: x % 2, range(6)))"
+ },
+ {
+  "id": "pi_product",
+  "_setup": "from itertools import product",
+  "expr": "list(product([1, 2], 'ab'))"
+ },
+ {
+  "id": "pi_product_repeat",
+  "_setup": "from itertools import product",
+  "expr": "list(product([0, 1], repeat=2))"
+ },
+ {
+  "id": "pi_permutations",
+  "_setup": "from itertools import permutations",
+  "expr": "list(permutations([1, 2, 3], 2))"
+ },
+ {
+  "id": "pi_permutations_full",
+  "_setup": "from itertools import permutations",
+  "expr": "list(permutations('ab'))"
+ },
+ {
+  "id": "pi_combinations",
+  "_setup": "from itertools import combinations",
+  "expr": "list(combinations([1, 2, 3, 4], 2))"
+ },
+ {
+  "id": "pi_combinations_wr",
+  "_setup": "from itertools import combinations_with_replacement",
+  "expr": "list(combinations_with_replacement([1, 2], 2))"
+ },
+ {
+  "id": "pi_groupby",
+  "_setup": "from itertools import groupby",
+  "expr": "[(k, list(g)) for k, g in groupby('aabbbcc')]"
+ },
+ {
+  "id": "pi_groupby_key",
+  "_setup": "from itertools import groupby",
+  "expr": "[(k, list(g)) for k, g in groupby([1, 1, 2, 3, 3], key=lambda x: x % 2)]"
+ },
+ {
+  "id": "pi_pairwise",
+  "_setup": "from itertools import pairwise",
+  "expr": "list(pairwise([1, 2, 3, 4]))"
+ },
+ {
+  "id": "pi_tee",
+  "_setup": "from itertools import tee",
+  "expr": "[list(t) for t in tee([1, 2, 3])]"
+ },
+ {
+  "id": "pi_chain_next",
+  "_setup": "from itertools import chain\nit = chain([1], [2])",
+  "expr": "next(it)"
+ },
+ {
+  "id": "pi_chain_forloop",
+  "_setup": "from itertools import chain\nacc = []\nfor x in chain([1, 2], [3]):\n    acc.append(x * 10)",
+  "expr": "acc"
+ },
+ {
+  "id": "pi_islice_gen",
+  "_setup": "from itertools import islice\ng = (x * x for x in range(100))",
+  "expr": "list(islice(g, 5))"
+ },
+ {
+  "id": "pi_starmap_lambda",
+  "_setup": "from itertools import starmap",
+  "expr": "list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))"
+ },
+ {
+  "id": "pi_product_three",
+  "_setup": "from itertools import product",
+  "expr": "list(product([1], 'a', [True]))"
+ },
+ {
+  "id": "pi_repeat_sum",
+  "_setup": "from itertools import repeat",
+  "expr": "sum(repeat(5, 4))"
+ },
+ {
+  "id": "pz_three",
+  "expr": "list(zip([1, 2], 'ab', [True, False]))"
+ },
+ {
+  "id": "pz_gen",
+  "_setup": "g = (x * 2 for x in range(3))",
+  "expr": "list(zip(g, 'abc'))"
+ },
+ {
+  "id": "pz_empty",
+  "expr": "list(zip())"
+ },
+ {
+  "id": "pz_strict_even",
+  "expr": "list(zip([1, 2], 'ab', strict=True))"
+ },
+ {
+  "id": "pz_oneshot",
+  "_setup": "z = zip([1, 2], 'ab')\nfirst = list(z)",
+  "expr": "(first, list(z))"
+ },
+ {
+  "id": "pz_next",
+  "_setup": "z = zip([1, 2, 3], 'abc')",
+  "expr": "next(z)"
+ },
+ {
+  "id": "pz_unzip",
+  "_setup": "pairs = [(1, 'a'), (2, 'b')]",
+  "expr": "list(zip(*pairs))"
+ },
+ {
+  "id": "pz_dict_from",
+  "expr": "dict(zip(['a', 'b'], [1, 2]))"
+ },
+ {
+  "id": "pz_enum_zip",
+  "expr": "[(i, x, y) for i, (x, y) in enumerate(zip('ab', [10, 20]))]"
+ },
+ {
+  "id": "pz_range_zip",
+  "expr": "list(zip(range(5), range(2, 9)))"
+ },
+ {
+  "id": "pc_counter_int",
+  "_setup": "from collections import Counter",
+  "expr": "Counter([1, 1, 2])"
+ },
+ {
+  "id": "pc_counter_str",
+  "_setup": "from collections import Counter",
+  "expr": "Counter('abracadabra')"
+ },
+ {
+  "id": "pc_counter_mc",
+  "_setup": "from collections import Counter",
+  "expr": "Counter('abracadabra').most_common(2)"
+ },
+ {
+  "id": "pc_counter_mc_ties",
+  "_setup": "from collections import Counter",
+  "expr": "Counter([3, 3, 1, 1, 2, 2]).most_common()"
+ },
+ {
+  "id": "pc_counter_sub",
+  "_setup": "from collections import Counter",
+  "expr": "Counter('aab')['a']"
+ },
+ {
+  "id": "pc_counter_missing",
+  "_setup": "from collections import Counter",
+  "expr": "Counter('ab')['z']"
+ },
+ {
+  "id": "pc_counter_add",
+  "_setup": "from collections import Counter\na = Counter('aab')\nb = Counter('abb')",
+  "expr": "a + b"
+ },
+ {
+  "id": "pc_counter_subtract_op",
+  "_setup": "from collections import Counter\na = Counter('aabbb')\nb = Counter('ab')",
+  "expr": "a - b"
+ },
+ {
+  "id": "pc_counter_and",
+  "_setup": "from collections import Counter\na = Counter('aabbb')\nb = Counter('abbc')",
+  "expr": "a & b"
+ },
+ {
+  "id": "pc_counter_or",
+  "_setup": "from collections import Counter\na = Counter('aab')\nb = Counter('abbc')",
+  "expr": "a | b"
+ },
+ {
+  "id": "pc_counter_elements",
+  "_setup": "from collections import Counter",
+  "expr": "sorted(Counter('aabbc').elements())"
+ },
+ {
+  "id": "pc_counter_update",
+  "_setup": "from collections import Counter\nc = Counter('ab')\nc.update('abb')",
+  "expr": "c['b']"
+ },
+ {
+  "id": "pc_counter_total",
+  "_setup": "from collections import Counter",
+  "expr": "Counter('aabbc').total()"
+ },
+ {
+  "id": "pc_counter_dictarg",
+  "_setup": "from collections import Counter",
+  "expr": "Counter({'a': 3, 'b': 1}).most_common()"
+ },
+ {
+  "id": "pc_counter_len",
+  "_setup": "from collections import Counter",
+  "expr": "len(Counter('aabbc'))"
+ },
+ {
+  "id": "pc_deque_basic",
+  "_setup": "from collections import deque\nd = deque([1, 2, 3])\nd.append(4)\nd.appendleft(0)",
+  "expr": "list(d)"
+ },
+ {
+  "id": "pc_deque_pop",
+  "_setup": "from collections import deque\nd = deque([1, 2, 3])",
+  "expr": "(d.pop(), d.popleft(), list(d))"
+ },
+ {
+  "id": "pc_deque_maxlen",
+  "_setup": "from collections import deque\nd = deque([1, 2, 3], maxlen=3)\nd.append(4)",
+  "expr": "list(d)"
+ },
+ {
+  "id": "pc_deque_rotate",
+  "_setup": "from collections import deque\nd = deque([1, 2, 3, 4, 5])\nd.rotate(2)",
+  "expr": "list(d)"
+ },
+ {
+  "id": "pc_deque_rotate_neg",
+  "_setup": "from collections import deque\nd = deque([1, 2, 3, 4, 5])\nd.rotate(-2)",
+  "expr": "list(d)"
+ },
+ {
+  "id": "pc_deque_extendleft",
+  "_setup": "from collections import deque\nd = deque([3])\nd.extendleft([2, 1])",
+  "expr": "list(d)"
+ },
+ {
+  "id": "pc_deque_len",
+  "_setup": "from collections import deque",
+  "expr": "len(deque('abc'))"
+ },
+ {
+  "id": "pc_deque_repr",
+  "_setup": "from collections import deque",
+  "expr": "deque([1, 2])"
+ },
+ {
+  "id": "pc_od_basic",
+  "_setup": "from collections import OrderedDict\nd = OrderedDict()\nd['b'] = 2\nd['a'] = 1",
+  "expr": "list(d.keys())"
+ },
+ {
+  "id": "pc_od_move",
+  "_setup": "from collections import OrderedDict\nd = OrderedDict()\nd['a'] = 1\nd['b'] = 2\nd['c'] = 3\nd.move_to_end('a')",
+  "expr": "list(d.keys())"
+ },
+ {
+  "id": "pc_od_popitem",
+  "_setup": "from collections import OrderedDict\nd = OrderedDict()\nd['a'] = 1\nd['b'] = 2",
+  "expr": "d.popitem()"
+ },
+ {
+  "id": "pc_nt_basic",
+  "_setup": "from collections import namedtuple\nPoint = namedtuple('Point', ['x', 'y'])\np = Point(1, 2)",
+  "expr": "(p.x, p.y)"
+ },
+ {
+  "id": "pc_nt_repr",
+  "_setup": "from collections import namedtuple\nPoint = namedtuple('Point', 'x y')\np = Point(1, 2)",
+  "expr": "p"
+ },
+ {
+  "id": "pc_nt_index",
+  "_setup": "from collections import namedtuple\nPoint = namedtuple('Point', 'x y')\np = Point(1, 2)",
+  "expr": "p[0] + p[1]"
+ },
+ {
+  "id": "pc_nt_unpack",
+  "_setup": "from collections import namedtuple\nPoint = namedtuple('Point', 'x y')\nx, y = Point(3, 4)",
+  "expr": "x * y"
+ },
+ {
+  "id": "pc_counter_kw",
+  "_setup": "from collections import Counter",
+  "expr": "sorted(Counter(a=2, b=1).elements())"
+ },
+ {
+  "id": "pz_strict_short_msg",
+  "_setup": "msg = ''\ntry:\n    r = list(zip([1, 2], [1], strict=True))\nexcept ValueError as e:\n    msg = str(e)",
+  "expr": "msg"
+ },
+ {
+  "id": "pz_strict_long_msg",
+  "_setup": "msg = ''\ntry:\n    r = list(zip([1], [1, 2], strict=True))\nexcept ValueError as e:\n    msg = str(e)",
+  "expr": "msg"
+ },
+ {
+  "id": "pz_strict_multi_msg",
+  "_setup": "msg = ''\ntry:\n    r = list(zip([1, 2], [1, 2], [1], strict=True))\nexcept ValueError as e:\n    msg = str(e)",
+  "expr": "msg"
+ },
+ {
+  "id": "pc_counter_missing_zero",
+  "_setup": "from collections import Counter\nc = Counter('ab')",
+  "expr": "(c['z'], len(c))"
+ },
+ {
+  "id": "pc_counter_getitem_after",
+  "_setup": "from collections import Counter\nc = Counter([1, 1, 2])\nc[3] += 5",
+  "expr": "c[3]"
+ },
+ {
+  "id": "pc_dd_lambda_list",
+  "_setup": "from collections import defaultdict\nd = defaultdict(lambda: [])\nd['a'].append(1)\nd['a'].append(2)",
+  "expr": "(d['a'], 'b' in d)"
+ },
+ {
+  "id": "pc_dd_lambda_int",
+  "_setup": "from collections import defaultdict\nd = defaultdict(lambda: 0)\nd['x'] += 1\nd['x'] += 1\nd[5] += 7",
+  "expr": "(d['x'], d[5])"
+ },
+ {
+  "id": "pc_dd_get_no_create",
+  "_setup": "from collections import defaultdict\nd = defaultdict(lambda: 0)\nv = d.get('missing')",
+  "expr": "(v, len(d))"
+ },
+ {
+  "id": "pc_deque_maxlen_repr",
+  "_setup": "from collections import deque\nd = deque(['a', 'b', 'c'], maxlen=3)\nd.append('d')",
+  "expr": "d"
+ },
+ {
+  "id": "pc_deque_getitem",
+  "_setup": "from collections import deque\nd = deque([1, 2, 3])",
+  "expr": "(d[0], d[-1])"
+ },
+ {
+  "id": "pc_deque_in",
+  "_setup": "from collections import deque\nd = deque([1, 2])",
+  "expr": "(1 in d, 9 in d)"
+ },
+ {
+  "id": "pc_od_popitem_first",
+  "_setup": "from collections import OrderedDict\nd = OrderedDict()\nd['a'] = 1\nd['b'] = 2\nd['c'] = 3",
+  "expr": "(d.popitem(last=False), list(d.keys()))"
+ },
+ {
+  "id": "pc_od_move_first",
+  "_setup": "from collections import OrderedDict\nd = OrderedDict()\nd['a'] = 1\nd['b'] = 2\nd['c'] = 3\nd.move_to_end('c', last=False)",
+  "expr": "list(d.keys())"
+ },
+ {
+  "id": "pc_nt_replace",
+  "_setup": "from collections import namedtuple\nPoint = namedtuple('Point', 'x y')\np = Point(1, 2)\nq = p._replace(y=9)",
+  "expr": "q"
+ },
+ {
+  "id": "pc_nt_asdict",
+  "_setup": "from collections import namedtuple\nPoint = namedtuple('Point', 'x y')\np = Point(1, 2)",
+  "expr": "p._asdict()"
+ },
+ {
+  "id": "pc_counter_copy",
+  "_setup": "from collections import Counter\na = Counter('aab')\nb = a.copy()\nb.update('b')",
+  "expr": "(a['b'], b['b'])"
+ },
+ {
+  "id": "pi_chain_empty",
+  "_setup": "from itertools import chain",
+  "expr": "list(chain())"
+ },
+ {
+  "id": "pi_product_empty_pool",
+  "_setup": "from itertools import product",
+  "expr": "list(product([1, 2], []))"
+ },
+ {
+  "id": "pi_permutations_r_gt_n",
+  "_setup": "from itertools import permutations",
+  "expr": "list(permutations([1, 2], 3))"
+ },
+ {
+  "id": "pi_accumulate_str",
+  "_setup": "from itertools import accumulate",
+  "expr": "list(accumulate(['a', 'b', 'c']))"
+ },
+ {
+  "id": "pi_count_neg_step",
+  "_setup": "from itertools import count, islice",
+  "expr": "list(islice(count(5, -2), 4))"
+ },
+ {
+  "id": "pf_conv_r_nested_spec",
+  "_setup": "s = 'hi'",
+  "expr": "f'{s!r:>8}'"
+ },
+ {
+  "id": "pf_selfdoc_spaces",
+  "_setup": "x = 5",
+  "expr": "f'{x = }'"
+ },
+ {
+  "id": "pf_eqeq_not_selfdoc",
+  "_setup": "x = 1",
+  "expr": "f'{x == 1}'"
+ },
+ {
+  "id": "pf_underscore_x",
+  "_setup": "x = 1048575",
+  "expr": "f'{x:_x}'"
+ },
+ {
+  "id": "pf_underscore_b",
+  "_setup": "x = 1234",
+  "expr": "f'{x:_b}'"
+ },
+ {
+  "id": "pf_comma_float_noprec",
+  "_setup": "x = 1234.5678",
+  "expr": "f'{x:,}'"
+ },
+ {
+  "id": "pf_g_upper",
+  "_setup": "x = 0.000012345",
+  "expr": "f'{x:.3G}'"
+ },
+ {
+  "id": "pf_nested_width",
+  "_setup": "v = 42\nw = 8",
+  "expr": "f'{v:{w}}'"
+ },
+ {
+  "id": "pf_nested_prec",
+  "_setup": "p = 3",
+  "expr": "f'{3.14159:.{p}f}'"
+ },
+ {
+  "id": "pf_nested_both",
+  "_setup": "v = 3.14159\nw = 10\np = 2",
+  "expr": "f'{v:{w}.{p}f}'"
+ },
+ {
+  "id": "pf_nested_fill_align",
+  "_setup": "s = 'hi'\na = '^'\nw = 6",
+  "expr": "f'{s:{a}{w}}'"
+ },
+ {
+  "id": "pl_comp_over_str",
+  "expr": "[c * 2 for c in 'ab']"
+ },
+ {
+  "id": "pl_comp_over_gen",
+  "_setup": "g = (x * x for x in range(4))",
+  "expr": "[v + 1 for v in g]"
+ },
+ {
+  "id": "pl_comp_over_dict",
+  "_setup": "d = {1: 'a', 2: 'b'}",
+  "expr": "[k * 10 for k in d]"
+ },
+ {
+  "id": "pl_comp_nested_target",
+  "_setup": "pairs = [(1, (2, 3)), (4, (5, 6))]",
+  "expr": "[a + b + c for a, (b, c) in pairs]"
+ },
+ {
+  "id": "pl_setcomp_over_str",
+  "expr": "sorted({c for c in 'abca'})"
+ },
+ {
+  "id": "pl_dictcomp_over_zip",
+  "expr": "{k: v for k, v in zip('ab', [1, 2])}"
+ },
+ {
+  "id": "float_repr_integral_add",
+  "expr": "700.0 + 2.0"
+ },
+ {
+  "id": "float_repr_intdiv",
+  "expr": "8 / 2"
+ },
+ {
+  "id": "float_repr_mixed_mul",
+  "expr": "2.0 * 351"
+ },
+ {
+  "id": "float_repr_neg_zero_mul",
+  "expr": "-0.0 * 5"
+ },
+ {
+  "id": "float_repr_floordiv",
+  "expr": "7.0 // 2"
+ },
+ {
+  "id": "float_repr_fn_annotated",
+  "_setup": "def to_f(x: int) -> float:\n    return x * 1.0",
+  "expr": "to_f(702)"
+ },
+ {
+  "id": "float_fstring_integral",
+  "expr": "f'{700.0 + 2.0}'"
+ },
+ {
+  "id": "pf_adjacency",
+  "_setup": "x = 1\ny = 2",
+  "expr": "f'a{x}' f'b{y}'"
+ },
+ {
+  "id": "pf_adjacency_plain",
+  "_setup": "x = 1",
+  "expr": "'a' f'{x}b'"
+ },
+ {
+  "id": "pf_adjacency_trailing_plain",
+  "_setup": "x = 1",
+  "expr": "f'{x}a' 'b' 'c'"
+ },
+ {
+  "id": "pf_multiline",
+  "_setup": "x = 1\ny = 2",
+  "expr": "f'''{x}\n{y}'''"
+ },
+ {
+  "id": "str_multiline_in_parens",
+  "expr": "len(\"\"\"a\nbc\"\"\")"
+ },
+ {
+  "id": "str_plain_adjacency",
+  "expr": "'ab' 'cd' 'ef'"
+ },
+ {
+  "id": "pc_dd_list",
+  "_setup": "from collections import defaultdict\nd = defaultdict(list)\nd['a'].append(1)\nd['a'].append(2)\nd['b'].append(3)",
+  "expr": "sorted(d.items())"
+ },
+ {
+  "id": "pc_dd_int",
+  "_setup": "from collections import defaultdict\nc = defaultdict(int)\nfor ch in 'aabab':\n    c[ch] += 1",
+  "expr": "sorted(c.items())"
+ },
+ {
+  "id": "pc_dd_int_zero",
+  "_setup": "from collections import defaultdict\nd = defaultdict(int)",
+  "expr": "d['missing']"
+ },
+ {
+  "id": "pi_starmap",
+  "_setup": "from itertools import starmap",
+  "expr": "list(starmap(pow, [(2, 3), (3, 2)]))"
+ },
+ {
+  "id": "pc_key_len",
+  "_setup": "words = ['ccc', 'a', 'bb']",
+  "expr": "sorted(words, key=len)"
+ },
+ {
+  "id": "pc_map_int",
+  "expr": "list(map(int, ['1', '2', '3']))"
+ },
+ {
+  "id": "pc_set_call",
+  "expr": "sorted(set([3, 1, 2, 1]))"
+ },
+ {
+  "id": "pc_set_call_str",
+  "expr": "sorted(set('aabbc'))"
+ },
+ {
+  "id": "pc_tuple_call",
+  "expr": "tuple([1, 2, 3])"
+ },
+ {
+  "id": "pc_first_class_zero_args",
+  "_setup": "fs = [int, str, bool, list]",
+  "expr": "[f() for f in fs]"
+ },
+ {
+  "id": "pi_accumulate_func",
+  "_setup": "from itertools import accumulate\nimport operator",
+  "expr": "list(accumulate([1, 2, 3, 4], operator.mul))"
+ },
+ {
+  "id": "po_itemgetter",
+  "_setup": "import operator\npairs = [(2, 'b'), (1, 'a'), (3, 'c')]",
+  "expr": "sorted(pairs, key=operator.itemgetter(0))"
+ },
+ {
+  "id": "po_itemgetter_multi",
+  "_setup": "import operator\ng = operator.itemgetter(1, 0)",
+  "expr": "g([10, 20, 30])"
+ },
+ {
+  "id": "po_basic_arith",
+  "_setup": "import operator",
+  "expr": "(operator.add(2, 3), operator.sub(7, 2), operator.truediv(7, 2), operator.floordiv(7, 2), operator.mod(7, 3), operator.pow(2, 5), operator.neg(4))"
+ },
+ {
+  "id": "po_comparisons",
+  "_setup": "import operator",
+  "expr": "(operator.eq(1, 1), operator.lt(1, 2), operator.ge(2, 2), operator.not_(0))"
+ },
+ {
+  "id": "po_from_import",
+  "_setup": "from operator import mul, add",
+  "expr": "(mul(6, 7), add(1, 2))"
+ },
+ {
+  "id": "pd_plain_nonstring_write",
+  "_setup": "d = {}\nd[True] = 't'\nd[1] = 'one'",
+  "expr": "d"
+ },
+ {
+  "id": "pd_plain_int_write",
+  "_setup": "d = {}\nd[1] = 'one'\nd[2] = 'two'",
+  "expr": "sorted(d.items())"
+ },
+ {
+  "id": "pd_destructure_subscript",
+  "_setup": "d = {1: 'a'}\nxs = [0]\nd[2], xs[0] = 'b', 9",
+  "expr": "(sorted(d.items()), xs)"
+ },
+ {
+  "id": "pd_destructure_subscript_swap",
+  "_setup": "d = {1: 'x', 2: 'y'}\nd[1], d[2] = d[2], d[1]",
+  "expr": "sorted(d.items())"
+ },
+ {
+  "id": "r2_lc_nested_flatten",
+  "expr": "[x for row in [[1, 2], [3, 4], [5]] for x in row]"
+ },
+ {
+  "id": "r2_lc_two_ifs",
+  "expr": "[x for x in range(30) if x % 2 == 0 if x % 3 == 0]"
+ },
+ {
+  "id": "r2_lc_ifelse_value",
+  "expr": "[x if x % 2 else -x for x in range(6)]"
+ },
+ {
+  "id": "r2_lc_nested_comp_value",
+  "expr": "[[y * 2 for y in range(x)] for x in range(4)]"
+ },
+ {
+  "id": "r2_lc_tuple_target",
+  "expr": "[a + b for (a, b) in [(1, 2), (3, 4)]]"
+ },
+ {
+  "id": "r2_lc_nested_tuple_target",
+  "expr": "[a + b + c for (a, (b, c)) in [(1, (2, 3)), (4, (5, 6))]]"
+ },
+ {
+  "id": "r2_lc_var_no_leak",
+  "_setup": "x = 99\n_ = [x for x in range(3)]",
+  "expr": "x"
+ },
+ {
+  "id": "r2_lc_over_enumerate_start",
+  "expr": "[i * 10 + v for i, v in enumerate([7, 8, 9], 1)]"
+ },
+ {
+  "id": "r2_lc_range_step_neg",
+  "expr": "[i for i in range(10, 0, -3)]"
+ },
+ {
+  "id": "r2_lc_multi_for_dependent",
+  "expr": "[(i, j) for i in range(3) for j in range(i)]"
+ },
+ {
+  "id": "r2_lc_zip_three",
+  "expr": "[a + b + c for a, b, c in zip([1, 2], [10, 20], [100, 200])]"
+ },
+ {
+  "id": "r2_lc_str_methods_chain",
+  "expr": "[w.strip().upper() for w in ' a , b '.split(',')]"
+ },
+ {
+  "id": "r2_lc_star_target",
+  "expr": "[x + y for x, *ys in [[1, 2, 3], [4]] for y in ys]"
+ },
+ {
+  "id": "r2_dc_invert",
+  "expr": "{v: k for k, v in {'a': 1, 'b': 2}.items()}"
+ },
+ {
+  "id": "r2_dc_tuple_keys",
+  "expr": "{(i, i + 1): i * i for i in range(3)}"
+ },
+ {
+  "id": "r2_dc_last_wins",
+  "expr": "{x % 3: x for x in range(9)}"
+ },
+ {
+  "id": "r2_dc_cond",
+  "expr": "{k: v for k, v in {'a': 1, 'b': 2, 'c': 3}.items() if v != 2}"
+ },
+ {
+  "id": "r2_dc_nested_value",
+  "expr": "{k: {i: i * k for i in range(2)} for k in range(2)}"
+ },
+ {
+  "id": "r2_dc_from_zip",
+  "expr": "{k: v for k, v in zip('ab', [1, 2])}"
+ },
+ {
+  "id": "r2_dc_ifelse_value",
+  "expr": "{k: ('even' if k % 2 == 0 else 'odd') for k in range(4)}"
+ },
+ {
+  "id": "r2_dc_key_expr",
+  "expr": "{k * 2: k for k in 'ab'}"
+ },
+ {
+  "id": "r2_sc_dedup_sorted",
+  "expr": "sorted({x % 4 for x in range(20)})"
+ },
+ {
+  "id": "r2_sc_strings",
+  "expr": "sorted({w[0] for w in ['apple', 'avocado', 'banana']})"
+ },
+ {
+  "id": "r2_sc_cond",
+  "expr": "sorted({x * x for x in range(-3, 4) if x != 0})"
+ },
+ {
+  "id": "r2_ge_sum_cond",
+  "expr": "sum(x * x for x in range(10) if x % 2)"
+ },
+ {
+  "id": "r2_ge_min_default",
+  "expr": "min((x for x in []), default=42)"
+ },
+ {
+  "id": "r2_ge_nested_sum",
+  "expr": "sum(sum(row) for row in [[1, 2], [3, 4]])"
+ },
+ {
+  "id": "r2_ge_tuple_ctor",
+  "expr": "tuple(c * 2 for c in 'abc')"
+ },
+ {
+  "id": "r2_ge_max_key",
+  "expr": "max((s for s in ['a', 'bbb', 'cc']), key=len)"
+ },
+ {
+  "id": "r2_ge_star_unpack",
+  "expr": "[*(x + 1 for x in range(3))]"
+ },
+ {
+  "id": "r2_w_if",
+  "_setup": "data = [1, 2, 3, 4]\nout = []\nif (n := len(data)) > 3:\n    out.append(n)",
+  "expr": "out"
+ },
+ {
+  "id": "r2_w_while",
+  "_setup": "vals = [5, 4, 0, 3]\nit = iter(vals)\ntotal = 0\nwhile (v := next(it, 0)) != 0:\n    total += v",
+  "expr": "total"
+ },
+ {
+  "id": "r2_w_comp_filter",
+  "expr": "[y for x in range(10) if (y := x * 2) > 12]"
+ },
+ {
+  "id": "r2_w_comp_scope_leak",
+  "_setup": "_ = [q for x in range(5) if (q := x * x) >= 0]",
+  "expr": "q"
+ },
+ {
+  "id": "r2_w_expr_value",
+  "expr": "[(z := i, z * 2) for i in range(3)]"
+ },
+ {
+  "id": "r2_w_reuse_in_expr",
+  "_setup": "res = (n2 := 7) + n2",
+  "expr": "(res, n2)"
+ },
+ {
+  "id": "r2_w_nested",
+  "expr": "((a := 1) + (b := a + 1) + b, a, b)"
+ },
+ {
+  "id": "r2_w_fstring",
+  "expr": "f\"{(w := 5)}-{w * 2}\""
+ },
+ {
+  "id": "r2_w_ternary",
+  "expr": "((u := 4) if True else 0) + u"
+ },
+ {
+  "id": "r2_w_dictcomp_leak",
+  "expr": "({k: (sq := k * k) for k in range(3)}, sq)"
+ },
+ {
+  "id": "r2_m_dict_union",
+  "expr": "{'a': 1, 'b': 2} | {'b': 3, 'c': 4}"
+ },
+ {
+  "id": "r2_m_dict_iunion",
+  "_setup": "d = {'x': 1}\nd |= {'y': 2}",
+  "expr": "d"
+ },
+ {
+  "id": "r2_m_removeprefix",
+  "expr": "'unhappy'.removeprefix('un') + '-' + 'file.txt'.removesuffix('.txt')"
+ },
+ {
+  "id": "r2_m_star_assign",
+  "_setup": "a, *mid, z = [1, 2, 3, 4, 5]",
+  "expr": "(a, mid, z)"
+ },
+ {
+  "id": "r2_m_star_assign_empty",
+  "_setup": "first, *rest = [7]",
+  "expr": "(first, rest)"
+ },
+ {
+  "id": "r2_m_star_merge_literals",
+  "expr": "[*range(2), *'ab', *(9,)]"
+ },
+ {
+  "id": "r2_m_double_star_call",
+  "_setup": "def f(a, b, c):\n    return a * 100 + b * 10 + c\nkw = {'b': 2, 'c': 3}",
+  "expr": "f(1, **kw)"
+ },
+ {
+  "id": "r2_m_chained_cmp",
+  "expr": "(1 < 2 < 3, 3 > 2 == 2, 1 < 5 > 2)"
+ },
+ {
+  "id": "r2_m_chained_cmp_once",
+  "_setup": "calls = []\ndef mid():\n    calls.append(1)\n    return 5",
+  "expr": "(1 < mid() < 10, calls)"
+ },
+ {
+  "id": "r2_m_fstring_eq",
+  "expr": "f\"{3 + 4 = }\""
+ },
+ {
+  "id": "r2_m_fstring_conversion",
+  "expr": "f\"{'hi'!r} {10.5!s}\""
+ },
+ {
+  "id": "r2_m_underscore_literal",
+  "expr": "1_000_000 + 2_5"
+ },
+ {
+  "id": "r2_m_match_patterns",
+  "_setup": "def kind(x):\n    match x:\n        case 0:\n            return 'zero'\n        case [a, b]:\n            return f'pair:{a}{b}'\n        case {'k': v}:\n            return f'map:{v}'\n        case str() as s:\n            return 'str:' + s\n        case _:\n            return 'other'",
+  "expr": "(kind(0), kind([1, 2]), kind({'k': 9}), kind('hi'), kind(3.5))"
+ },
+ {
+  "id": "r2_m_match_guard_or",
+  "_setup": "def g(x):\n    match x:\n        case 1 | 2:\n            return 'small'\n        case int() if x > 10:\n            return 'big'\n        case _:\n            return 'mid'",
+  "expr": "(g(1), g(2), g(5), g(11))"
+ },
+ {
+  "id": "r2_m_for_else",
+  "_setup": "out = []\nfor i in range(3):\n    if i == 5:\n        break\nelse:\n    out.append('no-break')\nfor i in range(3):\n    if i == 1:\n        break\nelse:\n    out.append('unreached')",
+  "expr": "out"
+ },
+ {
+  "id": "r2_m_while_else",
+  "_setup": "n = 0\nwhile n < 2:\n    n += 1\nelse:\n    n = n + 10",
+  "expr": "n"
+ },
+ {
+  "id": "r2_m_zip_strict",
+  "expr": "list(zip([1, 2], 'ab', strict=True))"
+ },
+ {
+  "id": "r2_m_enumerate_neg_start",
+  "expr": "list(enumerate('ab', -1))"
+ },
+ {
+  "id": "r2_m_slice_steps",
+  "expr": "('abcdefgh'[::-2], [0, 1, 2, 3, 4][1::2], 'abc'[::-1])"
+ },
+ {
+  "id": "r2_m_ternary_chain",
+  "expr": "('a' if False else 'b' if False else 'c')"
+ },
+ {
+  "id": "r2_m_sorted_stability",
+  "expr": "sorted([(1, 'b'), (0, 'a'), (1, 'a'), (0, 'b')], key=lambda t: t[0])"
+ },
+ {
+  "id": "r2_m_yield_gen",
+  "_setup": "def gen():\n    yield 1\n    yield 2\n    yield 3",
+  "expr": "list(gen())"
+ },
+ {
+  "id": "r2_m_yield_from",
+  "_setup": "def inner():\n    yield 1\n    yield 2\ndef outer():\n    yield 0\n    yield from inner()\n    yield 3",
+  "expr": "list(outer())"
+ },
+ {
+  "id": "kwcheck_named",
+  "_setup": "def f(a, b, c):\n    return a * 100 + b * 10 + c",
+  "expr": "f(1, b=2, c=3)"
+ },
+ {
+  "id": "kwcheck_kwonly",
+  "_setup": "def g(a, *, scale=2):\n    return a * scale",
+  "expr": "g(3, scale=5)"
+ },
+ {
+  "id": "kwcheck_default",
+  "_setup": "def h(a, b=7):\n    return a * 10 + b",
+  "expr": "(h(1), h(1, 2), h(1, b=3))"
+ },
+ {
+  "id": "c3_init_attrs",
+  "_setup": "class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\np = Point(3, 4)",
+  "expr": "(p.x, p.y)"
+ },
+ {
+  "id": "c3_method_self",
+  "_setup": "class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def dist2(self):\n        return self.x * self.x + self.y * self.y\np = Point(3, 4)",
+  "expr": "p.dist2()"
+ },
+ {
+  "id": "c3_class_attr_shared",
+  "_setup": "class Animal:\n    kind = 'generic'\na = Animal()\nb = Animal()",
+  "expr": "(a.kind, b.kind, Animal.kind)"
+ },
+ {
+  "id": "c3_class_attr_shadow",
+  "_setup": "class Animal:\n    kind = 'generic'\na = Animal()\nb = Animal()\na.kind = 'dog'",
+  "expr": "(a.kind, b.kind, Animal.kind)"
+ },
+ {
+  "id": "c3_init_default_arg",
+  "_setup": "class Point:\n    def __init__(self, x, y=10):\n        self.x = x\n        self.y = y",
+  "expr": "(Point(7).x, Point(7).y)"
+ },
+ {
+  "id": "c3_method_chain",
+  "_setup": "class Acc:\n    def __init__(self):\n        self.total = 0\n    def add(self, n):\n        self.total += n\n        return self\nb = Acc()",
+  "expr": "b.add(2).add(3).total"
+ },
+ {
+  "id": "c3_classmethod",
+  "_setup": "class Counter:\n    def __init__(self, n):\n        self.n = n\n    @classmethod\n    def make(cls):\n        return cls(42)",
+  "expr": "(Counter.make().n, Counter.make().n)"
+ },
+ {
+  "id": "c3_staticmethod",
+  "_setup": "class Util:\n    @staticmethod\n    def double(x):\n        return x * 2\nu = Util()",
+  "expr": "(Util.double(21), u.double(5))"
+ },
+ {
+  "id": "c3_property",
+  "_setup": "class Circle:\n    def __init__(self, r):\n        self.r = r\n    @property\n    def area(self):\n        return 3 * self.r * self.r\nc = Circle(2)",
+  "expr": "c.area"
+ },
+ {
+  "id": "c3_property_setter",
+  "_setup": "class Temp:\n    def __init__(self):\n        self._c = 0\n    @property\n    def celsius(self):\n        return self._c\n    @celsius.setter\n    def celsius(self, v):\n        self._c = v\n    @property\n    def fahrenheit(self):\n        return self._c * 9 // 5 + 32\nt = Temp()\nt.celsius = 100",
+  "expr": "(t.celsius, t.fahrenheit)"
+ },
+ {
+  "id": "c3_class_mutable_default",
+  "_setup": "class Bag:\n    items = []\na = Bag()\nb = Bag()\nBag.items.append(1)",
+  "expr": "(a.items, b.items)"
+ },
+ {
+  "id": "c3_isinstance_user",
+  "_setup": "class Point:\n    def __init__(self):\n        self.x = 0\np = Point()",
+  "expr": "(isinstance(p, Point), isinstance(3, Point))"
+ },
+ {
+  "id": "c3_class_in_function",
+  "_setup": "def make(n):\n    class Box:\n        def __init__(self, v):\n            self.v = v\n    return Box(n)",
+  "expr": "make(5).v"
+ },
+ {
+  "id": "c3_kwargs_init",
+  "_setup": "class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\np = Point(y=4, x=3)",
+  "expr": "(p.x, p.y)"
+ },
+ {
+  "id": "c3_method_kwargs",
+  "_setup": "class Num:\n    def __init__(self, v):\n        self.v = v\n    def scale(self, factor=1):\n        return self.v * factor\np = Num(7)",
+  "expr": "p.scale(factor=3)"
+ },
+ {
+  "id": "c3_init_kwonly",
+  "_setup": "class Box:\n    def __init__(self, *, size=2):\n        self.size = size",
+  "expr": "Box(size=9).size"
+ },
+ {
+  "id": "c3_inherit_method",
+  "_setup": "class Animal:\n    def speak(self):\n        return 'generic'\nclass Dog(Animal):\n    pass\nd = Dog()",
+  "expr": "d.speak()"
+ },
+ {
+  "id": "c3_override",
+  "_setup": "class Animal:\n    def speak(self):\n        return 'generic'\nclass Dog(Animal):\n    def speak(self):\n        return 'woof'\na = Animal()\nd = Dog()",
+  "expr": "(a.speak(), d.speak())"
+ },
+ {
+  "id": "c3_super_method",
+  "_setup": "class Animal:\n    def speak(self):\n        return 'generic'\nclass Dog(Animal):\n    def speak(self):\n        return super().speak() + '+woof'\nd = Dog()",
+  "expr": "d.speak()"
+ },
+ {
+  "id": "c3_super_init",
+  "_setup": "class Animal:\n    def __init__(self, name):\n        self.name = name\nclass Dog(Animal):\n    def __init__(self, name, tricks):\n        super().__init__(name)\n        self.tricks = tricks\nd = Dog('rex', 3)",
+  "expr": "(d.name, d.tricks)"
+ },
+ {
+  "id": "c3_multilevel",
+  "_setup": "class A:\n    def base(self):\n        return 'A'\n    def tag(self):\n        return 'a'\nclass B(A):\n    def tag(self):\n        return 'b'\nclass C(B):\n    pass\nc = C()",
+  "expr": "(c.tag(), c.base())"
+ },
+ {
+  "id": "c3_isinstance_sub",
+  "_setup": "class Animal:\n    pass\nclass Dog(Animal):\n    pass\nd = Dog()\na = Animal()",
+  "expr": "(isinstance(d, Dog), isinstance(d, Animal), isinstance(a, Dog))"
+ },
+ {
+  "id": "c3_base_explicit",
+  "_setup": "class Animal:\n    def speak(self):\n        return 'generic'\nclass Dog(Animal):\n    def speak(self):\n        return Animal.speak(self) + '+woof'\nd = Dog()",
+  "expr": "d.speak()"
+ },
+ {
+  "id": "c3_diamond_mro",
+  "_setup": "class A:\n    def who(self):\n        return 'A'\nclass B(A):\n    def who(self):\n        return 'B'\nclass C(A):\n    def who(self):\n        return 'C'\nclass D(B, C):\n    pass\nd = D()",
+  "expr": "d.who()"
+ },
+ {
+  "id": "c3_diamond_super_chain",
+  "_setup": "class A:\n    def chain(self):\n        return 'A'\nclass B(A):\n    def chain(self):\n        return 'B>' + super().chain()\nclass C(A):\n    def chain(self):\n        return 'C>' + super().chain()\nclass D(B, C):\n    def chain(self):\n        return 'D>' + super().chain()\nd = D()",
+  "expr": "d.chain()"
+ },
+ {
+  "id": "c3_inherited_class_attr",
+  "_setup": "class Animal:\n    legs = 4\nclass Dog(Animal):\n    pass\nd = Dog()",
+  "expr": "(Dog.legs, d.legs)"
+ },
+ {
+  "id": "c3_override_attr_layering",
+  "_setup": "class Animal:\n    def __init__(self):\n        self.name = 'x'\nclass Dog(Animal):\n    def __init__(self):\n        super().__init__()\n        self.loud = True\nd = Dog()",
+  "expr": "(d.name, d.loud)"
+ },
+ {
+  "id": "c3_dc_repr",
+  "_setup": "from dataclasses import dataclass, field\n@dataclass\nclass Point:\n    x: int\n    y: int",
+  "expr": "repr(Point(1, 2))"
+ },
+ {
+  "id": "c3_dc_eq",
+  "_setup": "from dataclasses import dataclass, field\n@dataclass\nclass Point:\n    x: int\n    y: int",
+  "expr": "(Point(1, 2) == Point(1, 2), Point(1, 2) == Point(1, 3))"
+ },
+ {
+  "id": "c3_dc_defaults",
+  "_setup": "from dataclasses import dataclass, field\n@dataclass\nclass Point:\n    x: int\n    y: int = 5",
+  "expr": "repr(Point(1))"
+ },
+ {
+  "id": "c3_dc_kwargs_ctor",
+  "_setup": "from dataclasses import dataclass, field\n@dataclass\nclass Point:\n    x: int\n    y: int",
+  "expr": "repr(Point(y=2, x=1))"
+ },
+ {
+  "id": "c3_dc_field_factory",
+  "_setup": "from dataclasses import dataclass, field\n@dataclass\nclass Item:\n    tags: list = field(default_factory=list)\na = Item()\nb = Item()\na.tags.append('x')",
+  "expr": "(a.tags, b.tags)"
+ },
+ {
+  "id": "c3_dc_nested_repr",
+  "_setup": "from dataclasses import dataclass, field\n@dataclass\nclass Point:\n    x: int\n    y: int\n@dataclass\nclass Line:\n    a: Point\n    b: Point",
+  "expr": "repr(Line(Point(0, 0), Point(1, 1)))"
+ },
+ {
+  "id": "c3_dc_method",
+  "_setup": "from dataclasses import dataclass, field\n@dataclass\nclass Point:\n    x: int\n    y: int\n    def mag2(self):\n        return self.x ** 2 + self.y ** 2",
+  "expr": "Point(3, 4).mag2()"
+ },
+ {
+  "id": "c3_dc_mutate",
+  "_setup": "from dataclasses import dataclass, field\n@dataclass\nclass Point:\n    x: int\n    y: int\np = Point(1, 2)\np.x = 9",
+  "expr": "repr(p)"
+ },
+ {
+  "id": "c3_dc_in_list_repr",
+  "_setup": "from dataclasses import dataclass, field\n@dataclass\nclass Point:\n    x: int\n    y: int",
+  "expr": "repr([Point(1, 2), Point(3, 4)])"
+ },
+ {
+  "id": "c3_dunder_repr",
+  "_setup": "class Money:\n    def __init__(self, v):\n        self.v = v\n    def __repr__(self):\n        return f'Money({self.v})'",
+  "expr": "repr(Money(5))"
+ },
+ {
+  "id": "c3_dunder_str_vs_repr",
+  "_setup": "class Money:\n    def __init__(self, v):\n        self.v = v\n    def __repr__(self):\n        return f'Money({self.v})'\n    def __str__(self):\n        return f'${self.v}'\nm = Money(5)",
+  "expr": "(str(m), repr(m))"
+ },
+ {
+  "id": "c3_dunder_str_in_fstring",
+  "_setup": "class Money:\n    def __init__(self, v):\n        self.v = v\n    def __str__(self):\n        return f'${self.v}'\nm = Money(5)",
+  "expr": "f'cost: {m}'"
+ },
+ {
+  "id": "c3_dunder_eq",
+  "_setup": "class Vec:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def __eq__(self, other):\n        return isinstance(other, Vec) and self.x == other.x and self.y == other.y",
+  "expr": "(Vec(1, 2) == Vec(1, 2), Vec(1, 2) == Vec(2, 1), Vec(1, 2) != Vec(2, 1))"
+ },
+ {
+  "id": "c3_dunder_eq_in_list",
+  "_setup": "class Vec:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def __eq__(self, other):\n        return isinstance(other, Vec) and self.x == other.x and self.y == other.y",
+  "expr": "Vec(1, 2) in [Vec(0, 0), Vec(1, 2)]"
+ },
+ {
+  "id": "c3_dunder_len",
+  "_setup": "class Deck:\n    def __len__(self):\n        return 52",
+  "expr": "len(Deck())"
+ },
+ {
+  "id": "c3_dunder_getitem",
+  "_setup": "class Squares:\n    def __getitem__(self, i):\n        return i * i\nsq = Squares()",
+  "expr": "(sq[3], sq[10])"
+ },
+ {
+  "id": "c3_dunder_setitem_getitem",
+  "_setup": "class Store:\n    def __init__(self):\n        self.d = {}\n    def __setitem__(self, k, v):\n        self.d[k] = v\n    def __getitem__(self, k):\n        return self.d[k]\ns = Store()\ns['a'] = 1\ns['b'] = 2",
+  "expr": "(s['a'], s['b'])"
+ },
+ {
+  "id": "c3_dunder_contains",
+  "_setup": "class Box:\n    def __init__(self, items):\n        self.items = items\n    def __contains__(self, x):\n        return x in self.items\nbox = Box([1, 2, 3])",
+  "expr": "(3 in box, 9 in box)"
+ },
+ {
+  "id": "c3_dunder_iter",
+  "_setup": "class Bag:\n    def __init__(self, items):\n        self.items = items\n    def __iter__(self):\n        return iter(self.items)\nbag = Bag([3, 1, 2])",
+  "expr": "list(bag)"
+ },
+ {
+  "id": "c3_dunder_iter_for",
+  "_setup": "class Bag:\n    def __init__(self, items):\n        self.items = items\n    def __iter__(self):\n        return iter(self.items)\ntotal = 0\nfor x in Bag([3, 1, 2]):\n    total += x",
+  "expr": "total"
+ },
+ {
+  "id": "c3_dunder_next_countdown",
+  "_setup": "class Countdown:\n    def __init__(self, n):\n        self.n = n\n    def __iter__(self):\n        return self\n    def __next__(self):\n        if self.n <= 0:\n            raise StopIteration\n        self.n -= 1\n        return self.n + 1",
+  "expr": "list(Countdown(4))"
+ },
+ {
+  "id": "c3_dunder_add",
+  "_setup": "class Vec:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def __add__(self, other):\n        return Vec(self.x + other.x, self.y + other.y)\n    def __repr__(self):\n        return f'Vec({self.x}, {self.y})'",
+  "expr": "repr(Vec(1, 2) + Vec(3, 4))"
+ },
+ {
+  "id": "c3_dunder_mul_scalar",
+  "_setup": "class Vec:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def __mul__(self, k):\n        return Vec(self.x * k, self.y * k)\n    def __repr__(self):\n        return f'Vec({self.x}, {self.y})'",
+  "expr": "repr(Vec(1, 2) * 3)"
+ },
+ {
+  "id": "c3_dunder_radd",
+  "_setup": "class Money:\n    def __init__(self, v):\n        self.v = v\n    def __radd__(self, other):\n        return Money(other + self.v)\n    def __repr__(self):\n        return f'Money({self.v})'",
+  "expr": "repr(10 + Money(5))"
+ },
+ {
+  "id": "c3_dunder_lt_sorted",
+  "_setup": "class P:\n    def __init__(self, v):\n        self.v = v\n    def __lt__(self, other):\n        return self.v < other.v\nps = [P(3), P(1), P(2)]",
+  "expr": "[p.v for p in sorted(ps)]"
+ },
+ {
+  "id": "c3_dunder_bool",
+  "_setup": "class Box:\n    def __init__(self, n):\n        self.n = n\n    def __bool__(self):\n        return self.n > 0",
+  "expr": "(bool(Box(0)), bool(Box(3)), 'yes' if Box(1) else 'no')"
+ },
+ {
+  "id": "c3_dunder_neg_abs",
+  "_setup": "class Num:\n    def __init__(self, v):\n        self.v = v\n    def __neg__(self):\n        return Num(-self.v)\n    def __abs__(self):\n        return self.v if self.v >= 0 else -self.v\n    def __repr__(self):\n        return f'Num({self.v})'\nv = Num(5)\nv2 = Num(-7)",
+  "expr": "(repr(-v), abs(v2))"
+ },
+ {
+  "id": "c3_dunder_context_manager",
+  "_setup": "log = []\nclass Ctx:\n    def __enter__(self):\n        log.append('enter')\n        return 42\n    def __exit__(self, a, b, c):\n        log.append('exit')\n        return False\nwith Ctx() as v:\n    log.append(v)",
+  "expr": "log"
+ },
+ {
+  "id": "c3_repr_in_container",
+  "_setup": "class Money:\n    def __init__(self, v):\n        self.v = v\n    def __repr__(self):\n        return f'Money({self.v})'",
+  "expr": "repr({'p': Money(3)})"
+ },
+ {
+  "id": "r4_e_order_noexc",
+  "_setup": "log = []\ndef f():\n    try:\n        log.append('try')\n    except ValueError:\n        log.append('except')\n    else:\n        log.append('else')\n    finally:\n        log.append('finally')\n    return log\nres = f()",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_order_exc",
+  "_setup": "log = []\ndef f():\n    try:\n        log.append('try')\n        raise ValueError('x')\n    except ValueError:\n        log.append('except')\n    else:\n        log.append('else')\n    finally:\n        log.append('finally')\n    return log\nres = f()",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_tuple_except",
+  "_setup": "def probe(k):\n    d = {'a': 1}\n    xs = [1]\n    try:\n        if k == 0:\n            return d['nope']\n        return xs[9]\n    except (KeyError, IndexError) as e:\n        return type(e).__name__\nres = [probe(0), probe(1)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_as_str_args",
+  "_setup": "try:\n    raise ValueError('bad value', 7)\nexcept ValueError as e:\n    res = [str(e), repr(e.args), type(e).__name__]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_args_single",
+  "_setup": "try:\n    raise ValueError('only')\nexcept ValueError as e:\n    res = [str(e), e.args]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_custom_hierarchy",
+  "_setup": "class MyErr(ValueError):\n    pass\ntry:\n    raise MyErr('boom')\nexcept ValueError as e:\n    res = [type(e).__name__, str(e)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_custom_hierarchy_deep",
+  "_setup": "class AppError(Exception):\n    pass\nclass DbError(AppError):\n    pass\ntry:\n    raise DbError('db down')\nexcept AppError as e:\n    res = [type(e).__name__, str(e)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_bare_reraise",
+  "_setup": "def h():\n    try:\n        raise KeyError('k1')\n    except KeyError:\n        raise\ntry:\n    h()\nexcept KeyError as e:\n    res = str(e)",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_raise_from",
+  "_setup": "try:\n    raise RuntimeError('outer') from ValueError('inner')\nexcept RuntimeError as e:\n    res = [str(e), type(e.__cause__).__name__, str(e.__cause__)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_nested_try",
+  "_setup": "def f():\n    try:\n        try:\n            raise ValueError('inner')\n        except KeyError:\n            return 'wrong'\n    except ValueError as e:\n        return 'outer:' + str(e)\nres = f()",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_finally_return",
+  "_setup": "out = []\ndef g():\n    try:\n        return 'R'\n    finally:\n        out.append('fin')\nres = [g(), out]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_finally_break_continue",
+  "_setup": "log = []\nfor i in range(5):\n    try:\n        if i == 1:\n            continue\n        if i == 3:\n            break\n        log.append(i)\n    finally:\n        log.append('f' + str(i))",
+  "expr": "log"
+ },
+ {
+  "id": "r4_e_keyerror_dictmiss",
+  "_setup": "d = {'a': 1}\ntry:\n    v = d['missing']\nexcept KeyError as e:\n    res = [str(e), e.args]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_indexerror",
+  "_setup": "xs = [1, 2]\ntry:\n    v = xs[10]\nexcept IndexError as e:\n    res = str(e)",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_valueerror_int",
+  "_setup": "try:\n    n = int('xyz')\nexcept ValueError as e:\n    res = type(e).__name__",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_zerodiv",
+  "_setup": "try:\n    q = 1 // 0\nexcept ZeroDivisionError as e:\n    res = [type(e).__name__, str(e)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_else_skipped_on_exc",
+  "_setup": "log = []\ntry:\n    log.append('t')\n    raise KeyError('x')\nexcept KeyError:\n    log.append('handled')\nelse:\n    log.append('else')",
+  "expr": "log"
+ },
+ {
+  "id": "r4_e_else_exc_not_caught",
+  "_setup": "out = []\ndef f():\n    try:\n        try:\n            out.append('t')\n        except KeyError:\n            out.append('wrong-handler')\n        else:\n            out.append('else')\n            raise KeyError('from-else')\n    except KeyError as e:\n        out.append('outer:' + str(e))\n    return out\nres = f()",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_swallow_then_flow",
+  "_setup": "log = []\ndef f(x):\n    try:\n        return 10 // x\n    except ZeroDivisionError:\n        return -1\nres = [f(0), f(2), 'after']",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_repr_exc",
+  "_setup": "try:\n    raise ValueError('v')\nexcept ValueError as e:\n    res = repr(e)",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_repr_exc_multi",
+  "_setup": "class PairErr(Exception):\n    pass\ntry:\n    raise PairErr('a', 2)\nexcept Exception as e:\n    res = repr(e)",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_lookuperror_base",
+  "_setup": "d = {}\nxs = []\ndef probe(k):\n    try:\n        if k == 0:\n            return d['x']\n        return xs[5]\n    except LookupError as e:\n        return 'lookup:' + type(e).__name__\nres = [probe(0), probe(1)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_arith_base",
+  "_setup": "try:\n    q = 5 % 0\nexcept ArithmeticError as e:\n    res = type(e).__name__",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_stopiter_catch",
+  "_setup": "it = iter([1])\nnext(it)\ntry:\n    next(it)\nexcept StopIteration as e:\n    res = [type(e).__name__, str(e)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_raise_bare_class",
+  "_setup": "try:\n    raise IndexError\nexcept IndexError as e:\n    res = [type(e).__name__, str(e), e.args]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_e_runtimeerror",
+  "_setup": "try:\n    raise RuntimeError('nope')\nexcept RuntimeError as e:\n    res = [type(e).__name__, str(e)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_lazy_log",
+  "_setup": "log = []\ndef gen():\n    log.append('a')\n    yield 1\n    log.append('b')\n    yield 2\n    log.append('c')\ng = gen()\nx = next(g)\nsnap = list(log)\ny = next(g)\nres = [x, snap, y, list(log)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_partial_consume_default",
+  "_setup": "def gen():\n    yield 10\n    yield 20\ng = gen()\nres = [next(g), next(g), next(g, 'done'), next(g, 'still-done')]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_yield_in_loop_cond",
+  "_setup": "def gen(n):\n    for i in range(n):\n        if i % 2 == 0:\n            yield 'even:' + str(i)\n        else:\n            yield 'odd:' + str(i)\nres = list(gen(4))",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_yield_from_chain",
+  "_setup": "def a():\n    yield 1\n    yield 2\ndef b():\n    yield 0\n    yield from a()\n    yield 3\nres = list(b())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_yield_from_value",
+  "_setup": "def inner():\n    yield 1\n    yield 2\n    return 'ret'\ndef outer():\n    got = yield from inner()\n    yield got\nres = list(outer())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_return_stopiter_value",
+  "_setup": "def gen():\n    yield 1\n    return 'done-val'\ng = gen()\nnext(g)\ntry:\n    next(g)\nexcept StopIteration as e:\n    res = e.value",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_infinite_zip",
+  "_setup": "def evens():\n    n = 0\n    while True:\n        yield n\n        n = n + 2\nres = list(zip(range(3), evens()))",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_sum_feed",
+  "_setup": "def vals():\n    yield 5\n    yield 10\n    yield 15\nres = [sum(vals()), list(vals()), max(vals())]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_comprehension_feed",
+  "_setup": "def vals():\n    yield 1\n    yield 2\n    yield 3\nres = [v * v for v in vals() if v != 2]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_send",
+  "_setup": "def echo():\n    while True:\n        got = yield\n        if got is not None:\n            yield 'got:' + str(got)\ne = echo()\nnext(e)\nres = e.send('hi')",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_close_finally",
+  "_setup": "log = []\ndef gen():\n    try:\n        yield 1\n        yield 2\n    finally:\n        log.append('cleanup')\ng = gen()\nfirst = next(g)\nclosed = g.close()\nres = [first, closed, log]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_throw_caught",
+  "_setup": "def gen():\n    try:\n        yield 'a'\n    except ValueError as e:\n        yield 'caught:' + str(e)\ng = gen()\nv1 = next(g)\nv2 = g.throw(ValueError('boom'))\nres = [v1, v2]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_send_user_class_interop",
+  "_setup": "class Chan:\n    def __init__(self):\n        self.sent = []\n    def send(self, msg):\n        self.sent.append(msg)\n        return len(self.sent)\nc = Chan()\nn = c.send('x')\nres = [n, c.sent]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_gen_of_gens",
+  "_setup": "def inner(n):\n    yield n\n    yield n + 1\ndef outer():\n    for i in range(2):\n        yield from inner(i * 10)\nres = list(outer())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_for_after_partial",
+  "_setup": "def gen():\n    yield 1\n    yield 2\n    yield 3\ng = gen()\nfirst = next(g)\nrest = [v for v in g]\nres = [first, rest]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_g_exception_inside_gen",
+  "_setup": "def gen():\n    yield 1\n    raise ValueError('mid-gen')\ng = gen()\nout = [next(g)]\ntry:\n    next(g)\nexcept ValueError as e:\n    out.append('caught:' + str(e))\nres = out",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_run_basic",
+  "_setup": "import asyncio\nlog = []\nasync def work(n):\n    await asyncio.sleep(0)\n    log.append(n)\n    return n * 2\nasync def main():\n    a = await work(1)\n    b = await work(2)\n    return [a, b]\nres = [asyncio.run(main()), log]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_run_from_import",
+  "_setup": "from asyncio import run, sleep\nasync def main():\n    await sleep(0)\n    return 'done'\nres = run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_gather_order",
+  "_setup": "import asyncio\nlog = []\nasync def slow(tag, n):\n    for _ in range(n):\n        await asyncio.sleep(0)\n    log.append(tag)\n    return tag\nasync def main():\n    pair = await asyncio.gather(slow('x', 3), slow('y', 1))\n    return [pair, list(log)]\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_exc_in_async",
+  "_setup": "import asyncio\nasync def boom():\n    await asyncio.sleep(0)\n    raise ValueError('async-boom')\nasync def safe():\n    try:\n        await boom()\n    except ValueError as e:\n        return 'caught:' + str(e)\n    return 'no'\nres = asyncio.run(safe())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_async_exc_type",
+  "_setup": "import asyncio\nasync def boom():\n    raise KeyError('missing')\nasync def main():\n    try:\n        await boom()\n    except KeyError as e:\n        return [type(e).__name__, str(e)]\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_async_for_protocol",
+  "_setup": "import asyncio\nclass AIter:\n    def __init__(self):\n        self.n = 0\n    def __aiter__(self):\n        return self\n    async def __anext__(self):\n        if self.n >= 3:\n            raise StopAsyncIteration\n        self.n = self.n + 1\n        return self.n\nasync def main():\n    out = []\n    async for v in AIter():\n        out.append(v)\n    return out\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_async_gen",
+  "_setup": "import asyncio\nasync def agen(n):\n    for i in range(n):\n        await asyncio.sleep(0)\n        yield i * 10\nasync def main():\n    out = []\n    async for v in agen(3):\n        out.append(v)\n    return out\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_async_comp",
+  "_setup": "import asyncio\nasync def agen(n):\n    for i in range(n):\n        yield i + 100\nasync def main():\n    return [v async for v in agen(3)]\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_async_with",
+  "_setup": "import asyncio\nlog = []\nclass ACtx:\n    def __init__(self, tag):\n        self.tag = tag\n    async def __aenter__(self):\n        log.append('enter:' + self.tag)\n        return self.tag\n    async def __aexit__(self, exc_type, exc, tb):\n        log.append('exit:' + self.tag)\n        return False\nasync def main():\n    async with ACtx('a') as t:\n        log.append('body:' + t)\n    return list(log)\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_async_with_exc",
+  "_setup": "import asyncio\nlog = []\nclass ACtx:\n    async def __aenter__(self):\n        log.append('enter')\n        return self\n    async def __aexit__(self, exc_type, exc, tb):\n        log.append('exit')\n        return True\nasync def main():\n    async with ACtx():\n        log.append('body')\n        raise ValueError('suppressed')\n    log.append('after')\n    return list(log)\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_await_chain",
+  "_setup": "import asyncio\nasync def g(x):\n    await asyncio.sleep(0)\n    return x + 1\nasync def f():\n    return await g(await g(10))\nres = asyncio.run(f())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_result_used_sync",
+  "_setup": "import asyncio\nasync def compute():\n    return [3, 1, 2]\nvals = asyncio.run(compute())\nres = sorted(vals) + [len(vals)]",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_gather_spread",
+  "_setup": "import asyncio\nasync def sq(x):\n    await asyncio.sleep(0)\n    return x * x\nasync def main():\n    tasks = [sq(i) for i in range(4)]\n    return await asyncio.gather(*tasks)\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_gather_async_gens",
+  "_setup": "import asyncio\nasync def agen(n):\n    for i in range(n):\n        await asyncio.sleep(0)\n        yield i\nasync def total(n):\n    t = 0\n    async for v in agen(n):\n        t = t + v\n    return t\nasync def main():\n    return await asyncio.gather(total(3), total(4))\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r4_a_async_helper_calls",
+  "_setup": "import asyncio\nasync def double(x):\n    return x * 2\nasync def main():\n    out = []\n    for i in range(3):\n        out.append(await double(i))\n    return out\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "r5_ge_next_default_hit",
+  "_setup": "PLAYLISTS = [{'id': 1, 'name': 'A'}, {'id': 2, 'name': 'B'}]",
+  "expr": "next((p['name'] for p in PLAYLISTS if p['id'] == 2), 'none')"
+ },
+ {
+  "id": "r5_ge_next_default_miss",
+  "_setup": "PLAYLISTS = [{'id': 1, 'name': 'A'}, {'id': 2, 'name': 'B'}]",
+  "expr": "next((p for p in PLAYLISTS if p['id'] == 9), None)"
+ },
+ {
+  "id": "r5_ge_next_stopiteration",
+  "_setup": "g = (x for x in [])\ntry:\n    next(g)\n    caught = 'no raise'\nexcept StopIteration:\n    caught = 'StopIteration'",
+  "expr": "caught"
+ },
+ {
+  "id": "r5_ge_iter_identity",
+  "_setup": "g = (x for x in [1, 2, 3])",
+  "expr": "iter(g) is g"
+ },
+ {
+  "id": "r5_ge_single_shot_exhaust",
+  "_setup": "g = (x for x in [1, 2, 3])\nfirst = next(g)\nrest = list(g)\nagain = list(g)",
+  "expr": "(first, rest, again)"
+ },
+ {
+  "id": "r5_ge_sum",
+  "expr": "sum(x * x for x in range(5))"
+ },
+ {
+  "id": "r5_ge_any",
+  "expr": "any(x > 4 for x in [1, 3, 5])"
+ },
+ {
+  "id": "r5_ge_all",
+  "expr": "all(x % 2 == 1 for x in [1, 3, 5])"
+ },
+ {
+  "id": "r5_ge_min_max",
+  "expr": "(min(x * 2 for x in [3, 1, 2]), max(x * 2 for x in [3, 1, 2]))"
+ },
+ {
+  "id": "r5_ge_sorted",
+  "expr": "sorted(x % 5 for x in [7, 3, 11])"
+ },
+ {
+  "id": "r5_ge_join",
+  "expr": "'-'.join(str(x) for x in range(4))"
+ },
+ {
+  "id": "r5_ge_list_tuple",
+  "expr": "(list(x + 1 for x in [1, 2]), tuple(x + 1 for x in [1, 2]))"
+ },
+ {
+  "id": "r5_ge_set_sorted",
+  "expr": "sorted(set(x % 3 for x in range(7)))"
+ },
+ {
+  "id": "r5_ge_dict",
+  "_setup": "pairs = [('ka', 1), ('kb', 2)]",
+  "expr": "dict((k, v * 10) for k, v in pairs)"
+ },
+ {
+  "id": "r5_ge_laziness_order",
+  "_setup": "log = []\ndef probe(x):\n    log.append(x)\n    return x * 2\ng = (probe(x) for x in [1, 2, 3])\nsnapshot_at_creation = list(log)\nfirst = next(g)\nsnapshot_after_one = list(log)",
+  "expr": "(snapshot_at_creation, first, snapshot_after_one, log)"
+ },
+ {
+  "id": "r5_ge_len_typeerror",
+  "_setup": "try:\n    n = len(x for x in [1, 2])\n    caught = 'no raise'\nexcept TypeError:\n    caught = 'TypeError'",
+  "expr": "caught"
+ },
+ {
+  "id": "r5_ge_membership",
+  "expr": "(2 in (x for x in [1, 2, 3]), 9 in (x for x in [1, 2, 3]))"
+ },
+ {
+  "id": "r5_ge_nested_fors",
+  "expr": "list(x * y for x in [1, 2] for y in [3, 4] if x != y)"
+ },
+ {
+  "id": "r5_ge_dict_items",
+  "_setup": "d = {'a': 1, 'b': 2}",
+  "expr": "sorted(k + '=' + str(v) for k, v in d.items())"
+ },
+ {
+  "id": "r5_ge_dict_keys",
+  "_setup": "d = {'a': 1, 'b': 2}",
+  "expr": "sorted(k for k in d.keys())"
+ },
+ {
+  "id": "r5_ge_nested_genexp",
+  "expr": "list(list(j for j in range(i)) for i in range(3))"
+ },
+ {
+  "id": "r5_ge_spread_call",
+  "_setup": "def add3(a, b, c):\n    return a + b + c",
+  "expr": "add3(*(x + 1 for x in [1, 2, 3]))"
+ },
+ {
+  "id": "r5_t_typename_int",
+  "expr": "type(5).__name__"
+ },
+ {
+  "id": "r5_t_typename_str",
+  "expr": "type('s').__name__"
+ },
+ {
+  "id": "r5_t_typename_float",
+  "expr": "type(3.5).__name__"
+ },
+ {
+  "id": "r5_t_typename_bool",
+  "expr": "type(True).__name__"
+ },
+ {
+  "id": "r5_t_typename_list",
+  "expr": "type([]).__name__"
+ },
+ {
+  "id": "r5_t_typename_dict",
+  "expr": "type({}).__name__"
+ },
+ {
+  "id": "r5_t_typename_tuple",
+  "expr": "type(()).__name__"
+ },
+ {
+  "id": "r5_t_typename_set",
+  "expr": "type(set()).__name__"
+ },
+ {
+  "id": "r5_t_typename_none",
+  "expr": "type(None).__name__"
+ },
+ {
+  "id": "r5_t_typename_meta",
+  "expr": "type(type(5)).__name__"
+ },
+ {
+  "id": "r5_t_typename_class_instance",
+  "_setup": "class Foo:\n    pass\nf = Foo()",
+  "expr": "(type(f).__name__, type(Foo).__name__)"
+ },
+ {
+  "id": "r5_t_typename_exception",
+  "_setup": "try:\n    x = 1 / 0\nexcept ZeroDivisionError as e:\n    n = type(e).__name__",
+  "expr": "n"
+ },
+ {
+  "id": "r5_t_type_identity",
+  "expr": "(type(5) == type(7), type(5) == type(3.5), type(True) == type(5), type('a') == type('b'))"
+ },
+ {
+  "id": "r5_s_inline_if_return",
+  "_setup": "def f(x):\n    if x > 1: return 'big'\n    return 'small'",
+  "expr": "(f(5), f(0))"
+ },
+ {
+  "id": "r5_s_inline_if_semicolons",
+  "_setup": "log = []\ndef add(v):\n    if v: log.append(v); log.append(v * 10)\nadd(3)\nadd(0)",
+  "expr": "log"
+ },
+ {
+  "id": "r5_s_inline_while",
+  "_setup": "i = 0\nwhile i < 3: i += 1",
+  "expr": "i"
+ },
+ {
+  "id": "r5_s_inline_for",
+  "_setup": "total = 0\nfor k in range(4): total += k",
+  "expr": "total"
+ },
+ {
+  "id": "r5_s_inline_else",
+  "_setup": "def g(x):\n    if x: return 'yes'\n    else: return 'no'",
+  "expr": "(g(1), g(0))"
+ },
+ {
+  "id": "r5_f_padded_expr",
+  "_setup": "count = 4",
+  "expr": "f\"The number is { 'even' if count % 2 == 0 else 'odd' }.\""
+ },
+ {
+  "id": "r5_f_padded_name",
+  "_setup": "x = 7",
+  "expr": "f\"{ x }\""
+ },
+ {
+  "id": "ta_gather_exc_single",
+  "_setup": "import asyncio\nasync def ok(v):\n    await asyncio.sleep(0)\n    return v\nasync def bad():\n    await asyncio.sleep(0)\n    raise ValueError('g-boom')\nasync def main():\n    try:\n        await asyncio.gather(ok(1), bad(), ok(3))\n    except ValueError as e:\n        return 'caught:' + str(e)\n    return 'no'\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_gather_exc_first_wins",
+  "_setup": "import asyncio\nasync def boom(tag, n):\n    for _ in range(n):\n        await asyncio.sleep(0)\n    raise ValueError(tag)\nasync def main():\n    try:\n        await asyncio.gather(boom('late', 3), boom('early', 1))\n    except ValueError as e:\n        return str(e)\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_sleep0_interleave",
+  "_setup": "import asyncio\nlog = []\nasync def t(tag):\n    log.append(tag + '1')\n    await asyncio.sleep(0)\n    log.append(tag + '2')\nasync def main():\n    await asyncio.gather(t('a'), t('b'))\n    return log\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_run_boundary_exc",
+  "_setup": "import asyncio\nasync def main():\n    await asyncio.sleep(0)\n    raise RuntimeError('top')\ntry:\n    asyncio.run(main())\n    res = 'no'\nexcept RuntimeError as e:\n    res = 'caught:' + str(e)",
+  "expr": "res"
+ },
+ {
+  "id": "ta_sleep_returns_none",
+  "_setup": "import asyncio\nasync def main():\n    return await asyncio.sleep(0)\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_gather_empty",
+  "_setup": "import asyncio\nasync def main():\n    return await asyncio.gather()\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_gather_star_unpack",
+  "_setup": "import asyncio\nasync def w(v):\n    await asyncio.sleep(0)\n    return v * v\nasync def main():\n    coros = [w(2), w(3), w(4)]\n    return await asyncio.gather(*coros)\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_nested_gather",
+  "_setup": "import asyncio\nasync def w(v):\n    await asyncio.sleep(0)\n    return v\nasync def main():\n    return await asyncio.gather(asyncio.gather(w(1), w(2)), w(3))\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_coro_finally_then_raise",
+  "_setup": "import asyncio\nlog = []\nasync def boom():\n    try:\n        await asyncio.sleep(0)\n        raise KeyError('x')\n    finally:\n        log.append('fin')\nasync def main():\n    try:\n        await boom()\n    except KeyError as e:\n        return [str(e), log]\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_custom_exc_gather",
+  "_setup": "import asyncio\nclass AppError(Exception):\n    pass\nasync def bad():\n    await asyncio.sleep(0)\n    raise AppError('custom')\nasync def main():\n    try:\n        await asyncio.gather(bad())\n    except Exception as e:\n        return [type(e).__name__, str(e)]\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_async_default_args",
+  "_setup": "import asyncio\nasync def f(a, b=10):\n    await asyncio.sleep(0)\n    return a + b\nasync def main():\n    return await asyncio.gather(f(1), f(2, 20))\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_coro_returns_none",
+  "_setup": "import asyncio\nasync def noop():\n    pass\nres = asyncio.run(noop())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_gather_arg_order_not_completion",
+  "_setup": "import asyncio\nasync def d(v, n):\n    for _ in range(n):\n        await asyncio.sleep(0)\n    return v\nasync def main():\n    return await asyncio.gather(d('slowest', 4), d('mid', 2), d('fast', 0))\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_try_else_await",
+  "_setup": "import asyncio\nasync def w():\n    await asyncio.sleep(0)\n    return 5\nasync def main():\n    out = []\n    try:\n        v = await w()\n    except Exception:\n        out.append('exc')\n    else:\n        out.append(v + (await w()))\n    return out\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_exc_replaced_in_coro",
+  "_setup": "import asyncio\nasync def bad():\n    try:\n        raise KeyError('k')\n    except KeyError:\n        raise ValueError('replaced')\nasync def main():\n    try:\n        await bad()\n    except ValueError as e:\n        return [type(e).__name__, str(e)]\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_precreated_coros_gather",
+  "_setup": "import asyncio\nlog = []\nasync def t(tag):\n    log.append(tag)\n    await asyncio.sleep(0)\n    return tag.upper()\nasync def main():\n    c1 = t('a')\n    c2 = t('b')\n    pair = await asyncio.gather(c1, c2)\n    return [pair, log]\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_ensure_future_in_coro",
+  "_setup": "import asyncio\nasync def w():\n    await asyncio.sleep(0)\n    return 21\nasync def main():\n    f = asyncio.ensure_future(w())\n    return (await f) * 2\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_gather_return_exceptions",
+  "_setup": "import asyncio\nasync def ok():\n    await asyncio.sleep(0)\n    return 1\nasync def bad():\n    await asyncio.sleep(0)\n    raise ValueError('re-boom')\nasync def main():\n    rs = await asyncio.gather(ok(), bad(), return_exceptions=True)\n    return [rs[0], type(rs[1]).__name__, str(rs[1])]\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_inner_gather_exc_through_outer",
+  "_setup": "import asyncio\nasync def bad():\n    await asyncio.sleep(0)\n    raise IndexError('deep')\nasync def ok():\n    return 0\nasync def main():\n    try:\n        await asyncio.gather(asyncio.gather(ok(), bad()), ok())\n    except IndexError as e:\n        return 'deep:' + str(e)\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_run_kwarg_coro",
+  "_setup": "import asyncio\nasync def f(a=1, b=2):\n    await asyncio.sleep(0)\n    return a * 10 + b\nres = asyncio.run(f(b=7))",
+  "expr": "res"
+ },
+ {
+  "id": "ta_gather_return_exceptions_false",
+  "_setup": "import asyncio\nasync def bad():\n    await asyncio.sleep(0)\n    raise KeyError('kf')\nasync def main():\n    try:\n        await asyncio.gather(bad(), return_exceptions=False)\n    except KeyError as e:\n        return 'raised:' + str(e)\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "ta_gather_return_exceptions_two",
+  "_setup": "import asyncio\nasync def bad(tag, n):\n    for _ in range(n):\n        await asyncio.sleep(0)\n    raise ValueError(tag)\nasync def ok():\n    return 'ok'\nasync def main():\n    rs = await asyncio.gather(bad('b1', 3), ok(), bad('b2', 1), return_exceptions=True)\n    return [str(rs[0]), rs[1], str(rs[2])]\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "mlstr_then_stmt",
+  "_setup": "W = \"\"\"\nfoo\n\"\"\"\nX = 1",
+  "expr": "(W, X)"
+ },
+ {
+  "id": "mlstr_module_docstring_then_stmt",
+  "_setup": "\"\"\"\nmodule doc\n  indented like code\n\"\"\"\nY = 2",
+  "expr": "Y"
+ },
+ {
+  "id": "mlstr_triple_single_then_stmt",
+  "_setup": "a = '''\nx\n'''\nb = 2",
+  "expr": "(a, b)"
+ },
+ {
+  "id": "mlstr_fstring_then_stmt",
+  "_setup": "n = 2\ng = f\"\"\"\nval {n}\n\"\"\"\nh = 3",
+  "expr": "(g, h)"
+ },
+ {
+  "id": "mlstr_closing_line_trailing_tokens",
+  "_setup": "s = len(\"\"\"a\nb\"\"\")\nt = s + 1",
+  "expr": "(s, t)"
+ },
+ {
+  "id": "mlstr_func_docstring_then_body",
+  "_setup": "def f():\n    \"\"\"\n    doc\n    \"\"\"\n    return 7\nz = f()",
+  "expr": "z"
+ },
+ {
+  "id": "mlstr_class_docstring_then_attr",
+  "_setup": "class C:\n    \"\"\"\n    doc\n    \"\"\"\n    v = 9\nc = C()",
+  "expr": "c.v"
+ },
+ {
+  "id": "mlstr_in_if_block_then_stmt",
+  "_setup": "if True:\n    D = \"\"\"\nd\n\"\"\"\n    E = 6\nelse:\n    D = \"\"\n    E = 0",
+  "expr": "(D, E)"
+ },
+ {
+  "id": "mlstr_inside_brackets_then_stmt",
+  "_setup": "L = [\n    \"\"\"\na\n\"\"\",\n    \"b\",\n]\nm = len(L)",
+  "expr": "(L, m)"
+ },
+ {
+  "id": "mlstr_content_looks_like_code",
+  "_setup": "W = \"\"\"\ndef g():\n    return 1\n\"\"\"\nX = 8",
+  "expr": "(W, X)"
+ },
+ {
+  "id": "mlstr_two_adjacent_then_stmt",
+  "_setup": "p = \"\"\"\n1\n\"\"\"\nq = \"\"\"\n2\n\"\"\"\nr = 5",
+  "expr": "(p, q, r)"
+ },
+ {
+  "id": "mlstr_last_stmt_of_setup",
+  "_setup": "k = 1\nW = \"\"\"\nfoo\n\"\"\"",
+  "expr": "(k, W)"
+ },
+ {
+  "id": "re_sub_backref_date",
+  "_setup": "import re",
+  "expr": "re.sub(r'(\\d{4})-(\\d{2})-(\\d{2})', r'\\3-\\2-\\1', '2026-01-02')"
+ },
+ {
+  "id": "re_sub_backref_camel",
+  "_setup": "import re",
+  "expr": "re.sub(r'(\\w)([A-Z])', r'\\1 \\2', 'PythonProgrammingExamples')"
+ },
+ {
+  "id": "re_sub_g_number",
+  "_setup": "import re",
+  "expr": "re.sub(r'(\\w+) (\\w+)', r'\\g<2> \\g<1>', 'hello world')"
+ },
+ {
+  "id": "re_sub_g_zero",
+  "_setup": "import re",
+  "expr": "re.sub('a', r'[\\g<0>]', 'banana')"
+ },
+ {
+  "id": "re_sub_dollar_literal",
+  "_setup": "import re",
+  "expr": "re.sub('n', '$&', 'banana')"
+ },
+ {
+  "id": "re_sub_count_limit",
+  "_setup": "import re",
+  "expr": "re.sub('a', 'b', 'banana', 2)"
+ },
+ {
+  "id": "re_sub_unmatched_group_empty",
+  "_setup": "import re",
+  "expr": "re.sub('(a)|(b)', r'X\\2Y', 'a')"
+ },
+ {
+  "id": "re_sub_zero_width",
+  "_setup": "import re",
+  "expr": "re.sub('x*', '-', 'axbc')"
+ },
+ {
+  "id": "re_subn_tuple",
+  "_setup": "import re",
+  "expr": "re.subn('a', 'b', 'banana')"
+ },
+ {
+  "id": "re_match_repr_search",
+  "_setup": "import re\nm = re.search('n+', 'banana')",
+  "expr": "m"
+ },
+ {
+  "id": "re_match_repr_quotes",
+  "_setup": "import re\nm = re.search(\"'.*'\", \"say 'hi' now\")",
+  "expr": "m"
+ },
+ {
+  "id": "re_match_group_multi",
+  "_setup": "import re\nm = re.match(r'(\\w+) (\\w+)', 'hello world extra')",
+  "expr": "m.group(1, 2)"
+ },
+ {
+  "id": "re_match_groups_tuple",
+  "_setup": "import re\nm = re.match(r'(\\w+) (\\w+)', 'hello world extra')",
+  "expr": "m.groups()"
+ },
+ {
+  "id": "re_match_span_subgroup",
+  "_setup": "import re\nm = re.match(r'(\\w+) (\\w+)', 'hello world extra')",
+  "expr": "(m.span(1), m.span(2), m.start(2), m.end(1))"
+ },
+ {
+  "id": "re_match_unmatched_group",
+  "_setup": "import re\nm = re.search('(a)|(b)', 'a')",
+  "expr": "(m.span(2), m.group(2), m.groups())"
+ },
+ {
+  "id": "re_match_re_pattern",
+  "_setup": "import re\nm = re.search('fox', 'The quick brown fox')",
+  "expr": "(m.re.pattern, m.start(), m.end())"
+ },
+ {
+  "id": "re_findall_multigroup_tuples",
+  "_setup": "import re",
+  "expr": "re.findall('(a)|(b)', 'ab')"
+ },
+ {
+  "id": "re_findall_zero_width",
+  "_setup": "import re",
+  "expr": "re.findall('x*', 'axb')"
+ },
+ {
+  "id": "re_finditer_spans",
+  "_setup": "import re",
+  "expr": "[m.span() for m in re.finditer('x*', 'axb')]"
+ },
+ {
+  "id": "re_compiled_to_match",
+  "_setup": "import re\nrx = re.compile('(?:http|ftp)s?://', re.IGNORECASE)",
+  "expr": "(re.match(rx, 'HTTP://google.com') is not None, re.match(rx, 'hi') is None)"
+ },
+ {
+  "id": "re_compiled_to_sub",
+  "_setup": "import re",
+  "expr": "re.sub(re.compile('a'), 'b', 'banana')"
+ },
+ {
+  "id": "re_compiled_findall_split",
+  "_setup": "import re",
+  "expr": "(re.findall(re.compile('[ab]'), 'abc'), re.split(re.compile('-'), 'a-b-c'))"
+ },
+ {
+  "id": "re_pattern_repr",
+  "_setup": "import re",
+  "expr": "re.compile('fox')"
+ },
+ {
+  "id": "re_pattern_methods",
+  "_setup": "import re\np = re.compile('fox')",
+  "expr": "(p.pattern, p.sub('X', 'fox fox'), p.findall('fox fox'), p.match('foxy').group(0))"
+ },
+ {
+  "id": "re_match_re_pattern_compiled",
+  "_setup": "import re\nm = re.compile('fox').search('The quick brown fox')",
+  "expr": "(m.re.pattern, m.start(), m.end())"
+ },
+ {
+  "id": "re_named_groups",
+  "_setup": "import re\nm = re.search(r'(?P<first>\\w+) (?P<second>\\w+)', 'hello world')",
+  "expr": "(m.group('first'), m.group('second'), m.span('second'))"
+ },
+ {
+  "id": "re_named_groupdict",
+  "_setup": "import re\nm = re.search(r'(?P<first>\\w+) (?P<second>\\w+)', 'hello world')",
+  "expr": "m.groupdict()"
+ },
+ {
+  "id": "re_sub_g_name",
+  "_setup": "import re",
+  "expr": "re.sub(r'(?P<a>\\w+) (?P<b>\\w+)', r'\\g<b> \\g<a>', 'hello world')"
+ },
+ {
+  "id": "re_named_backref_pattern",
+  "_setup": "import re",
+  "expr": "re.search('(?P<ch>.)(?P=ch)', 'abbc').group(0)"
+ },
+ {
+  "id": "pbt1_slice_oob_negstep_start_list",
+  "expr": "['a', 'b'][7::-1]"
+ },
+ {
+  "id": "pbt1_slice_oob_pos_list",
+  "expr": "[1, 2, 3][10:100]"
+ },
+ {
+  "id": "pbt1_slice_oob_negstep_str",
+  "expr": "'xy'[5::-1]"
+ },
+ {
+  "id": "pbt1_slice_oob_pos_str",
+  "expr": "'abc'[10:100]"
+ },
+ {
+  "id": "pbt1_slice_oob_neg_start_negstep_empty",
+  "expr": "[1, 2, 3][-9::-1]"
+ },
+ {
+  "id": "pbt1_slice_oob_negstep_stop",
+  "expr": "[1, 2, 3][5:-9:-1]"
+ },
+ {
+  "id": "pbt1_slice_oob_pos_start_step2",
+  "expr": "[1, 2, 3, 4, 5][9:100:2]"
+ },
+ {
+  "id": "pbt1_slice_wrongdir_empty",
+  "expr": "[1, 2, 3][0:2:-1]"
+ },
+ {
+  "id": "pbt1_setslice_oob_negstep",
+  "_setup": "l = [1, 2, 3]\nl[7::-1] = [7, 8, 9]",
+  "expr": "l"
+ },
+ {
+  "id": "pbt1_setslice_oob_ext_empty",
+  "_setup": "l = [1, 2, 3]\nl[10:100:2] = []",
+  "expr": "l"
+ },
+ {
+  "id": "pbt1_setslice_oob_simple",
+  "_setup": "l = [1, 2, 3]\nl[10:100] = [4]",
+  "expr": "l"
+ },
+ {
+  "id": "pbt2_zero_iter_local_raises",
+  "_setup": "def f():\n    for v1 in []:\n        pass\n    return v1\ntry:\n    r = f()\nexcept UnboundLocalError:\n    r = 'ULE'",
+  "expr": "r"
+ },
+ {
+  "id": "pbt2_zero_iter_local_exc_name",
+  "_setup": "def g():\n    try:\n        for v2 in []:\n            pass\n        return v2\n    except Exception as e:\n        return type(e).__name__",
+  "expr": "g()"
+ },
+ {
+  "id": "pbt2_zero_iter_module_nameerror",
+  "_setup": "for q1 in []:\n    pass\ntry:\n    v = q1\nexcept NameError as e:\n    v = type(e).__name__",
+  "expr": "v"
+ },
+ {
+  "id": "pbt2_nonempty_leak_pin_269",
+  "_setup": "def f():\n    for i in [1, 2, 3]:\n        pass\n    return i",
+  "expr": "f()"
+ },
+ {
+  "id": "pbt2_sibling_loops_pin_270",
+  "_setup": "def f():\n    for j in [1, 2]:\n        pass\n    for j in [7, 8, 9]:\n        pass\n    return j",
+  "expr": "f()"
+ },
+ {
+  "id": "pbt2_cond_assign_then_zero_iter",
+  "_setup": "def f(flag):\n    if flag:\n        x = 42\n    for x in []:\n        pass\n    return x",
+  "expr": "f(True)"
+ },
+ {
+  "id": "pbt2_preassigned_zero_iter_keeps_value",
+  "_setup": "def f():\n    x = 5\n    for x in []:\n        pass\n    return x",
+  "expr": "f()"
+ },
+ {
+  "id": "pbt2_zero_iter_aug_read",
+  "_setup": "def f():\n    for t in []:\n        pass\n    try:\n        t += 1\n        return t\n    except UnboundLocalError:\n        return 'ULE'",
+  "expr": "f()"
+ },
+ {
+  "id": "pbt2_walrus_after_zero_iter",
+  "_setup": "def f():\n    for i in []:\n        pass\n    if (i := 10) > 5:\n        return i",
+  "expr": "f()"
+ },
+ {
+  "id": "pbt2_match_capture_after_zero_iter",
+  "_setup": "def g():\n    for u in []:\n        pass\n    match 5:\n        case u:\n            pass\n    return u",
+  "expr": "g()"
+ },
+ {
+  "id": "pbt2_comp_var_then_loop_target",
+  "_setup": "def f(nums):\n    ones = [i for i in range(len(nums)) if nums[i] == 1]\n    for i in range(1, len(ones)):\n        pass\n    return ones",
+  "expr": "f([0, 1, 1, 0, 1])"
+ },
+ {
+  "id": "pbt3_same_quote_empty",
+  "expr": "f'{''}' + 'z'"
+ },
+ {
+  "id": "pbt3_same_quote_str",
+  "expr": "f'val: {'Hello, World!'}'"
+ },
+ {
+  "id": "pbt3_same_quote_var_concat",
+  "_setup": "v = 'z'",
+  "expr": "f'{''}' + f'{v}'"
+ },
+ {
+  "id": "pbt3_same_quote_method",
+  "expr": "f'{'abc'.upper()}'"
+ },
+ {
+  "id": "pbt3_same_quote_dict_key",
+  "_setup": "d = {'k': 7}",
+  "expr": "f'{d['k']}'"
+ },
+ {
+  "id": "pbt3_diff_quote_still_ok",
+  "expr": "f\"{'ok'}\""
+ },
+ {
+  "id": "pbt3_same_quote_with_spec",
+  "expr": "f'{'ab':>5}'"
+ },
+ {
+  "id": "pbt3_same_quote_join",
+  "_setup": "xs = ['a', 'b']",
+  "expr": "f'{','.join(xs)}'"
+ },
+ {
+  "id": "pbt3_double_quote_reuse",
+  "expr": "f\"x{\"y\"}z\""
+ },
+ {
+  "id": "pbt3_brace_dict_no_quotes",
+  "expr": "f'{ {1: 2}[1] }'"
+ },
+ {
+  "id": "pbt3_nested_fstring_diff_quote",
+  "_setup": "n = 3",
+  "expr": "f'{f\"{n}\"}!'"
+ },
+ {
+  "id": "pbt3_same_quote_conversion",
+  "expr": "f'{'a'!r}'"
+ },
+ {
+  "id": "pbt3_colon_inside_same_quote_str",
+  "expr": "f'{'a:b'}'"
+ },
+ {
+  "id": "pbt3_close_brace_inside_str",
+  "expr": "f'{'}'}'"
+ },
+ {
+  "id": "pbt3_open_brace_inside_str",
+  "expr": "f'{'{'}'"
+ },
+ {
+  "id": "pbt3_same_quote_concat_expr",
+  "_setup": "s = 'q'",
+  "expr": "f'-{s + 'w'}-'"
+ },
+ {
+  "id": "exc_class_index_oob",
+  "_setup": "try:\n    _x = [][0]\nexcept Exception as e:\n    r = type(e).__name__",
+  "expr": "r"
+ },
+ {
+  "id": "exc_class_str_index_oob",
+  "_setup": "try:\n    _x = 'ab'[9]\nexcept Exception as e:\n    r = type(e).__name__",
+  "expr": "r"
+ },
+ {
+  "id": "exc_class_key_missing",
+  "_setup": "try:\n    _x = {}['missing']\nexcept Exception as e:\n    r = type(e).__name__",
+  "expr": "r"
+ },
+ {
+  "id": "exc_class_zerodiv_truediv",
+  "_setup": "try:\n    _x = 5 / 0\nexcept Exception as e:\n    r = type(e).__name__",
+  "expr": "r"
+ },
+ {
+  "id": "exc_class_zerodiv_floordiv",
+  "_setup": "try:\n    _x = 5 // 0\nexcept Exception as e:\n    r = type(e).__name__",
+  "expr": "r"
+ },
+ {
+  "id": "exc_class_zerodiv_mod",
+  "_setup": "try:\n    _x = 5 % 0\nexcept Exception as e:\n    r = type(e).__name__",
+  "expr": "r"
+ },
+ {
+  "id": "exc_class_unbound_local",
+  "_setup": "def f():\n    v = v + 1\n    return v\ntry:\n    f()\nexcept Exception as e:\n    r = type(e).__name__",
+  "expr": "r"
+ },
+ {
+  "id": "exc_class_name_error",
+  "_setup": "try:\n    _x = totally_undefined_name\nexcept Exception as e:\n    r = type(e).__name__",
+  "expr": "r"
+ },
+ {
+  "id": "exc_class_custom_preserved",
+  "_setup": "class MyErr(Exception):\n    pass\ntry:\n    raise MyErr('boom')\nexcept Exception as e:\n    r = type(e).__name__",
+  "expr": "r"
+ },
+ {
+  "id": "exc_catch_unbound_local",
+  "_setup": "def f():\n    v = v + 1\n    return v\ntry:\n    f()\n    r = 'no-raise'\nexcept UnboundLocalError:\n    r = 'caught'",
+  "expr": "r"
+ },
+ {
+  "id": "exc_catch_name_error",
+  "_setup": "try:\n    _x = totally_undefined_name\n    r = 'no-raise'\nexcept NameError:\n    r = 'caught'",
+  "expr": "r"
+ },
+ {
+  "id": "num_is_integer_whole",
+  "expr": "(4.0).is_integer()"
+ },
+ {
+  "id": "num_is_integer_frac",
+  "expr": "(4.5).is_integer()"
+ },
+ {
+  "id": "num_is_integer_sqrt",
+  "_setup": "import math\nr = math.sqrt(9).is_integer()",
+  "expr": "r"
+ },
+ {
+  "id": "num_is_integer_filter",
+  "_setup": "import math\nr = list(filter(lambda x: math.sqrt(x).is_integer(), range(1, 30)))",
+  "expr": "r"
+ },
+ {
+  "id": "map_multi_two_iters",
+  "_setup": "r = list(map(lambda x, y: x + y, [1,2,3], [10,20,30]))",
+  "expr": "r"
+ },
+ {
+  "id": "map_multi_shortest",
+  "_setup": "r = list(map(lambda a, b: a - b, [1,2,3], [10,20]))",
+  "expr": "r"
+ },
+ {
+  "id": "map_multi_three_iters",
+  "_setup": "r = list(map(lambda x, y, z: x+y+z, [1,2], [10,20], [100,200]))",
+  "expr": "r"
+ },
+ {
+  "id": "map_single_int",
+  "_setup": "r = list(map(int, ['1','2','3']))",
+  "expr": "r"
+ },
+ {
+  "id": "map_over_dict_keys",
+  "_setup": "d = {'a': 1, 'b': 2}\nr = sorted(map(lambda k: k, d))",
+  "expr": "r"
+ },
+ {
+  "id": "map_multi_range",
+  "_setup": "r = list(map(lambda a, b: a - b, range(5), range(3)))",
+  "expr": "r"
+ },
+ {
+  "id": "pbt6_unicode_ident_umlaut",
+  "_setup": "übervar = 40\ncafé = 2\nr = übervar + café",
+  "expr": "r"
+ },
+ {
+  "id": "pbt6_unicode_ident_cjk",
+  "_setup": "变量 = 7\nr = 变量 * 6",
+  "expr": "r"
+ },
+ {
+  "id": "pbt6_unicode_ident_greek",
+  "_setup": "Ωmega = 5\nαβγ = 3\nr = Ωmega - αβγ",
+  "expr": "r"
+ },
+ {
+  "id": "pbt6_unicode_ident_func",
+  "_setup": "def función(café):\n    return café + 1\nr = función(41)",
+  "expr": "r"
+ },
+ {
+  "id": "pbt6_unicode_ident_mixed_continue",
+  "_setup": "var_ü2 = 9\nr = var_ü2",
+  "expr": "r"
+ },
+ {
+  "id": "pbt7_repr_fixed_raises",
+  "_setup": "x = 3.14159\ntry:\n    r = f'{x!r:.3f}'\nexcept ValueError:\n    r = 'ValueError'",
+  "expr": "r"
+ },
+ {
+  "id": "pbt7_str_fixed_raises",
+  "_setup": "x = 42\ntry:\n    r = f'{x!s:.2f}'\nexcept ValueError:\n    r = 'ValueError'",
+  "expr": "r"
+ },
+ {
+  "id": "pbt7_repr_decimal_raises",
+  "_setup": "x = 42\ntry:\n    r = f'{x!r:d}'\nexcept ValueError:\n    r = 'ValueError'",
+  "expr": "r"
+ },
+ {
+  "id": "pbt7_repr_str_align_ok",
+  "_setup": "x = 42\nr = f'{x!r:>5}'",
+  "expr": "r"
+ },
+ {
+  "id": "pbt7_plain_fixed_ok",
+  "_setup": "x = 3.14159\nr = f'{x:.3f}'",
+  "expr": "r"
+ },
+ {
+  "id": "pbt7_repr_no_spec_ok",
+  "_setup": "x = 3.5\nr = f'{x!r}'",
+  "expr": "r"
+ },
+ {
+  "id": "pbt7_str_precision_ok",
+  "_setup": "r = f'{\"hello\":.3}'",
+  "expr": "r"
+ },
+ {
+  "id": "bool_range_start",
+  "expr": "list(range(True, 5))"
+ },
+ {
+  "id": "bool_range_stop",
+  "expr": "list(range(True))"
+ },
+ {
+  "id": "bool_range_step",
+  "_setup": "r = list(range(0, 5, True))",
+  "expr": "r"
+ },
+ {
+  "id": "bool_round_value",
+  "expr": "round(True)"
+ },
+ {
+  "id": "bool_round_ndigits",
+  "expr": "round(3.7, True)"
+ },
+ {
+  "id": "bool_sum",
+  "expr": "sum([True, False, True, True])"
+ },
+ {
+  "id": "bool_index_list",
+  "_setup": "r = [10, 20, 30][True]",
+  "expr": "r"
+ },
+ {
+  "id": "bool_add",
+  "expr": "True + True"
+ },
+ {
+  "id": "bigint_lshift_assign",
+  "_setup": "a = 1\na <<= 60",
+  "expr": "a"
+ },
+ {
+  "id": "bigint_rshift_assign",
+  "_setup": "b = 2**64\nb >>= 4",
+  "expr": "b"
+ },
+ {
+  "id": "bigint_lshift_assign_subscript",
+  "_setup": "xs = [1]\nxs[0] <<= 50",
+  "expr": "xs[0]"
+ },
+ {
+  "id": "bigint_shift_loop_terminates",
+  "_setup": "n = 1\nc = 0\nwhile n < 2**70:\n    n <<= 1\n    c += 1",
+  "expr": "c"
+ },
+ {
+  "id": "bigint_rshift_assign_small",
+  "_setup": "v = 1024\nv >>= 3",
+  "expr": "v"
+ },
+ {
+  "id": "bigint_add_assign_subscript",
+  "_setup": "xs = [1]\nxs[0] += 2**60",
+  "expr": "xs[0]"
+ },
+ {
+  "id": "bigint_mul_assign_subscript",
+  "_setup": "ys = [3]\nys[0] *= 2**60",
+  "expr": "ys[0]"
+ },
+ {
+  "id": "bigint_pow_assign_subscript",
+  "_setup": "vs = [2**40]\nvs[0] **= 2",
+  "expr": "vs[0]"
+ },
+ {
+  "id": "bigint_and_assign_subscript",
+  "_setup": "zs = [2**40]\nzs[0] &= 2**41 - 1",
+  "expr": "zs[0]"
+ },
+ {
+  "id": "math_sqrt_bigint",
+  "_setup": "import math\nr = math.sqrt(2 * math.pow(10, 19))",
+  "expr": "round(r)"
+ },
+ {
+  "id": "math_sqrt_big_int_literal",
+  "_setup": "import math\nr = round(math.sqrt(10**30))",
+  "expr": "r"
+ },
+ {
+  "id": "math_log_bigint",
+  "_setup": "import math\nr = round(math.log10(10**18))",
+  "expr": "r"
+ },
+ {
+  "id": "math_isfinite_bigint",
+  "_setup": "import math\nr = math.isfinite(10**30)",
+  "expr": "r"
+ },
+ {
+  "id": "isinstance_type_int",
+  "_setup": "x = 5\nr = isinstance(x, type(x))",
+  "expr": "r"
+ },
+ {
+  "id": "isinstance_type_str",
+  "expr": "isinstance('a', type('b'))"
+ },
+ {
+  "id": "isinstance_type_none",
+  "expr": "isinstance(None, type(None))"
+ },
+ {
+  "id": "isinstance_type_list",
+  "_setup": "r = isinstance([1], type([2]))",
+  "expr": "r"
+ },
+ {
+  "id": "isinstance_type_tuple",
+  "_setup": "r = isinstance((1,), type((2,)))",
+  "expr": "r"
+ },
+ {
+  "id": "isinstance_type_mismatch",
+  "_setup": "r = isinstance('a', type(5))",
+  "expr": "r"
+ },
+ {
+  "id": "isinstance_type_custom",
+  "_setup": "class C:\n    pass\nr = isinstance(C(), type(C()))",
+  "expr": "r"
+ },
+ {
+  "id": "strformat_list",
+  "expr": "'{0}'.format([1, 2, 3])"
+ },
+ {
+  "id": "strformat_dict",
+  "expr": "'{}'.format({'a': 1})"
+ },
+ {
+  "id": "strformat_tuple_bool",
+  "expr": "'{} and {}'.format((1, 2), True)"
+ },
+ {
+  "id": "strformat_named_list",
+  "_setup": "r = 'val={x}'.format(x=[1, 2])",
+  "expr": "r"
+ },
+ {
+  "id": "strformat_none",
+  "expr": "'{}'.format(None)"
+ },
+ {
+  "id": "strformat_set",
+  "expr": "'{}'.format({1, 2})"
+ },
+ {
+  "id": "groupby_list_keys",
+  "_setup": "from itertools import groupby\nr = [k for k, g in groupby([[1,2],[1,2],[3],[3],[1,2]])]",
+  "expr": "r"
+ },
+ {
+  "id": "groupby_counts",
+  "_setup": "from itertools import groupby\nr = [(k, len(list(g))) for k, g in groupby([1,1,2,2,2,1])]",
+  "expr": "r"
+ },
+ {
+  "id": "groupby_bool_int",
+  "_setup": "from itertools import groupby\nr = [k for k, g in groupby([True, 1, 1.0, 2])]",
+  "expr": "r"
+ },
+ {
+  "id": "groupby_tuple_keys",
+  "_setup": "from itertools import groupby\nr = [k for k, g in groupby([(1,2),(1,2),(3,4)])]",
+  "expr": "r"
+ },
+ {
+  "id": "deque_pop",
+  "_setup": "from collections import deque\nd = deque([1,2,3])\nr = d.pop()",
+  "expr": "r"
+ },
+ {
+  "id": "deque_pop_then_bool",
+  "_setup": "from collections import deque\nd = deque()\nd.append(1)\nd.pop()\nr = not d",
+  "expr": "r"
+ },
+ {
+  "id": "deque_balanced_parens",
+  "_setup": "from collections import deque\ndef bal(s):\n    st = deque()\n    for c in s:\n        if c == '(':\n            st.append(c)\n        elif c == ')':\n            if not st:\n                return False\n            st.pop()\n    return not st\nr = [bal('(())'), bal('(()')]",
+  "expr": "r"
+ },
+ {
+  "id": "deque_popleft",
+  "_setup": "from collections import deque\nd = deque([1,2,3])\nr = [d.popleft(), d.pop(), list(d)]",
+  "expr": "r"
+ },
+ {
+  "id": "async_for_accumulate",
+  "_setup": "import asyncio\nasync def agen(n):\n    for i in range(n):\n        yield i * i\nasync def main():\n    total = 0\n    async for v in agen(5):\n        total += v\n    return total\nres = asyncio.run(main())",
+  "expr": "res"
+ },
+ {
+  "id": "bigint_abs_neg",
+  "_setup": "big = 9223372036854775807\nr = abs(-big)",
+  "expr": "r"
+ },
+ {
+  "id": "bigint_abs_pos",
+  "_setup": "big = 2**80\nr = abs(big)",
+  "expr": "r"
+ },
+ {
+  "id": "bigint_abs_from_index",
+  "_setup": "r = abs(-[2, 9223372036854775807, -2][1])",
+  "expr": "r"
+ },
+ {
+  "id": "bigint_abs_small_neg",
+  "expr": "abs(-2**70)"
+ },
+ {
+  "id": "exc_subclass_init_no_super_attr",
+  "_setup": "class ParseError(ValueError):\n    def __init__(self, code):\n        self.code = code\ne = ParseError(3)",
+  "expr": "e.code"
+ },
+ {
+  "id": "exc_subclass_init_no_super_catchable",
+  "_setup": "class ParseError(ValueError):\n    def __init__(self, code):\n        self.code = code\ndef f():\n    try:\n        raise ParseError(7)\n    except ValueError as e:\n        return e.code",
+  "expr": "f()"
+ },
+ {
+  "id": "recv_param_list_append",
+  "_setup": "def add(xs, v):\n    xs.append(v)\n    return xs",
+  "expr": "add([1], 2)"
+ },
+ {
+  "id": "recv_param_list_extend_insert",
+  "_setup": "def f(xs):\n    xs.insert(0, 9)\n    xs.extend([4, 5])\n    return xs",
+  "expr": "f([1])"
+ },
+ {
+  "id": "recv_param_set_discard",
+  "_setup": "def f(s):\n    s.discard(2)\n    s.discard(99)\n    return sorted(s)",
+  "expr": "f({1, 2, 3})"
+ },
+ {
+  "id": "recv_str_find_start_end",
+  "expr": "'hello hello'.find('l', 4, 9)"
+ },
+ {
+  "id": "recv_str_find_negative_start",
+  "expr": "'abcabc'.find('b', -3)"
+ },
+ {
+  "id": "recv_str_find_param",
+  "_setup": "def f(s):\n    return s.find('l')",
+  "expr": "f('hello')"
+ },
+ {
+  "id": "recv_user_class_append",
+  "_setup": "class Box:\n    def __init__(self):\n        self.items = []\n    def append(self, v):\n        self.items.append(v * 10)\nb = Box()\nb.append(1)\nb.append(2)",
+  "expr": "b.items"
+ },
+ {
+  "id": "recv_user_class_get",
+  "_setup": "class Cfg:\n    def get(self, k):\n        return k * 2\nc = Cfg()",
+  "expr": "c.get(3)"
+ },
+ {
+  "id": "recv_user_class_find",
+  "_setup": "class Doc:\n    def find(self, q):\n        return 42\nd = Doc()",
+  "expr": "d.find('x')"
+ },
+ {
+  "id": "recv_user_class_insert_extend",
+  "_setup": "class L:\n    def __init__(self):\n        self.log = []\n    def insert(self, i, v):\n        self.log.append(('i', i, v))\n    def extend(self, it):\n        self.log.append(('e', len(it)))\nl = L()\nl.insert(0, 5)\nl.extend([1, 2, 3])",
+  "expr": "l.log"
+ },
+ {
+  "id": "recv_user_class_replace_join",
+  "_setup": "class T:\n    def replace(self, a, b):\n        return a + b\n    def join(self, xs):\n        return len(xs)\nt = T()",
+  "expr": "(t.replace(1, 2), t.join([1, 2, 3]))"
+ },
+ {
+  "id": "i288_tuple_target_leak",
+  "_setup": "def f():\n    for a, b in [(1, 2), (3, 4)]:\n        pass\n    return (a, b)",
+  "expr": "f()"
+ },
+ {
+  "id": "i288_tuple_target_zero_iter_raises",
+  "_setup": "def f():\n    for a, b in []:\n        pass\n    try:\n        return a\n    except UnboundLocalError:\n        return 'ULE'",
+  "expr": "f()"
+ },
+ {
+  "id": "i288_tuple_target_module_leak",
+  "_setup": "for ta, tb in [(1, 2), (3, 4)]:\n    pass",
+  "expr": "(ta, tb)"
+ },
+ {
+  "id": "i288_tuple_target_module_zero_iter_nameerror",
+  "_setup": "for tz1, tz2 in []:\n    pass\ntry:\n    v = tz1\nexcept NameError as e:\n    v = type(e).__name__",
+  "expr": "v"
+ },
+ {
+  "id": "i288_nested_tuple_target_leak",
+  "_setup": "def f():\n    for i, (j, k) in [(1, (2, 3)), (4, (5, 6))]:\n        pass\n    return (i, j, k)",
+  "expr": "f()"
+ },
+ {
+  "id": "i288_star_tuple_target_leak",
+  "_setup": "def f():\n    for a, *rest in [(1, 2, 3), (7, 8, 9)]:\n        pass\n    return (a, rest)",
+  "expr": "f()"
+ },
+ {
+  "id": "i288_tuple_target_body_reassign_leak",
+  "_setup": "def f(pairs):\n    for k, v in pairs:\n        v = v * 10\n    return (k, v)",
+  "expr": "f([(1, 2), (3, 4)])"
+ },
+ {
+  "id": "i288_preassigned_simple_target_writes",
+  "_setup": "def g():\n    x = 5\n    for x in [1, 2]:\n        pass\n    return x",
+  "expr": "g()"
+ },
+ {
+  "id": "i288_preassigned_module_target_writes",
+  "_setup": "px = 5\nfor px in [1, 2]:\n    pass",
+  "expr": "px"
+ },
+ {
+  "id": "i288_preassigned_tuple_target_writes",
+  "_setup": "def g():\n    a = 100\n    b = 200\n    for a, b in [(1, 2), (3, 4)]:\n        pass\n    return (a, b)",
+  "expr": "g()"
+ },
+ {
+  "id": "i288_param_target_writes",
+  "_setup": "def m(p):\n    for p, q in [(9, 10)]:\n        pass\n    return (p, q)",
+  "expr": "m(1)"
+ },
+ {
+  "id": "i288_preassigned_zero_iter_keeps_value_tuple",
+  "_setup": "def g():\n    a = 100\n    b = 200\n    for a, b in []:\n        pass\n    return (a, b)",
+  "expr": "g()"
+ },
+ {
+  "id": "i288_tuple_target_dict_items_leak",
+  "_setup": "def f(d):\n    for k, v in d.items():\n        pass\n    return (k, v)",
+  "expr": "f({'x': 1, 'y': 2})"
+ },
+ {
+  "id": "i288_match_list_subject",
+  "_setup": "def f():\n    match [7]:\n        case [x]:\n            return ('list', x)",
+  "expr": "f()"
+ },
+ {
+  "id": "i288_match_paren_subject",
+  "_setup": "def f():\n    match (8):\n        case y:\n            return ('paren', y)",
+  "expr": "f()"
+ },
+ {
+  "id": "i288_match_name_subscript_still_expr",
+  "_setup": "match = [10, 20, 30]\nsub = match[1]\nsl = match[1:]",
+  "expr": "(sub, sl)"
+ },
+ {
+  "id": "i297_set_bool_int_float_collapse",
+  "expr": "len(set([1, True, 1.0]))"
+ },
+ {
+  "id": "i297_set_literal_mixed_collapse",
+  "expr": "len({1, True, 2, False, 0})"
+ },
+ {
+  "id": "i297_set_first_inserted_repr_int",
+  "expr": "{1, True}"
+ },
+ {
+  "id": "i297_set_first_inserted_repr_bool",
+  "expr": "{True, 1}"
+ },
+ {
+  "id": "i297_set_add_collapses",
+  "_setup": "u = set()\nu.add(True)\nu.add(1)",
+  "expr": "(u, len(u))"
+ },
+ {
+  "id": "i297_set_discard_bool_int",
+  "_setup": "u = {True, 2}\nu.discard(1)",
+  "expr": "u"
+ },
+ {
+  "id": "i297_set_membership_identity",
+  "expr": "(1 in {True}, True in {1}, 2.0 in {2})"
+ },
+ {
+  "id": "i297_tuple_in_set",
+  "expr": "(1, 2) in {(1, 2), (3, 4)}"
+ },
+ {
+  "id": "i297_tuple_set_intersection",
+  "expr": "sorted({(1, 2), (5, 6)} & {(1, 2)})"
+ },
+ {
+  "id": "i297_set_union_bool_int",
+  "expr": "len({True} | {1, 2})"
+ },
+ {
+  "id": "i297_set_difference_bool_int",
+  "expr": "{1, 2} - {True}"
+ },
+ {
+  "id": "i297_set_symdiff_bool_int",
+  "expr": "({1, 2} ^ {True})"
+ },
+ {
+  "id": "i297_set_method_union_identity",
+  "expr": "len({True}.union([1, 1.0], [2]))"
+ },
+ {
+  "id": "i297_set_intersection_list_arg",
+  "expr": "{True, 2}.intersection([1])"
+ },
+ {
+  "id": "i297_unbound_intersection_260",
+  "_setup": "a = {1, 2}\nb = {True, 2}\nx = set.intersection(a, b)",
+  "expr": "sorted(x)"
+ },
+ {
+  "id": "i297_set_eq_bool_int",
+  "expr": "{True, 2} == {1, 2}"
+ },
+ {
+  "id": "i297_setcomp_collapse",
+  "expr": "len({x % 2 == 0 for x in range(4)} | {0})"
+ },
+ {
+  "id": "i297_frozenset_ctor",
+  "expr": "len(frozenset([1, True, 3]))"
+ },
+ {
+  "id": "i297_set_of_dict_keys",
+  "expr": "sorted(set({'a': 1, 'b': 2}))"
+ },
+ {
+  "id": "i297_set_copy_keeps_canonical",
+  "_setup": "s = {True, 2}\nt = s.copy()\nt.add(1)",
+  "expr": "(t, len(t))"
+ },
+ {
+  "id": "i297_sorted_set_bool",
+  "expr": "sorted({True, 2, 0})"
+ },
+ {
+  "id": "i297_pd_write_first_key_repr",
+  "_setup": "d = {}\nd[1] = 't'\nd[True] = 'x'\ne = {}\ne[True] = 'a'\ne[1] = 'b'",
+  "expr": "(d, e)"
+ },
+ {
+  "id": "i297_issubset_bool_int",
+  "expr": "({True}.issubset({1, 2}), {1, 3}.issuperset([True]))"
+ },
+ {
+  "id": "i297_isdisjoint_bool_int",
+  "expr": "{True}.isdisjoint([1])"
+ },
+ {
+  "id": "i297_amp_tie_iterates_other",
+  "expr": "{1, 2} & {True, 2}"
+ },
+ {
+  "id": "i297_amp_tie_iterates_other_rev",
+  "expr": "{True, 2} & {1, 2}"
+ },
+ {
+  "id": "i297_amp_smaller_side_kept",
+  "expr": "({1, 2, 3} & {True}, {True} & {1, 2, 3})"
+ },
+ {
+  "id": "i297_intersection_chained_provenance",
+  "expr": "{1}.intersection([True], [True])"
+ },
+ {
+  "id": "i299_json_encoder_cls_basic",
+  "_setup": "import json\nclass MyEncoder(json.JSONEncoder):\n    def default(self, obj):\n        return str(obj)\nr = json.dumps({'a': 1}, cls=MyEncoder)",
+  "expr": "r"
+ },
+ {
+  "id": "i299_json_encoder_default_called",
+  "_setup": "import json\nclass Pt:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\nclass PtEncoder(json.JSONEncoder):\n    def default(self, obj):\n        return [obj.x, obj.y]\nr = json.dumps([Pt(3, 4), {'q': Pt(5, 6)}], cls=PtEncoder)",
+  "expr": "r"
+ },
+ {
+  "id": "i299_json_base_encoder_raises",
+  "_setup": "import json\nclass Pt:\n    pass\ntry:\n    r = json.dumps(Pt(), cls=json.JSONEncoder)\nexcept TypeError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "i299_json_dumps_default_kwarg",
+  "_setup": "import json\nr = json.dumps({'b': 2}, default=str)",
+  "expr": "r"
+ },
+ {
+  "id": "i299_json_default_separators",
+  "_setup": "import json\nr = json.dumps({'a': 1, 'b': [1, 2], 'c': {'d': None, 'e': True}})",
+  "expr": "r"
+ },
+ {
+  "id": "i299_json_compact_separators",
+  "_setup": "import json\nr = json.dumps({'a': 1, 'b': 2}, separators=(',', ':'))",
+  "expr": "r"
+ },
+ {
+  "id": "i299_json_sepstrings_safe",
+  "_setup": "import json\nr = json.dumps([1, 'x, y', 'a: b', 'n\\nm', {'k': []}])",
+  "expr": "r"
+ },
+ {
+  "id": "i299_json_sortkeys_spacing",
+  "_setup": "import json\nr = json.dumps({'z': 1, 'a': 2}, sort_keys=True)",
+  "expr": "r"
+ },
+ {
+  "id": "i299_json_cls_sortkeys_combo",
+  "_setup": "import json\nclass E(json.JSONEncoder):\n    def default(self, obj):\n        return str(obj)\nr = json.dumps({'z': 1, 'a': 2}, cls=E, sort_keys=True)",
+  "expr": "r"
+ },
+ {
+  "id": "i299_keyword_named_method_kwcall",
+  "_setup": "class C:\n    def default(self, x, y=10):\n        return x + y\nr = C().default(x=5)",
+  "expr": "r"
+ },
+ {
+  "id": "pbt321_delslice_neg_stop_noop",
+  "_setup": "v = []\ndel v[1:-2]",
+  "expr": "v"
+ },
+ {
+  "id": "pbt321_delslice_oob_pos",
+  "_setup": "v = [1, 2]\ndel v[5:9]",
+  "expr": "v"
+ },
+ {
+  "id": "pbt321_delslice_wrongdir_noop",
+  "_setup": "v = [1, 2, 3]\ndel v[10:1]",
+  "expr": "v"
+ },
+ {
+  "id": "pbt321_delslice_simple",
+  "_setup": "v = [1, 2, 3, 4, 5]\ndel v[1:3]",
+  "expr": "v"
+ },
+ {
+  "id": "pbt321_delslice_ext_step2",
+  "_setup": "v = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]\ndel v[2:8:2]",
+  "expr": "v"
+ },
+ {
+  "id": "pbt321_delslice_ext_negstep",
+  "_setup": "v = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]\ndel v[8:1:-2]",
+  "expr": "v"
+ },
+ {
+  "id": "pbt321_delslice_ext_oob_negstep",
+  "_setup": "v = [1, 2, 3]\ndel v[10:-9:-1]",
+  "expr": "v"
+ },
+ {
+  "id": "pbt321_delslice_full_clear",
+  "_setup": "v = [1, 2, 3]\ndel v[:]",
+  "expr": "v"
+ },
+ {
+  "id": "pbt321_delslice_neg_start",
+  "_setup": "v = [1, 2, 3, 4, 5]\ndel v[-3:]",
+  "expr": "v"
+ },
+ {
+  "id": "pbt322_none_add_int",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = v.get(5) + 1\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_int_add_none",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = 1 + v.get(5)\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_none_sub",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = v.get(5) - 3\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_none_mul",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = v.get(5) * 2\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_none_truediv",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = v.get(5) / 2\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_int_div_none",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = 2 / v.get(5)\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_none_floordiv",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = v.get(5) // 2\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_none_mod",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = v.get(5) % 2\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_none_pow",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = v.get(5) ** 2\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_none_plus_none",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = v.get(5) + v.get(6)\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_none_msg",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = v.get(5) + 1\nexcept TypeError as e:\n    ok = str(e)",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt322_str_add_none",
+  "_setup": "ok = 'noexc'\nv = {}\ntry:\n    _r = 'a' + v.get(5)\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt318_round_bigint_nd0",
+  "expr": "round(10**30, 0)"
+ },
+ {
+  "id": "pbt318_round_bigint_nd2",
+  "expr": "round(99999999999999999999999999, 2)"
+ },
+ {
+  "id": "pbt318_round_bigint_no_nd",
+  "expr": "round(10**30)"
+ },
+ {
+  "id": "pbt318_round_bigint_neg_nd",
+  "expr": "round(10**30, -5)"
+ },
+ {
+  "id": "pbt318_round_extreme_pos_nd",
+  "expr": "round(1.5, 400)"
+ },
+ {
+  "id": "pbt318_round_extreme_neg_nd",
+  "expr": "round(1.5, -400)"
+ },
+ {
+  "id": "pbt318_round_extreme_neg_nd_signed",
+  "expr": "round(-1.5, -400)"
+ },
+ {
+  "id": "pbt318_round_int_neg_nd_even",
+  "expr": "round(12350, -2)"
+ },
+ {
+  "id": "pbt318_round_int_neg_nd_down",
+  "expr": "round(12345, -2)"
+ },
+ {
+  "id": "pbt318_round_float_neg_nd",
+  "expr": "round(1234.5678, -2)"
+ },
+ {
+  "id": "pbt318_round_float_neg_nd_whole",
+  "expr": "round(1250.0, -2)"
+ },
+ {
+  "id": "pbt318_round_moderate_nd",
+  "expr": "round(1.23456, 20)"
+ },
+ {
+  "id": "pbt318_round_bigint_bool_nd",
+  "expr": "round(10**25, True)"
+ },
+ {
+  "id": "pbt318_round_var_neg_nd",
+  "_setup": "y = round(1234.5678, -2)",
+  "expr": "y"
+ },
+ {
+  "id": "pbt319_float_pow_overflow",
+  "_setup": "ok='noexc'\ntry:\n    _r = 10.0 ** 400\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt319_float_pow_overflow2",
+  "_setup": "ok='noexc'\ntry:\n    _r = 2.0 ** 2000\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt319_float_pow_nonwhole",
+  "_setup": "ok='noexc'\ntry:\n    _r = 10.5 ** 400\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt319_bigint_mul_float",
+  "_setup": "ok='noexc'\ntry:\n    _r = (10**400) * 1.0\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt319_bigint_add_float",
+  "_setup": "ok='noexc'\ntry:\n    _r = (10**400) + 1.0\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt319_bigint_div_float",
+  "_setup": "ok='noexc'\ntry:\n    _r = (10**400) / 1.0\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt319_float_of_bigint",
+  "_setup": "ok='noexc'\ntry:\n    _r = float(10**400)\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt319_float_mul_overflow_inf",
+  "expr": "1e308 * 1e10"
+ },
+ {
+  "id": "pbt319_float_add_overflow_inf",
+  "expr": "1e308 + 1e308"
+ },
+ {
+  "id": "pbt319_float_pow_finite",
+  "expr": "10.0 ** 308"
+ },
+ {
+  "id": "pbt319_float_pow_small",
+  "expr": "2.0 ** 10"
+ },
+ {
+  "id": "pbt319_bigint_mul_float_finite",
+  "expr": "(10**20) * 1.0"
+ },
+ {
+  "id": "pbt319_float_pow_int_exact",
+  "expr": "10 ** 400 > 0"
+ },
+ {
+  "id": "pbt319_bigint_div_small",
+  "_setup": "ok='noexc'\ntry:\n    _r = 1.0 / (10**400)\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt320_or_float",
+  "_setup": "ok='noexc'\ntry:\n    _r = 1 | 0.2\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt320_and_float",
+  "_setup": "ok='noexc'\ntry:\n    _r = 5 & 0.5\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt320_xor_float",
+  "_setup": "ok='noexc'\ntry:\n    _r = 3 ^ 1.5\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt320_lshift_float",
+  "_setup": "ok='noexc'\ntry:\n    _r = 1 << 0.5\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt320_rshift_float",
+  "_setup": "ok='noexc'\ntry:\n    _r = 8 >> 0.5\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt320_or_str",
+  "_setup": "ok='noexc'\ntry:\n    _r = 1 | 'x'\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt320_left_float",
+  "_setup": "ok='noexc'\ntry:\n    _r = 1.5 | 2\nexcept Exception as e:\n    ok = type(e).__name__",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt320_or_msg",
+  "_setup": "ok='noexc'\ntry:\n    _r = 1 | 0.2\nexcept TypeError as e:\n    ok = str(e)",
+  "expr": "ok"
+ },
+ {
+  "id": "pbt320_or_valid",
+  "expr": "1 | 2"
+ },
+ {
+  "id": "pbt320_and_valid",
+  "expr": "5 & 3"
+ },
+ {
+  "id": "pbt320_xor_valid",
+  "expr": "6 ^ 3"
+ },
+ {
+  "id": "pbt320_lshift_valid",
+  "expr": "1 << 4"
+ },
+ {
+  "id": "pbt320_rshift_valid",
+  "expr": "256 >> 2"
+ },
+ {
+  "id": "pbt320_or_bigint",
+  "expr": "10**20 | 3"
+ },
+ {
+  "id": "pbt320_or_bool_int",
+  "expr": "True | 2"
+ },
+ {
+  "id": "pbt327_count_empty_abc",
+  "expr": "'abc'.count('')"
+ },
+ {
+  "id": "pbt327_count_empty_single",
+  "expr": "'x'.count('')"
+ },
+ {
+  "id": "pbt327_count_empty_empty",
+  "expr": "''.count('')"
+ },
+ {
+  "id": "pbt327_count_empty_astral",
+  "_setup": "s = 'a' + chr(0x1f600) + 'b'",
+  "expr": "s.count('')"
+ },
+ {
+  "id": "pbt327_count_empty_long",
+  "expr": "'hello world'.count('')"
+ },
+ {
+  "id": "pbt327_count_nonempty_still_ok",
+  "expr": "'banana'.count('a')"
+ },
+ {
+  "id": "pbt327_count_missing",
+  "expr": "'abc'.count('z')"
+ },
+ {
+  "id": "pbt328_center_odd_margin_odd_width",
+  "expr": "'ab'.center(5)"
+ },
+ {
+  "id": "pbt328_center_even_width",
+  "expr": "'x'.center(4)"
+ },
+ {
+  "id": "pbt328_center_even_margin",
+  "expr": "'ab'.center(6)"
+ },
+ {
+  "id": "pbt328_center_abc_4",
+  "expr": "'abc'.center(4)"
+ },
+ {
+  "id": "pbt328_center_abc_6",
+  "expr": "'abc'.center(6)"
+ },
+ {
+  "id": "pbt328_center_ab_7",
+  "expr": "'ab'.center(7)"
+ },
+ {
+  "id": "pbt328_center_a_2",
+  "expr": "'a'.center(2)"
+ },
+ {
+  "id": "pbt328_center_a_3",
+  "expr": "'a'.center(3)"
+ },
+ {
+  "id": "pbt328_center_noop",
+  "expr": "'hello'.center(4)"
+ },
+ {
+  "id": "pbt328_center_fillchar",
+  "expr": "'hi'.center(10, '*')"
+ },
+ {
+  "id": "pbt329_repr_nbsp",
+  "expr": "repr(chr(0xA0))"
+ },
+ {
+  "id": "pbt329_repr_ideographic_space",
+  "expr": "repr(chr(0x3000))"
+ },
+ {
+  "id": "pbt329_repr_soft_hyphen",
+  "expr": "repr(chr(0xAD))"
+ },
+ {
+  "id": "pbt329_repr_zwsp",
+  "expr": "repr(chr(0x200B))"
+ },
+ {
+  "id": "pbt329_repr_bom",
+  "expr": "repr(chr(0xFEFF))"
+ },
+ {
+  "id": "pbt329_repr_line_sep",
+  "expr": "repr(chr(0x2028))"
+ },
+ {
+  "id": "pbt329_repr_c1_control",
+  "expr": "repr(chr(0x80))"
+ },
+ {
+  "id": "pbt329_repr_astral_tag",
+  "expr": "repr(chr(0xE0020))"
+ },
+ {
+  "id": "pbt329_repr_embedded_nbsp",
+  "_setup": "s = 'a' + chr(0xA0) + 'b'",
+  "expr": "repr(s)"
+ },
+ {
+  "id": "pbt329_repr_ascii_unchanged",
+  "expr": "repr('hello world!')"
+ },
+ {
+  "id": "pbt329_repr_tab_still_named",
+  "expr": "repr('a\tb')"
+ },
+ {
+  "id": "pbt329_repr_mongolian_vowel_sep",
+  "expr": "repr(chr(0x180E))"
+ },
+ {
+  "id": "pbt329_repr_narrow_nbsp",
+  "expr": "repr(chr(0x202F))"
+ },
+ {
+  "id": "pbt323_paren_tuple_pair",
+  "_setup": "def f(v):\n    match (v, v + 1):\n        case (1, 2):\n            return 'pair'\n        case _:\n            return 'other'",
+  "expr": "f(1)"
+ },
+ {
+  "id": "pbt323_paren_tuple_capture",
+  "_setup": "def f(v):\n    match (v, v + 1):\n        case (x, y):\n            return x + y\n        case _:\n            return 0",
+  "expr": "f(5)"
+ },
+ {
+  "id": "pbt323_paren_empty",
+  "_setup": "def g(t):\n    match t:\n        case ():\n            return 'empty'\n        case _:\n            return 'no'",
+  "expr": "g(())"
+ },
+ {
+  "id": "pbt323_paren_one_tuple",
+  "_setup": "def g(t):\n    match t:\n        case (a,):\n            return 'one:' + str(a)\n        case _:\n            return 'no'",
+  "expr": "g((7,))"
+ },
+ {
+  "id": "pbt323_paren_star",
+  "_setup": "def g(t):\n    match t:\n        case (a, *rest):\n            return str(a) + '/' + str(rest)\n        case _:\n            return 'no'",
+  "expr": "g((1, 2, 3))"
+ },
+ {
+  "id": "pbt323_paren_grouping",
+  "_setup": "def h(v):\n    match v:\n        case (1):\n            return 'grouped'\n        case _:\n            return 'no'",
+  "expr": "h(1)"
+ },
+ {
+  "id": "pbt323_bare_tuple",
+  "_setup": "def f(v):\n    match v:\n        case 1, 2:\n            return 'pair'\n        case _:\n            return 'other'",
+  "expr": "f((1, 2))"
+ },
+ {
+  "id": "pbt323_bare_tuple_capture",
+  "_setup": "def f(v):\n    match v:\n        case a, b, c:\n            return a + b + c\n        case _:\n            return -1",
+  "expr": "f((1, 2, 3))"
+ },
+ {
+  "id": "pbt323_bare_tuple_star",
+  "_setup": "def f(v):\n    match v:\n        case a, *rest:\n            return str(a) + '/' + str(rest)\n        case _:\n            return 'no'",
+  "expr": "f((9, 8, 7))"
+ },
+ {
+  "id": "pbt323_nested_paren",
+  "_setup": "def f(v):\n    match v:\n        case ((1, 2), 3):\n            return 'nested'\n        case _:\n            return 'no'",
+  "expr": "f(((1, 2), 3))"
+ },
+ {
+  "id": "pbt324_sibling_module_match",
+  "_setup": "out = []\nmatch 7:\n    case x:\n        out.append(('a', x))\nmatch 8:\n    case y:\n        out.append(('b', y))",
+  "expr": "out"
+ },
+ {
+  "id": "pbt324_sibling_func_match",
+  "_setup": "def f(v):\n    match v:\n        case 1:\n            r = 'one'\n        case _:\n            r = 'other'\n    match v + 1:\n        case 2:\n            r2 = 'two'\n        case _:\n            r2 = 'other2'\n    return r + '/' + r2",
+  "expr": "f(1)"
+ },
+ {
+  "id": "pbt324_nested_match",
+  "_setup": "def g(v):\n    match v:\n        case (a, b):\n            match a:\n                case 1:\n                    return 'inner-one:' + str(b)\n                case _:\n                    return 'inner-other'\n        case _:\n            return 'no'",
+  "expr": "g((1, 99))"
+ },
+ {
+  "id": "pbt324_three_sibling_matches",
+  "_setup": "out = []\nmatch 1:\n    case v:\n        out.append(v)\nmatch 2:\n    case v:\n        out.append(v)\nmatch 3:\n    case v:\n        out.append(v)",
+  "expr": "out"
+ },
+ {
+  "id": "pbt325_nested_aug_ule",
+  "_setup": "def main():\n    v1 = 'X'\n    def f3(v4):\n        v1 += 'Y'\n        return v1\n    try:\n        return f3(v1)\n    except UnboundLocalError:\n        return 'ULE'\nr = main()",
+  "expr": "r"
+ },
+ {
+  "id": "pbt325_nested_aug_numeric",
+  "_setup": "def main():\n    n = 10\n    def inner():\n        n += 1\n        return n\n    try:\n        return inner()\n    except UnboundLocalError:\n        return 'ULE'\nr = main()",
+  "expr": "r"
+ },
+ {
+  "id": "pbt325_aug_only_in_try",
+  "_setup": "def f():\n    try:\n        y = 0\n        y += 1\n        return y\n    except UnboundLocalError:\n        return 'ULE'\nr = f()",
+  "expr": "r"
+ },
+ {
+  "id": "pbt325_nonlocal_aug_ok",
+  "_setup": "def counter():\n    n = 0\n    def inc():\n        nonlocal n\n        n += 1\n        return n\n    inc()\n    inc()\n    return n\nr = counter()",
+  "expr": "r"
+ },
+ {
+  "id": "pbt325_global_aug_ok",
+  "_setup": "g = 100\ndef useg():\n    global g\n    g += 1\n    return g\nr = useg()",
+  "expr": "r"
+ },
+ {
+  "id": "pbt325_accumulator_ok",
+  "_setup": "def acc(xs):\n    total = 0\n    for x in xs:\n        total += x\n    return total\nr = acc([1, 2, 3, 4])",
+  "expr": "r"
+ },
+ {
+  "id": "pbt325_param_aug_ok",
+  "_setup": "def f(p):\n    p += 1\n    return p\nr = f(5)",
+  "expr": "r"
+ },
+ {
+  "id": "pbt325_closure_read_ok",
+  "_setup": "def outer():\n    z = 42\n    def get():\n        return z\n    return get()\nr = outer()",
+  "expr": "r"
+ },
+ {
+  "id": "pbt325_subscript_aug_closure_ok",
+  "_setup": "def f():\n    a = [1, 2]\n    def inner():\n        a[0] += 5\n        return a\n    return inner()\nr = f()",
+  "expr": "r"
+ },
+ {
+  "id": "pbt325_bare_aug_unbound",
+  "_setup": "def f():\n    try:\n        w += 1\n        return 'no'\n    except UnboundLocalError:\n        return 'ULE'\nr = f()",
+  "expr": "r"
+ }
+,
+ {
+  "id": "any_short_circuit_count",
+  "_setup": "seen = []\ndef f(i):\n    seen.append(i)\n    return i > 2\nr = any(f(i) for i in range(1000))",
+  "expr": "(r, seen)"
+ },
+ {
+  "id": "all_short_circuit_count",
+  "_setup": "seen = []\ndef g(i):\n    seen.append(i)\n    return i < 2\nr = all(g(i) for i in range(1000))",
+  "expr": "(r, seen)"
+ },
+ {
+  "id": "any_python_truthiness_containers",
+  "expr": "any([[], {}, '', 0])"
+ },
+ {
+  "id": "all_python_truthiness_containers",
+  "expr": "all([[1], {'a':1}, 'x', 1])"
+ },
+ {
+  "id": "any_nested_generator_no_oom",
+  "_setup": "xs = [float(x) for x in range(300)]\nn = len(xs)\nr = any(abs(xs[i]-xs[j]) < 0.5 for i in range(n) for j in range(i+1, n))",
+  "expr": "r"
+ },
+ {
+  "id": "tuple_of_large_range_len",
+  "expr": "len(tuple(range(120000)))"
+ },
+ {
+  "id": "range_for_leak_value",
+  "_setup": "last = -1\nfor i in range(5):\n    last = i",
+  "expr": "(last, i)"
+ },
+ {
+  "id": "range_for_negative_step",
+  "_setup": "acc = []\nfor i in range(10, 2, -3):\n    acc.append(i)",
+  "expr": "acc"
+ },
+ {
+  "id": "range_for_body_rebind_no_bleed",
+  "_setup": "acc = []\nfor i in range(3):\n    i = i * 10\n    acc.append(i)",
+  "expr": "(acc, i)"
+ },
+ {
+  "id": "range_for_reused_var_break",
+  "_setup": "out = []\nfor i in range(3):\n    out.append(i)\nfound = None\nfor i in range(5, 10**9):\n    if i == 7:\n        found = i\n        break",
+  "expr": "(out, found)"
+ }
+,
+ {
+  "id": "bitwise_whole_float_and_typeerror",
+  "_setup": "try:\n    r = 3.0 & 5\nexcept TypeError:\n    r = 'TE'",
+  "expr": "r"
+ },
+ {
+  "id": "bitwise_round0_and_typeerror",
+  "_setup": "try:\n    r = round(2.98, 0) & 5\nexcept TypeError:\n    r = 'TE'",
+  "expr": "r"
+ },
+ {
+  "id": "bitwise_var_float_or_typeerror",
+  "_setup": "x = 10.0\ntry:\n    r = x | 1\nexcept TypeError:\n    r = 'TE'",
+  "expr": "r"
+ },
+ {
+  "id": "shift_whole_float_typeerror",
+  "_setup": "try:\n    r = 1 << 2.0\nexcept TypeError:\n    r = 'TE'",
+  "expr": "r"
+ },
+ {
+  "id": "bitwise_int_still_ok",
+  "expr": "(255 & 0x0f, 5 | 2, 6 ^ 3, 1 << 4)"
+ },
+ {
+  "id": "format_spec_whole_float_align",
+  "expr": "f'{0.0:>6}'"
+ },
+ {
+  "id": "format_spec_whole_float_five",
+  "expr": "f'{5.0:>6}'"
+ },
+ {
+  "id": "format_spec_neg_whole_float",
+  "expr": "f'{-2.0:>6}'"
+ },
+ {
+  "id": "format_spec_float_var",
+  "_setup": "x = 7.0",
+  "expr": "f'{x:>5}'"
+ },
+ {
+  "id": "format_spec_int_unaffected",
+  "expr": "f'{42:>5}'"
+ },
+ {
+  "id": "format_spec_float_grouping",
+  "expr": "f'{100.0:,}'"
+ }
+,
+ {
+  "id": "round_nan_valueerror",
+  "_setup": "try:\n    r = round(float('nan'))\nexcept ValueError:\n    r = 'VE'",
+  "expr": "r"
+ },
+ {
+  "id": "round_inf_overflowerror",
+  "_setup": "try:\n    r = round(float('inf'))\nexcept OverflowError:\n    r = 'OE'",
+  "expr": "r"
+ },
+ {
+  "id": "round_neg_inf_overflowerror",
+  "_setup": "try:\n    r = round(float('-inf'))\nexcept OverflowError:\n    r = 'OE'",
+  "expr": "r"
+ },
+ {
+  "id": "round_nan_ndigits_passthrough",
+  "_setup": "import math",
+  "expr": "math.isnan(round(float('nan'), 1))"
+ },
+ {
+  "id": "round_inf_ndigits_passthrough",
+  "expr": "round(float('inf'), 2)"
+ },
+ {
+  "id": "float_underscore_frac",
+  "expr": "float('1_0.5')"
+ },
+ {
+  "id": "float_underscore_thousands",
+  "expr": "float('1_000.5')"
+ },
+ {
+  "id": "float_underscore_exp",
+  "expr": "float('1e1_0')"
+ },
+ {
+  "id": "float_underscore_leading_dot",
+  "expr": "float('.5_0')"
+ },
+ {
+  "id": "float_underscore_bad_leading",
+  "_setup": "try:\n    r = float('_1.0')\nexcept ValueError:\n    r = 'VE'",
+  "expr": "r"
+ },
+ {
+  "id": "float_underscore_bad_double",
+  "_setup": "try:\n    r = float('1__0.0')\nexcept ValueError:\n    r = 'VE'",
+  "expr": "r"
+ },
+ {
+  "id": "float_underscore_bad_dot",
+  "_setup": "try:\n    r = float('1_.0')\nexcept ValueError:\n    r = 'VE'",
+  "expr": "r"
+ }
+,
+ {
+  "id": "subscript_huge_neg_index_indexerror",
+  "_setup": "try:\n    r = [1,2,3][-9223372036854775815]\nexcept IndexError:\n    r = 'IE'",
+  "expr": "r"
+ },
+ {
+  "id": "subscript_huge_pos_index_indexerror",
+  "_setup": "try:\n    r = 'abc'[99999999999999999999]\nexcept IndexError:\n    r = 'IE'",
+  "expr": "r"
+ },
+ {
+  "id": "empty_subscript_huge_index",
+  "_setup": "try:\n    r = [][-9223372036854775815]\nexcept IndexError:\n    r = 'IE'",
+  "expr": "r"
+ },
+ {
+  "id": "list_pop_oob_indexerror",
+  "_setup": "try:\n    [1,2,3].pop(10)\n    r = 'no'\nexcept IndexError:\n    r = 'IE'",
+  "expr": "r"
+ },
+ {
+  "id": "list_pop_neg_oob_indexerror",
+  "_setup": "try:\n    [1,2,3].pop(-10)\n    r = 'no'\nexcept IndexError:\n    r = 'IE'",
+  "expr": "r"
+ },
+ {
+  "id": "empty_list_pop_indexerror",
+  "_setup": "try:\n    [].pop()\n    r = 'no'\nexcept IndexError:\n    r = 'IE'",
+  "expr": "r"
+ },
+ {
+  "id": "list_pop_normal",
+  "_setup": "l = [1,2,3]\nv = l.pop(1)",
+  "expr": "(v, l)"
+ },
+ {
+  "id": "module_redef_def",
+  "_setup": "def f(s):\n    return s[::2]\ndef f(s):\n    return ''.join(s[::2])",
+  "expr": "f('abcdef')"
+ },
+ {
+  "id": "module_redef_def_three",
+  "_setup": "def h():\n    return 1\ndef h():\n    return 2\ndef h():\n    return 3",
+  "expr": "h()"
+ },
+ {
+  "id": "module_redef_gen",
+  "_setup": "def g():\n    yield 1\ndef g():\n    yield 2\n    yield 3",
+  "expr": "list(g())"
+ },
+ {
+  "id": "module_redef_class",
+  "_setup": "class C:\n    def m(self):\n        return 'first'\nclass C:\n    def m(self):\n        return 'second'",
+  "expr": "C().m()"
+ },
+ {
+  "id": "i64_prod_issue1",
+  "expr": "4294967296 * 4294967297"
+ },
+ {
+  "id": "i64_prod_issue2",
+  "expr": "3037000500 * 3037000501"
+ },
+ {
+  "id": "i64_prod_below_boundary",
+  "expr": "3037000499 * 3037000499"
+ },
+ {
+  "id": "i64_prod_negmin_negone",
+  "expr": "(-9223372036854775808) * -1"
+ },
+ {
+  "id": "i64_sum_over_max",
+  "expr": "9223372036854775807 + 1"
+ },
+ {
+  "id": "i64_sum_under_min",
+  "expr": "-9223372036854775808 - 1"
+ },
+ {
+  "id": "i64_shl_63",
+  "expr": "1 << 63"
+ },
+ {
+  "id": "i64_shl_70",
+  "expr": "1 << 70"
+ },
+ {
+  "id": "i64_shr_neg",
+  "expr": "(-8) >> 1"
+ },
+ {
+  "id": "i64_shr_saturate",
+  "expr": "(-8) >> 100"
+ },
+ {
+  "id": "i64_pow_over",
+  "expr": "10 ** 20"
+ },
+ {
+  "id": "i64_pow_in_range",
+  "expr": "10 ** 18"
+ },
+ {
+  "id": "i64_pow_2_63",
+  "expr": "2 ** 63"
+ },
+ {
+  "id": "i64_floordiv_neg",
+  "expr": "-7 // 2"
+ },
+ {
+  "id": "i64_floordiv_big",
+  "expr": "9223372036854775807 // 3"
+ },
+ {
+  "id": "i64_mod_neg",
+  "expr": "-7 % 3"
+ },
+ {
+  "id": "i64_mod_pos_negdiv",
+  "expr": "7 % -3"
+ },
+ {
+  "id": "i64_neg_min",
+  "expr": "-(-9223372036854775808)"
+ },
+ {
+  "id": "i64_abs_min",
+  "expr": "abs(-9223372036854775808)"
+ },
+ {
+  "id": "i64_chain_intermediate_ovf",
+  "expr": "4294967296 * 4294967297 - 4294967296 * 4294967297"
+ },
+ {
+  "id": "str_isupper_computed_receiver",
+  "expr": "('a' + 'B').isupper()"
+ },
+ {
+  "id": "str_islower_computed_receiver",
+  "expr": "('a' + 'B').islower()"
+ },
+ {
+  "id": "w19_find_astral",
+  "expr": "'\\U0001D538x'.find('x')"
+ },
+ {
+  "id": "w19_index_astral",
+  "expr": "'\\U0001D538abc'.index('bc')"
+ },
+ {
+  "id": "w19_rfind_astral",
+  "expr": "'\\U0001D538x\\U0001D538x'.rfind('x')"
+ },
+ {
+  "id": "w19_rindex_astral",
+  "expr": "'\\U0001D538x\\U0001D538x'.rindex('x')"
+ },
+ {
+  "id": "w19_find_astral_start",
+  "expr": "'\\U0001D538\\U0001D538x'.find('x', 1)"
+ },
+ {
+  "id": "w19_find_astral_neg_start",
+  "expr": "'\\U0001D538abcabc'.find('b', -3)"
+ },
+ {
+  "id": "w19_strip_astral",
+  "expr": "'\\U0001D538a\\U0001D538'.strip('\\U0001D538')"
+ },
+ {
+  "id": "w19_lstrip_astral",
+  "expr": "'\\U0001D538a\\U0001D538'.lstrip('\\U0001D538')"
+ },
+ {
+  "id": "w19_rstrip_astral",
+  "expr": "'\\U0001D538a\\U0001D538'.rstrip('\\U0001D538')"
+ },
+ {
+  "id": "w19_strip_mixed_chars",
+  "expr": "'x\\U0001D538hix\\U0001D538'.strip('x\\U0001D538')"
+ },
+ {
+  "id": "w19_find_first_occurrence",
+  "expr": "'abcbc'.find('bc')"
+ },
+ {
+  "id": "w19_find_empty_needle",
+  "expr": "'abc'.find('')"
+ },
+ {
+  "id": "w19_count_overlap",
+  "expr": "'aaa'.count('aa')"
+ },
+ {
+  "id": "w19_count_astral_needle",
+  "expr": "'a\\U0001F4A9a\\U0001F4A9'.count('\\U0001F4A9')"
+ },
+ {
+  "id": "w19_replace_overlap",
+  "expr": "'aaa'.replace('aa', 'z')"
+ },
+ {
+  "id": "w19_replace_empty_needle",
+  "expr": "'abc'.replace('', '-')"
+ },
+ {
+  "id": "w19_replace_astral",
+  "expr": "'a\\U0001F4A9b'.replace('\\U0001F4A9', 'z')"
+ },
+ {
+  "id": "w15_replace_empty_needle_astral",
+  "expr": "'\\U0001D538'.replace('', '-')"
+ },
+ {
+  "id": "w15_replace_empty_needle_astral_count",
+  "expr": "'\\U0001D538a'.replace('', '-', 2)"
+ },
+ {
+  "id": "w15_replace_empty_needle_count_zero",
+  "expr": "'ab'.replace('', '-', 0)"
+ },
+ {
+  "id": "w15_floordiv_str_typeerror",
+  "_setup": "try:\n    r = '4'.strip('x') // 2\nexcept TypeError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "w15_floordiv_list_typeerror",
+  "_setup": "try:\n    r = '4'.split(',') // 2\nexcept TypeError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "w15_mod_list_typeerror",
+  "_setup": "try:\n    r = '4'.split(',') % 2\nexcept TypeError as e:\n    r = str(e)",
+  "expr": "r"
+ },
+ {
+  "id": "w15_floordiv_bool_coerce",
+  "expr": "'ab'.startswith('a') // 2"
+ },
+ {
+  "id": "w15_add_bool_bigint_exact",
+  "expr": "True + 9007199254740993"
+ },
+ {
+  "id": "w15_sub_bool_bigint_exact",
+  "expr": "True - 9007199254740993"
+ },
+ {
+  "id": "w15_pow_bigint_bool_exact",
+  "expr": "9007199254740993 ** True"
+ },
+ {
+  "id": "w15_replace_count_false_bool",
+  "expr": "'ab'.replace('', '-', False)"
+ },
+ {
+  "id": "w19_split_empty_pieces",
+  "expr": "'a,b,,c'.split(',')"
+ },
+ {
+  "id": "w19_split_edges",
+  "expr": "',a,'.split(',')"
+ },
+ {
+  "id": "w19_split_join_roundtrip",
+  "expr": "','.join('a,b,,c'.split(','))"
+ },
+ {
+  "id": "w19_startswith_astral",
+  "expr": "'\\U0001D538x'.startswith('\\U0001D538')"
+ },
+ {
+  "id": "w19_endswith_astral",
+  "expr": "'\\U0001D538x'.endswith('x')"
+ },
+ {
+  "id": "w19_in_substring",
+  "expr": "'bc' in 'abcd'"
+ },
+ {
+  "id": "w20_int_str_keys_distinct",
+  "expr": "({1: 'a', '1': 'b'}[1], {1: 'a', '1': 'b'}['1'])"
+ },
+ {
+  "id": "w20_int_str_keys_len",
+  "expr": "len({1: 'a', '1': 'b'})"
+ },
+ {
+  "id": "w20_mem_int_vs_str",
+  "expr": "(1 in {1: 'a'}, '1' in {1: 'a'})"
+ },
+ {
+  "id": "w20_dup_key_lookup",
+  "expr": "{1: 'a', 2: 'b', 1: 'c'}[1]"
+ },
+ {
+  "id": "w20_dup_key_keys",
+  "expr": "list({1: 'a', 2: 'b', 1: 'c'}.keys())"
+ },
+ {
+  "id": "w20_dup_key_values",
+  "expr": "list({1: 'a', 2: 'b', 1: 'c'}.values())"
+ },
+ {
+  "id": "w20_dup_key_items",
+  "expr": "list({1: 'a', 2: 'b', 1: 'c'}.items())"
+ },
+ {
+  "id": "w20_dup_key_len",
+  "expr": "len({1: 'a', 2: 'b', 1: 'c'})"
+ },
+ {
+  "id": "w20_get_hit",
+  "expr": "{'a': 1}.get('a', 99)"
+ },
+ {
+  "id": "w20_get_default",
+  "expr": "{'a': 1}.get('b', 99)"
+ },
+ {
+  "id": "w20_keys_insertion_order",
+  "expr": "list({'b': 1, 'a': 2}.keys())"
+ },
+ {
+  "id": "w20_items_insertion_order",
+  "expr": "list({'b': 1, 'a': 2}.items())"
+ },
+ {
+  "id": "w20_neg_int_str_key",
+  "expr": "({-1: 'x', '-1': 'y'}[-1], {-1: 'x', '-1': 'y'}['-1'])"
+ },
+ {
+  "id": "w20_empty_dict",
+  "expr": "(len({}), 3 in {})"
+ }
+]

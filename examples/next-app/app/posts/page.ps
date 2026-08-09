@@ -1,0 +1,41 @@
+"""
+Async server component — runs on the server, awaits a fetch, streams
+the rendered HTML to the client. The compiled output is `export async
+function Posts(...)`, the canonical shape the Next.js App Router
+consumes directly.
+"""
+from pyths.react import component
+
+
+async def fetch_posts():
+    # Public JSONPlaceholder endpoint; replace with your own backend.
+    res = await fetch("https://jsonplaceholder.typicode.com/posts?_limit=5")
+    return await res.json()
+
+
+@component
+async def Posts():
+    posts = await fetch_posts()
+    return main(style={"padding": "20px", "font_family": "system-ui, sans-serif"})(
+        h1()("Recent posts"),
+        p()(a(href="/")("← home")),
+        *[
+            article(
+                key=str(post["id"]),
+                style={"border_bottom": "1px solid #e5e7eb", "padding": "12px 0"},
+            )(
+                h2(style={"margin_bottom": "4px"})(post["title"]),
+                p(style={"color": "#6b7280"})(post["body"]),
+            )
+            for post in posts
+        ],
+    )
+
+
+# Optional special export — Next.js calls this on the server to
+# render `<head>` metadata. Compiles to `generateMetadata`.
+async def generate_metadata(params):
+    return {"title": "Posts | PythScribe RSC example"}
+
+
+__default__ = Posts

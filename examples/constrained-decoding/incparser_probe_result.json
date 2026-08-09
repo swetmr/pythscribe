@@ -1,0 +1,149 @@
+{
+  "baseline": [
+    {
+      "program": "flat_assign",
+      "prefixes": 12,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "def_oneline",
+      "prefixes": 28,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "def_indented",
+      "prefixes": 32,
+      "throws": 6,
+      "rate": 0.1875,
+      "first_fail": {
+        "prefix": "def square(n):\n    return n",
+        "err": "Unexpected token Token('RETURN', 'return') at line 2, column 5."
+      }
+    },
+    {
+      "program": "if_indented",
+      "prefixes": 54,
+      "throws": 37,
+      "rate": 0.6851851851851852,
+      "first_fail": {
+        "prefix": "def f(n):\n    if n",
+        "err": "Unexpected token Token('IF', 'if') at line 2, column 5."
+      }
+    },
+    {
+      "program": "nested_blocks",
+      "prefixes": 107,
+      "throws": 81,
+      "rate": 0.7570093457943925,
+      "first_fail": {
+        "prefix": "def f(xs):\n    total =",
+        "err": "Unexpected token Token('NAME', 'total') at line 2, column 5."
+      }
+    },
+    {
+      "program": "class_method",
+      "prefixes": 106,
+      "throws": 81,
+      "rate": 0.7641509433962265,
+      "first_fail": {
+        "prefix": "class Counter:\n    def _",
+        "err": "Unexpected token Token('DEF', 'def') at line 2, column 5."
+      }
+    },
+    {
+      "program": "comprehension",
+      "prefixes": 51,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "ps_operators",
+      "prefixes": 37,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "with_try",
+      "prefixes": 85,
+      "throws": 65,
+      "rate": 0.7647058823529411,
+      "first_fail": {
+        "prefix": "def load(p):\n    try:",
+        "err": "Unexpected token Token('TRY', 'try') at line 2, column 5."
+      }
+    }
+  ],
+  "baseline_rate": 0.52734375,
+  "fixed": [
+    {
+      "program": "flat_assign",
+      "prefixes": 12,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "def_oneline",
+      "prefixes": 28,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "def_indented",
+      "prefixes": 32,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "if_indented",
+      "prefixes": 54,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "nested_blocks",
+      "prefixes": 107,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "class_method",
+      "prefixes": 106,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "comprehension",
+      "prefixes": 51,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "ps_operators",
+      "prefixes": 37,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    },
+    {
+      "program": "with_try",
+      "prefixes": 85,
+      "throws": 0,
+      "rate": 0.0,
+      "first_fail": null
+    }
+  ],
+  "fixed_rate": 0.0
+}

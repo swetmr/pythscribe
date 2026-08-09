@@ -1,0 +1,262 @@
+# Game2048 - 2048 sliding-tile game, PythScribe canonical track.
+#
+# Dual-track with Game2048.tsx (React oracle). Renders byte-identical DOM for
+# identical state (see Game2048.test.tsx render-parity suite).
+#
+# Deliberate stress surface for the compiler:
+#  - a SEEDED PRNG (Park-Miller MINSTD, pure integer arithmetic - no
+#    Math.random, no `>>>`, no BigInt) drives every tile spawn, so the game
+#    is fully deterministic across tracks and reproducible under Playwright;
+#  - a non-trivial reducer: slide + merge over rows/columns in four
+#    directions, score accumulation, win/lose detection;
+#  - window keydown handling (Arrow keys), conditional overlay rendering,
+#    and localStorage write-through persistence.
+#
+# No wall-clock, no timers, no continuous loop - moves are discrete and
+# keyboard-driven, so the serialized DOM is stable between interactions.
+#
+# NOTE: `#` comment block, not a triple-quoted module docstring - see
+# CONTRIBUTING.md "Known friction" (Turbopack UTF-8 char-boundary panic).
+"use client"
+
+import "./Game2048.css"
+
+from pyths.react import component, use_effect, use_state
+from .fixtures import GAME_STORAGE_KEY, INITIAL_SEED, WIN_TILE
+
+
+# --- seeded PRNG (Park-Miller MINSTD) - pure, returns the next state ---
+def next_state(s):
+    return (s * 16807) % 2147483647
+
+
+# Spawn one tile (90% -> 2, 10% -> 4) into a random empty cell, advancing the
+# PRNG state twice (cell pick, then value pick). Returns [board, state]. All
+# selection is integer-modulo - no float rounding.
+def spawn(board, state):
+    empties = [i for i in range(16) if board[i] == 0]
+    if len(empties) == 0:
+        return [board, state]
+    s = next_state(state)
+    idx = empties[s % len(empties)]
+    s = next_state(s)
+    value = 4 if s % 10 == 0 else 2
+    nb = board[:]
+    nb[idx] = value
+    return [nb, s]
+
+
+def new_game():
+    board = [0 for _ in range(16)]
+    state = INITIAL_SEED
+    board, state = spawn(board, state)
+    board, state = spawn(board, state)
+    return {"board": board, "score": 0, "state": state, "status": "playing", "moves": 0}
+
+
+# The 4 lines to compress for a direction, each as 4 flat board indices in the
+# order they merge toward (front of the list = destination edge).
+def line_indices(direction):
+    lines = []
+    if direction == "left" or direction == "right":
+        for r in range(4):
+            idxs = [r * 4 + 0, r * 4 + 1, r * 4 + 2, r * 4 + 3]
+            lines.append([idxs[3], idxs[2], idxs[1], idxs[0]] if direction == "right" else idxs)
+    else:
+        for c in range(4):
+            idxs = [0 * 4 + c, 1 * 4 + c, 2 * 4 + c, 3 * 4 + c]
+            lines.append([idxs[3], idxs[2], idxs[1], idxs[0]] if direction == "down" else idxs)
+    return lines
+
+
+# Slide non-zero values to the front, merging equal adjacent pairs once each
+# (classic 2048 rule), then pad to length 4. Returns [line, score_gained].
+def compress_line(line):
+    nums = [v for v in line if v != 0]
+    res = []
+    gain = 0
+    i = 0
+    while i < len(nums):
+        if i + 1 < len(nums) and nums[i] == nums[i + 1]:
+            merged = nums[i] * 2
+            res.append(merged)
+            gain += merged
+            i += 2
+        else:
+            res.append(nums[i])
+            i += 1
+    while len(res) < 4:
+        res.append(0)
+    return [res, gain]
+
+
+# Deep board compare - MUST be explicit: `a != b` on arrays is a reference
+# compare in the emitted JS (always true), which would make every move
+# "change" the board. The .tsx oracle uses the same helper for parity.
+def boards_equal(a, b):
+    for i in range(16):
+        if a[i] != b[i]:
+            return False
+    return True
+
+
+def has_moves(board):
+    for i in range(16):
+        if board[i] == 0:
+            return True
+    for r in range(4):
+        for c in range(4):
+            v = board[r * 4 + c]
+            if c < 3 and board[r * 4 + c + 1] == v:
+                return True
+            if r < 3 and board[(r + 1) * 4 + c] == v:
+                return True
+    return False
+
+
+# The reducer. Returns the SAME dict reference when the move is a no-op
+# (blocked line or non-playing status) so React bails out of re-render.
+def step(game, direction):
+    if game["status"] != "playing":
+        return game
+    lines = line_indices(direction)
+    nb = game["board"][:]
+    gain = 0
+    for idxs in lines:
+        line = [game["board"][idxs[0]], game["board"][idxs[1]], game["board"][idxs[2]], game["board"][idxs[3]]]
+        comp, g = compress_line(line)
+        gain += g
+        for k in range(4):
+            nb[idxs[k]] = comp[k]
+    if boards_equal(nb, game["board"]):
+        return game
+    board2, state2 = spawn(nb, game["state"])
+    score = game["score"] + gain
+    won = False
+    for i in range(16):
+        if board2[i] == WIN_TILE:
+            won = True
+    status = "playing"
+    if won:
+        status = "won"
+    elif not has_moves(board2):
+        status = "lost"
+    return {"board": board2, "score": score, "state": state2, "status": status, "moves": game["moves"] + 1}
+
+
+def key_dir(key):
+    if key == "ArrowLeft":
+        return "left"
+    if key == "ArrowRight":
+        return "right"
+    if key == "ArrowUp":
+        return "up"
+    if key == "ArrowDown":
+        return "down"
+    return None
+
+
+@c
+def Game2048():
+    game, set_game = us(lambda: new_game())
+
+    # localStorage load once after mount (client-only, so SSR + hydration
+    # both render the fresh fixture game). Write-through on every mutation
+    # via update_game - never a [game]-effect (its mount run would clobber
+    # the saved game with the fixtures before the load lands, exactly as the
+    # Kanban clone documents for StrictMode's double-effect pass).
+    def _load():
+        try:
+            raw = localStorage.getItem(GAME_STORAGE_KEY)
+            if raw is not None:
+                saved = JSON.parse(raw)
+                if saved and Array.isArray(saved["board"]) and len(saved["board"]) == 16:
+                    set_game(saved)
+        except Exception:
+            pass
+
+    ue(_load, [])
+
+    def update_game(next_game):
+        set_game(next_game)
+        localStorage.setItem(GAME_STORAGE_KEY, JSON.stringify(next_game))
+
+    # Window keydown - re-attached per game state so the handler closes over
+    # fresh state (same pattern as the Kanban drag machine). Arrow keys move;
+    # other keys pass through (no preventDefault) so the page stays usable.
+    def _key_effect():
+        def on_key(e):
+            direction = key_dir(e.key)
+            if direction is None:
+                return
+            e.preventDefault()
+            update_game(step(game, direction))
+
+        window.addEventListener("keydown", on_key)
+
+        def _cleanup():
+            window.removeEventListener("keydown", on_key)
+
+        return _cleanup
+
+    ue(_key_effect, [game])
+
+    def restart():
+        update_game(new_game())
+
+    return div(
+        cn="g2048",
+        data_testid="game-2048",
+        div(
+            cn="g2048-toolbar",
+            h1(cn="g2048-title", "2048"),
+            div(
+                cn="g2048-stats",
+                div(
+                    cn="g2048-stat",
+                    data_testid="score",
+                    span(cn="g2048-stat-label", "Score"),
+                    span(cn="g2048-stat-value", data_testid="score-value", game["score"]),
+                ),
+                div(
+                    cn="g2048-stat",
+                    data_testid="moves",
+                    span(cn="g2048-stat-label", "Moves"),
+                    span(cn="g2048-stat-value", data_testid="moves-value", game["moves"]),
+                ),
+            ),
+            button(cn="g2048-restart", data_testid="restart", oc=restart, "New Game"),
+        ),
+        p(
+            cn="g2048-hint",
+            data_testid="status",
+            "You reached 2048!" if game["status"] == "won" else "No moves left." if game["status"] == "lost" else "Use the arrow keys to combine tiles.",
+        ),
+        div(
+            cn="g2048-grid",
+            data_testid="grid",
+            [
+                div(
+                    key=i,
+                    cn="g2048-cell g2048-cell--" + str(game["board"][i]),
+                    data_testid="cell-" + str(i // 4) + "-" + str(i % 4),
+                    data_value=game["board"][i],
+                    game["board"][i] if game["board"][i] > 0 else "",
+                )
+                for i in range(16)
+            ],
+        ),
+        game["status"] != "playing" and div(
+            cn="g2048-overlay",
+            data_testid="overlay",
+            div(
+                cn="g2048-overlay-msg",
+                data_testid="overlay-msg",
+                "You win!" if game["status"] == "won" else "Game over",
+            ),
+            button(cn="g2048-overlay-btn", data_testid="overlay-restart", oc=restart, "Try again"),
+        ),
+    )
+
+
+__default__ = Game2048

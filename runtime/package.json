@@ -1,0 +1,66 @@
+{
+  "name": "pyths-runtime",
+  "version": "0.2.1",
+  "description": "Runtime library for PythScribe \u2014 Write Python, Ship to the Web",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./core": "./src/core.js",
+    "./dom": "./src/dom.js",
+    "./react": "./src/react.js",
+    "./stdlib/math": "./src/stdlib/math.js",
+    "./stdlib/operator": "./src/stdlib/operator.js",
+    "./stdlib/json": "./src/stdlib/json.js",
+    "./stdlib/itertools": "./src/stdlib/itertools.js",
+    "./stdlib/functools": "./src/stdlib/functools.js",
+    "./stdlib/collections": "./src/stdlib/collections.js",
+    "./stdlib/random": "./src/stdlib/random.js",
+    "./stdlib/datetime": "./src/stdlib/datetime.js",
+    "./stdlib/re": "./src/stdlib/re.js",
+    "./stdlib/decimal": "./src/stdlib/decimal.js",
+    "./stdlib/fractions": "./src/stdlib/fractions.js",
+    "./stdlib/copy": "./src/stdlib/copy.js",
+    "./stdlib/string": "./src/stdlib/string.js",
+    "./stdlib/heapq": "./src/stdlib/heapq.js",
+    "./stdlib/bisect": "./src/stdlib/bisect.js",
+    "./stdlib/sys": "./src/stdlib/sys.js",
+    "./web": "./src/web.js",
+    "./web/fetch": "./src/web/fetch.js",
+    "./web/storage": "./src/web/storage.js",
+    "./web/router": "./src/web/router.js",
+    "./utils/tenacity": "./src/utils/tenacity.js",
+    "./asyncio": "./asyncio.js"
+  },
+  "files": [
+    "src/",
+    "asyncio.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swetmr/pythscribe.git",
+    "directory": "runtime"
+  },
+  "homepage": "https://github.com/swetmr/pythscribe#readme",
+  "bugs": {
+    "url": "https://github.com/swetmr/pythscribe/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "pyths",
+    "pythscribe",
+    "python",
+    "runtime",
+    "compiler",
+    "react"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

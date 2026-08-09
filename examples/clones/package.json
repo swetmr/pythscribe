@@ -1,0 +1,41 @@
+{
+  "name": "pyths-clone-demos",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Scaffold workspace for PythScribe clone-demos — heavy interactive website clones on BOTH a React (Vite) app and a Next.js 16 app, sharing tri-track (.tsx/.ps/.psc) components.",
+  "workspaces": [
+    "vite",
+    "next"
+  ],
+  "scripts": {
+    "dev:vite": "npm run dev -w vite",
+    "dev:next": "npm run dev -w next",
+    "build": "npm run build -w vite && npm run build -w next",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "npm run build && npm run e2e:vite && npm run e2e:next",
+    "e2e:vite": "playwright test --config e2e/playwright.vite.config.ts",
+    "e2e:next": "playwright test --config e2e/playwright.next.config.ts",
+    "verify:psc": "node scripts/verify-psc.mjs"
+  },
+  "dependencies": {
+    "pyths-runtime": "file:../../runtime"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "jsdom": "^29.1.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.6.0",
+    "vite": "^7.0.0",
+    "vite-plugin-pyths": "file:../../packages/vite-plugin-pyths",
+    "vitest": "^4.1.7"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "id": "labeled_form",
+  "kind": "form",
+  "params": {
+    "fields": ["name", "email", "age"]
+  }
+}

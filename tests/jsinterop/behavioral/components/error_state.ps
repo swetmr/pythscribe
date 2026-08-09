@@ -1,0 +1,40 @@
+# ErrorState — Track-A behavioral spec component.
+#
+# Pins the Pythonic rejection-handling pattern in an effect: a rejecting
+# Promise awaited under try/except (the rejection value arrives as the
+# raised exception; JS Error is caught by `except Exception`), surfacing
+# an error state instead of an unhandled rejection.
+"use client"
+
+import asyncio
+
+from pyths.react import component, use_effect, use_state
+
+
+async def fetch_flaky():
+    await asyncio.sleep(0.01)
+    return await Promise.reject(Error("upstream down"))
+
+
+@component
+def ErrorState():
+    status, set_status = use_state("loading")
+    error, set_error = use_state(None)
+
+    def load():
+        async def go():
+            try:
+                await fetch_flaky()
+                set_status("ready")
+            except Exception as e:
+                set_error(str(e))
+                set_status("error")
+        go()
+
+    use_effect(load, [])
+
+    if status == "loading":
+        return p(data_testid="loading", "loading...")
+    if status == "error":
+        return p(data_testid="error", "failed: " + error)
+    return p(data_testid="ready", "ready")

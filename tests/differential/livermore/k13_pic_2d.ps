@@ -1,0 +1,51 @@
+# LFK 13 - 2-D particle-in-cell (flattened grids; int indices from data)
+def k13_pic2d(npart: int, loop: int) -> float:
+    nd = 64
+    p = [0.0] * (npart * 4)
+    b = [0.0] * (nd * nd)
+    c = [0.0] * (nd * nd)
+    y = [0.0] * nd
+    z = [0.0] * nd
+    e = [0.0] * (nd * nd)
+    f = [0.0] * (nd * nd)
+    i = 0
+    while i < npart * 4:
+        p[i] = 0.5 + 0.25 * (i % 17)
+        i = i + 1
+    i = 0
+    while i < nd * nd:
+        b[i] = 0.001 * (i % 31 + 1)
+        c[i] = 0.002 * (i % 29 + 1)
+        i = i + 1
+    i = 0
+    while i < nd:
+        y[i] = 0.1 * (i + 1)
+        z[i] = 0.2 * (i + 1)
+        i = i + 1
+    l = 0
+    while l < loop:
+        ip = 0
+        while ip < npart:
+            bx = ip * 4
+            i1 = int(p[bx]) % nd
+            j1 = int(p[bx + 1]) % nd
+            p[bx + 2] = p[bx + 2] + b[j1 * nd + i1]
+            p[bx + 3] = p[bx + 3] + c[j1 * nd + i1]
+            p[bx] = p[bx] + p[bx + 2] * 0.01
+            p[bx + 1] = p[bx + 1] + p[bx + 3] * 0.01
+            i2 = int(p[bx]) % nd
+            j2 = int(p[bx + 1]) % nd
+            p[bx] = p[bx] + y[i2]
+            p[bx + 1] = p[bx + 1] + z[j2]
+            e[j2 * nd + i2] = e[j2 * nd + i2] + 1.0
+            f[j2 * nd + i2] = f[j2 * nd + i2] + p[bx + 2]
+            ip = ip + 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < nd * nd:
+        s = s + e[i] + f[i]
+        i = i + 1
+    return s
+
+print(repr(k13_pic2d(500, 2)))

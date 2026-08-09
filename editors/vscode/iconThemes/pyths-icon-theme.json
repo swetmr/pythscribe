@@ -1,0 +1,11 @@
+{
+  "iconDefinitions": {
+    "_pyths": {
+      "iconPath": "./pyths-small.svg"
+    }
+  },
+  "fileExtensions": {
+    "ps": "_pyths",
+    "psc": "_pyths"
+  }
+}

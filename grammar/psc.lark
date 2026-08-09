@@ -1,0 +1,65 @@
+// grammar/psc.lark — overlay grammar for compressed PythScribe (.psc)
+//
+// Imports and extends grammar/pyths.lark (the .ps grammar). Same contract:
+// best-effort, corpus-gated by scripts/test-grammar.py; the authoritative
+// definition of .psc is the expander in crates/pyths_expand/src/ (whose
+// output must then satisfy crates/pyths_parser). Load with
+// lark.Lark.open('grammar/psc.lark', ...) or import_paths=['grammar'].
+//
+// .psc additions over .ps, tier by tier (see crates/pyths_expand/src/lib.rs
+// for the expansion pipeline):
+//
+//   Tier A — preset import lines (presets.rs): a sentinel occupying an
+//     entire line (`R*`, `R+`, `A*`, `T*`, `T+`, `D*`, `W*`) expanding to a
+//     canonical import. Grammar: PRESET_MARKER as a small_stmt. The terminal
+//     carries a lookahead so it only matches when the rest of the line is
+//     blank/comment — `R*2` or `R * 2` still lex as NAME STAR ... .
+//
+//   Tier A — decorator aliases (decorators.rs): `@c` → `@component`,
+//     `@d`, `@v`, `@h`, `@k`, with or without call-args. NO grammar change
+//     needed: `c` is a plain identifier and .ps decorators are already
+//     `"@" test` — `@c` and `@d(coerce=True)` parse as ordinary decorators.
+//
+//   Tier B — kwarg-position aliases (kwargs.rs): `st=`, `cn=`, `cl=`,
+//     `oc=`, `oh=`, `os=`, `oa=`, `ph=`, `dis=` → canonical kwarg names.
+//     NO grammar change needed: these are syntactically plain identifiers
+//     in keyword-argument position (`st=...` parses exactly like any
+//     `name=value` argument); the expander's state machine only renames.
+//
+//   hooks — hook-call aliases (hooks.rs): `us(`, `ue(`, `um(`, `uc(`,
+//     `ur(`, `ux(` → `use_state(` etc. NO grammar change needed: plain
+//     identifier-call syntax.
+//
+//   Dict — domain-dictionary string aliases (strings.rs): `$NAME`
+//     expands to a canonical string literal. Grammar: DICT_SIGIL as an
+//     expression atom (so it is also legal as a dict key, argument, etc.).
+//
+//   Tier E — idiom sigils (idioms.rs): `%NAME` expands to a canonical code
+//     fragment. Grammar: IDIOM_SIGIL as an expression atom. Statement
+//     position needs no extra rule — a lone `%NAME` line is an ordinary
+//     expression statement (atom → expr_stmt), exactly like a lone name.
+//     Caveat: an idiom whose expansion is a multi-line *statement* fragment
+//     is still a single IDIOM_SIGIL atom here; the grammar validates the
+//     compressed surface, not the expansion.
+//
+
+%import .pyths (file_input, small_stmt, atom, name, test, star_expr, _NEWLINE, _INDENT, _DEDENT, COMMENT, DEC_NUMBER)
+
+// ── Tier A: preset import lines ───────────────────────────────────────────
+%extend ?small_stmt: preset_line
+preset_line: PRESET_MARKER
+// Exact marker set from crates/pyths_expand/src/presets.rs (R*, R+, A*, T*,
+// T+, D*, W*). Lookahead restricts the match to end-of-line (optionally
+// trailing blanks/comment), and priority .2 beats NAME at statement start.
+PRESET_MARKER.2: /(R\*|R\+|R\.|A\*|T\*|T\+|D\*|W\*)(?=[ \t]*(#[^\n]*)?\r?\n)/
+
+// ── Dict/E: sigil atoms ────────────────────────────────────────────────
+%extend ?atom: DICT_SIGIL -> dict_sigil
+             | IDIOM_SIGIL -> idiom_sigil
+DICT_SIGIL: /\$[A-Za-z_][A-Za-z0-9_]*/
+IDIOM_SIGIL: /%[A-Za-z_][A-Za-z0-9_]*/
+
+// %ignore directives are not inherited through %import — restate them.
+%ignore /[\t \f]+/          // WS
+%ignore /\\[\t \f]*\r?\n/   // line continuation
+%ignore COMMENT

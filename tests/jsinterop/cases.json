@@ -1,0 +1,664 @@
+[
+  {
+    "id": "exc_class",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.reject(Error('boom'))",
+      "    except Exception as e:",
+      "        print(type(e).__name__)",
+      "        print(str(e))",
+      "asyncio.run(main())"
+    ],
+    "expected": "Error\nboom",
+    "note": "Awaiting a rejected Promise raises the rejection value; JS Error is caught by `except Exception` / `except Error`, type name 'Error'."
+  },
+  {
+    "id": "pyexc_to_catch",
+    "src": [
+      "async def boom():",
+      "    raise ValueError('bad')",
+      "def on_err(e):",
+      "    print('caught', type(e).__name__, str(e))",
+      "boom().catch(on_err)"
+    ],
+    "expected": "caught ValueError bad"
+  },
+  {
+    "id": "microtask_order",
+    "src": [
+      "def cb(v):",
+      "    print('then', v)",
+      "Promise.resolve(1).then(cb)",
+      "print('sync')"
+    ],
+    "expected": "sync\nthen 1"
+  },
+  {
+    "id": "allsettled_shape",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    rs = await asyncio.gather_settled(Promise.resolve(5), Promise.reject(Error('no')))",
+      "    for r in rs:",
+      "        print(r['status'])",
+      "        print(r.get('value'), r.get('reason'))",
+      "asyncio.run(main())"
+    ],
+    "expected": "fulfilled\n5 None\nrejected\nNone no"
+  },
+  {
+    "id": "eager_coro",
+    "src": [
+      "import asyncio",
+      "async def w():",
+      "    print('started')",
+      "    return 1",
+      "async def main():",
+      "    c = w()",
+      "    print('before-await')",
+      "    v = await c",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "started\nbefore-await\n1",
+    "note": "DIVERGES from CPython by design: JS async fns run eagerly to the first await at CALL time; CPython coroutines are inert until awaited."
+  },
+  {
+    "id": "thenable_class",
+    "src": [
+      "import asyncio",
+      "class T:",
+      "    def then(self, res, rej):",
+      "        res(42)",
+      "async def main():",
+      "    v = await T()",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "42"
+  },
+  {
+    "id": "thenable_dict",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    d = {'then': 1, 'x': 2}",
+      "    v = await Promise.resolve(d)",
+      "    print(v['x'])",
+      "asyncio.run(main())"
+    ],
+    "expected": "2",
+    "note": "A non-callable 'then' value does NOT make a dict thenable; it resolves as a plain value."
+  },
+  {
+    "id": "reawait_coro",
+    "src": [
+      "import asyncio",
+      "async def w():",
+      "    return 7",
+      "async def main():",
+      "    c = w()",
+      "    a = await c",
+      "    b = await c",
+      "    print(a, b)",
+      "asyncio.run(main())"
+    ],
+    "expected": "7 7",
+    "note": "DIVERGES from CPython by design: a coroutine is a JS Promise; re-awaiting yields the settled value again (CPython raises RuntimeError)."
+  },
+  {
+    "id": "all_mixing",
+    "src": [
+      "import asyncio",
+      "async def w():",
+      "    return 3",
+      "async def main():",
+      "    vs = await Promise.all([w(), Promise.resolve(4), 5])",
+      "    print(vs)",
+      "    print(vs[0] + vs[1] + vs[2])",
+      "asyncio.run(main())"
+    ],
+    "expected": "[3, 4, 5]\n12"
+  },
+  {
+    "id": "async_lambda",
+    "src": [
+      "f = async lambda: 1",
+      "print(f)"
+    ],
+    "expect_compile_error": true,
+    "note": "FINDING: no async lambda in the grammar; use a named `async def` instead."
+  },
+  {
+    "id": "except_error_name",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.reject(Error('e1'))",
+      "    except Error as e:",
+      "        print('by-name', str(e))",
+      "asyncio.run(main())"
+    ],
+    "expected": "by-name e1"
+  },
+  {
+    "id": "reject_nonerror",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.reject(5)",
+      "    except Exception as e:",
+      "        print('exc', type(e).__name__, str(e))",
+      "asyncio.run(main())"
+    ],
+    "expected": "exc int 5",
+    "note": "ANY rejection value (even an int) is raised and caught by `except Exception` with its own Python type."
+  },
+  {
+    "id": "reject_nonerror_base",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.reject(5)",
+      "    except BaseException as e:",
+      "        print('base', type(e).__name__)",
+      "asyncio.run(main())"
+    ],
+    "expected": "base int"
+  },
+  {
+    "id": "valueerror_not_catch_jserror",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.reject(Error('e2'))",
+      "    except ValueError as e:",
+      "        print('wrong')",
+      "    except Exception as e:",
+      "        print('right', type(e).__name__)",
+      "asyncio.run(main())"
+    ],
+    "expected": "right Error"
+  },
+  {
+    "id": "dict_callable_then",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    d = {'then': lambda res, rej: res(9)}",
+      "    v = await d",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "9",
+    "note": "Footgun: dicts compile to plain JS objects, so a callable 'then' value makes the dict a thenable when awaited."
+  },
+  {
+    "id": "await_plain",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    v = await 5",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "5",
+    "note": "DIVERGES from CPython by design: JS await passes non-thenables through (CPython raises TypeError)."
+  },
+  {
+    "id": "then_flatten",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    v = await Promise.resolve(1).then(lambda x: Promise.resolve(x + 10))",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "11"
+  },
+  {
+    "id": "then_lambda_raises",
+    "src": [
+      "def on_err(e):",
+      "    print('rejected', type(e).__name__, str(e))",
+      "def boom(x):",
+      "    raise KeyError('k')",
+      "Promise.resolve(1).then(boom).catch(on_err)"
+    ],
+    "expected": "rejected KeyError 'k'"
+  },
+  {
+    "id": "all_rejects",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.all([Promise.resolve(1), Promise.reject(Error('worst')), Promise.resolve(3)])",
+      "    except Exception as e:",
+      "        print('all-rejected', str(e))",
+      "asyncio.run(main())"
+    ],
+    "expected": "all-rejected worst"
+  },
+  {
+    "id": "race",
+    "src": [
+      "import asyncio",
+      "async def slow():",
+      "    await asyncio.sleep(0.02)",
+      "    return 'slow'",
+      "async def main():",
+      "    v = await Promise.race([slow(), Promise.resolve('fast')])",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "fast"
+  },
+  {
+    "id": "stored_promise",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    store = {'p': Promise.resolve(11)}",
+      "    lst = [Promise.resolve(22)]",
+      "    a = await store['p']",
+      "    b = await lst[0]",
+      "    print(a, b)",
+      "asyncio.run(main())"
+    ],
+    "expected": "11 22"
+  },
+  {
+    "id": "finally_kw_tryexcept",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.reject(Error('f'))",
+      "    except Exception as e:",
+      "        print('caught', str(e))",
+      "    finally:",
+      "        print('finally-ran')",
+      "asyncio.run(main())"
+    ],
+    "expected": "caught f\nfinally-ran"
+  },
+  {
+    "id": "sleep0_vs_then",
+    "src": [
+      "import asyncio",
+      "def cb(v):",
+      "    print('then')",
+      "async def main():",
+      "    Promise.resolve(1).then(cb)",
+      "    await asyncio.sleep(0)",
+      "    print('after-sleep')",
+      "asyncio.run(main())"
+    ],
+    "expected": "then\nafter-sleep",
+    "note": "asyncio.sleep(0) is setTimeout-based (macrotask); .then callbacks (microtasks) run first."
+  },
+  {
+    "id": "asyncio_run_nested",
+    "src": [
+      "import asyncio",
+      "async def inner():",
+      "    return 5",
+      "async def outer():",
+      "    v = await asyncio.run(inner())",
+      "    return v",
+      "print(asyncio.run(outer()))"
+    ],
+    "expected": "5",
+    "note": "DIVERGES from CPython by design: no single-loop constraint in JS; nested asyncio.run just awaits (CPython raises RuntimeError)."
+  },
+  {
+    "id": "finally_chain",
+    "src": [
+      "def cb():",
+      "    print('cleanup')",
+      "def on_err(e):",
+      "    print('caught', str(e))",
+      "Promise.reject(Error('x')).catch(on_err).finally(cb)"
+    ],
+    "expected": "caught x\ncleanup"
+  },
+  {
+    "id": "finally_on_reject_order",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.reject(Error('r')).finally(lambda: print('fin'))",
+      "    except Exception as e:",
+      "        print('exc', str(e))",
+      "asyncio.run(main())"
+    ],
+    "expected": "fin\nexc r"
+  },
+  {
+    "id": "str_match",
+    "src": [
+      "m = 'rooftop'.match('top')",
+      "print(m[0])"
+    ],
+    "expected": "top",
+    "note": "Keyword attribute names (.match, .finally) — parser deviation from PR #179."
+  },
+  {
+    "id": "exec_resolve",
+    "src": [
+      "import asyncio",
+      "def work(resolve, reject):",
+      "    resolve(10)",
+      "async def main():",
+      "    v = await Promise(work)",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "10"
+  },
+  {
+    "id": "exec_reject",
+    "src": [
+      "import asyncio",
+      "def work(resolve, reject):",
+      "    reject(Error('exec-err'))",
+      "async def main():",
+      "    try:",
+      "        await Promise(work)",
+      "    except Exception as e:",
+      "        print('caught', str(e))",
+      "asyncio.run(main())"
+    ],
+    "expected": "caught exec-err"
+  },
+  {
+    "id": "resolve_flatten",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    v = await Promise.resolve(Promise.resolve(8))",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "8"
+  },
+  {
+    "id": "then_two_args",
+    "src": [
+      "def ok_cb(v):",
+      "    print('ok', v)",
+      "def err_cb(e):",
+      "    print('err', str(e))",
+      "Promise.reject(Error('t2')).then(ok_cb, err_cb)"
+    ],
+    "expected": "err t2"
+  },
+  {
+    "id": "catch_recovery",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    v = await Promise.reject(Error('r')).catch(lambda e: 99)",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "99"
+  },
+  {
+    "id": "chain_transform",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    v = await Promise.resolve(2).then(lambda x: x * 3).then(lambda x: x + 1)",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "7"
+  },
+  {
+    "id": "finally_value_passthrough",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    v = await Promise.resolve(5).finally(lambda: print('fin'))",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "fin\n5"
+  },
+  {
+    "id": "await_resume_order",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    print('a')",
+      "    v = await Promise.resolve('b')",
+      "    print(v)",
+      "print('top-before')",
+      "asyncio.run(main())",
+      "print('top-after')"
+    ],
+    "expected": "top-before\na\nb\ntop-after"
+  },
+  {
+    "id": "allsettled_direct",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    rs = await Promise.allSettled([Promise.resolve(1), Promise.reject(Error('n'))])",
+      "    print([r['status'] for r in rs])",
+      "asyncio.run(main())"
+    ],
+    "expected": "['fulfilled', 'rejected']"
+  },
+  {
+    "id": "race_reject_first",
+    "src": [
+      "import asyncio",
+      "async def slow():",
+      "    await asyncio.sleep(0.02)",
+      "    return 'slow'",
+      "async def main():",
+      "    try:",
+      "        await Promise.race([slow(), Promise.reject(Error('lost'))])",
+      "    except Exception as e:",
+      "        print('race-exc', str(e))",
+      "asyncio.run(main())"
+    ],
+    "expected": "race-exc lost"
+  },
+  {
+    "id": "wait_first_shim",
+    "src": [
+      "import asyncio",
+      "async def slow():",
+      "    await asyncio.sleep(0.02)",
+      "    return 'slow'",
+      "async def fast():",
+      "    await asyncio.sleep(0)",
+      "    return 'fast'",
+      "async def main():",
+      "    v = await asyncio.wait_first(slow(), fast())",
+      "    print(v)",
+      "asyncio.run(main())"
+    ],
+    "expected": "fast"
+  },
+  {
+    "id": "reawait_promise",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    p = Promise.resolve(3)",
+      "    a = await p",
+      "    b = await p",
+      "    print(a, b)",
+      "asyncio.run(main())"
+    ],
+    "expected": "3 3"
+  },
+  {
+    "id": "reject_typeerror_except_error",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.reject(TypeError('t'))",
+      "    except Error as e:",
+      "        print(type(e).__name__, str(e))",
+      "asyncio.run(main())"
+    ],
+    "expected": "TypeError t"
+  },
+  {
+    "id": "reject_python_exc",
+    "src": [
+      "import asyncio",
+      "async def main():",
+      "    try:",
+      "        await Promise.reject(ValueError('pv'))",
+      "    except ValueError as e:",
+      "        print('pv-caught', str(e))",
+      "asyncio.run(main())"
+    ],
+    "expected": "pv-caught pv"
+  },
+  {
+    "id": "custom_exc_to_catch",
+    "src": [
+      "class AppError(Exception):",
+      "    pass",
+      "async def boom():",
+      "    raise AppError('app')",
+      "def on_err(e):",
+      "    print('catch', type(e).__name__, str(e))",
+      "boom().catch(on_err)"
+    ],
+    "expected": "catch AppError app"
+  },
+  {
+    "id": "then_on_coro",
+    "src": [
+      "async def w():",
+      "    return 3",
+      "w().then(lambda v: print('then', v))"
+    ],
+    "expected": "then 3"
+  },
+  {
+    "id": "recv_map_get",
+    "src": [
+      "m = Map()",
+      "m.set('k', 5)",
+      "print(m.get('k'))",
+      "print(m.get('missing'))",
+      "print(m.get('missing', 0))"
+    ],
+    "expected": "5\nNone\n0",
+    "note": "#301: Map receivers keep native-backed .get through pyDictGet's Map branch; Python 2-arg default form still honored."
+  },
+  {
+    "id": "recv_urlsearchparams_get",
+    "src": [
+      "p = URLSearchParams('a=1&b=2')",
+      "print(p.get('a'))",
+      "print(p.get('zz'))",
+      "print(p.get('zz', 'dflt'))"
+    ],
+    "expected": "1\nNone\ndflt",
+    "note": "#301: non-dict receiver with its own native .get (URLSearchParams/FormData/Headers) dispatches to it; missing key honors a Python default when given."
+  },
+  {
+    "id": "recv_array_find_callback",
+    "src": [
+      "xs = [1, 2, 3]",
+      "print(xs.find(lambda v: v > 1))"
+    ],
+    "expected": "2",
+    "note": "#301: .find on a non-string receiver dispatches to the native Array.prototype.find (was blind-renamed to indexOf -> always -1)."
+  },
+  {
+    "id": "recv_array_join",
+    "src": [
+      "xs = [1, 2, 3]",
+      "print(xs.join('-'))"
+    ],
+    "expected": "1-2-3",
+    "note": "#301: .join on a non-string receiver dispatches to native Array.join (pyStrJoin previously used the ARRAY as the separator)."
+  },
+  {
+    "id": "recv_str_join_still_python",
+    "src": [
+      "print('-'.join(['a', 'b', 'c']))"
+    ],
+    "expected": "a-b-c",
+    "note": "#301 guard: string receivers keep Python sep.join(iterable) semantics."
+  },
+  {
+    "id": "recv_str_find_still_python",
+    "src": [
+      "print('hello hello'.find('l', 4, 9))",
+      "print('hello'.find('z'))"
+    ],
+    "expected": "8\n-1",
+    "note": "#301 guard: string receivers keep Python find semantics; start/end args now honored (end was silently dropped by the indexOf rename)."
+  },
+  {
+    "id": "recv_intl_format",
+    "src": [
+      "f = Intl.NumberFormat('en-US')",
+      "print(f.format(1234.5))"
+    ],
+    "expected": "1,234.5",
+    "note": "#301: .format on a non-string receiver dispatches to the native formatter (Intl.NumberFormat/DateTimeFormat)."
+  },
+  {
+    "id": "recv_str_format_still_python",
+    "src": [
+      "print('{} and {}'.format(1, 2))"
+    ],
+    "expected": "1 and 2",
+    "note": "#301 guard: string receivers keep Python str.format."
+  },
+  {
+    "id": "recv_duck_append_remove_classlist",
+    "src": [
+      "class Node:",
+      "    def __init__(self):",
+      "        self.kids = []",
+      "        self.classList = ClassList()",
+      "        self.gone = False",
+      "    def append(self, child):",
+      "        self.kids.append(child)",
+      "    def remove(self):",
+      "        self.gone = True",
+      "",
+      "class ClassList:",
+      "    def __init__(self):",
+      "        self.names = ['active', 'card']",
+      "    def remove(self, name):",
+      "        self.names = [n for n in self.names if n != name]",
+      "",
+      "def demo(el, child):",
+      "    el.append(child)",
+      "    el.classList.remove('active')",
+      "    el.remove()",
+      "",
+      "n = Node()",
+      "demo(n, 'x')",
+      "print(n.kids)",
+      "print(n.classList.names)",
+      "print(n.gone)"
+    ],
+    "expected": "['x']\n['card']\nTrue",
+    "note": "#301: the WB-1 shape with duck receivers — .append/.remove/.classList.remove on objects exposing their own methods dispatch to those methods, exactly as React/DOM receivers do."
+  }
+]

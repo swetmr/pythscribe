@@ -1,0 +1,11 @@
+[package]
+name = "pyths_hir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pyths_syntax = { workspace = true }
+pyths_types = { workspace = true }
+
+[dev-dependencies]
+pyths_parser = { workspace = true }

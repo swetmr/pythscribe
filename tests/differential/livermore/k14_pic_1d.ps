@@ -1,0 +1,51 @@
+# LFK 14 - 1-D particle-in-cell (int indices from float data)
+def k14_pic1d(n: int, loop: int) -> float:
+    nd = 512
+    vx = [0.0] * n
+    xx = [0.0] * n
+    xi = [0.0] * n
+    ex = [0.0] * (nd + 2)
+    dex = [0.0] * (nd + 2)
+    rh = [0.0] * (nd + 2)
+    ir = [0] * n
+    i = 0
+    while i < n:
+        vx[i] = 0.001 * (i % 13 + 1)
+        xx[i] = 1.0 + 0.37 * (i % 101)
+        i = i + 1
+    i = 0
+    while i < nd + 2:
+        ex[i] = 0.01 * (i + 1)
+        dex[i] = 0.005 * (i + 1)
+        i = i + 1
+    flx = 0.001
+    l = 0
+    while l < loop:
+        k = 0
+        while k < n:
+            ix = int(xx[k]) % nd
+            xi[k] = 1.0 * ix
+            ir[k] = ix
+            rx = xx[k] - xi[k]
+            vx[k] = vx[k] + ex[ix] + rx * dex[ix]
+            xx[k] = xx[k] + vx[k] + flx
+            if xx[k] < 0.0:
+                xx[k] = xx[k] + 512.0
+            if xx[k] > 512.0:
+                xx[k] = xx[k] - 512.0
+            rh[ir[k]] = rh[ir[k]] + 1.0 - rx
+            rh[ir[k] + 1] = rh[ir[k] + 1] + rx
+            k = k + 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < nd + 2:
+        s = s + rh[i]
+        i = i + 1
+    k = 0
+    while k < n:
+        s = s + vx[k]
+        k = k + 1
+    return s
+
+print(repr(k14_pic1d(600, 2)))

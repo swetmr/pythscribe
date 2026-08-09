@@ -1,0 +1,20 @@
+from dataclasses import dataclass, Field
+from typing import Optional
+
+@dataclass(coerce=True)
+class CoercedConfig:
+    port: int
+    rate: float
+    name: str
+    debug: bool
+    tag: Optional[str] = None
+
+@dataclass(collect_errors=True)
+class StrictUser:
+    name: str = Field(min_length=1)
+    age: int = Field(ge=0)
+
+@dataclass(coerce=True, collect_errors=True)
+class FlexibleRecord:
+    value: int = Field(gt=0)
+    label: str

@@ -1,0 +1,15 @@
+[package]
+name = "pyths_expand"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pyths_lexer = { workspace = true }
+
+[dev-dependencies]
+
+# `cfg(kani)` is set by `cargo kani`, never by cargo itself, so rustc would
+# otherwise warn `unexpected cfg` on every ordinary build. Declaring it here
+# keeps the user's build warning-clean WITHOUT taking a dependency on Kani.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

@@ -1,0 +1,26 @@
+[package]
+name = "pyths_cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "pyths"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+pyths_lexer = { workspace = true }
+pyths_syntax = { workspace = true }
+pyths_parser = { workspace = true }
+pyths_codegen_js = { workspace = true }
+pyths_codegen_wasm = { workspace = true }
+pyths_hir = { workspace = true }
+pyths_diagnostic = { workspace = true }
+pyths_resolve = { workspace = true }
+pyths_types = { workspace = true }
+pyths_expand = { workspace = true }
+pyths_config = { workspace = true }
+pyths_print = { workspace = true }
+pyths_runtime = { workspace = true }
+owo-colors = { workspace = true }
+serde_json = { workspace = true }

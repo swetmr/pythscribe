@@ -1,0 +1,46 @@
+{
+  "name": "next-plugin-pyths",
+  "version": "0.2.1",
+  "description": "Next.js plugin for PythScribe \u2014 compile .ps and .psc files to JavaScript with Fast Refresh",
+  "main": "index.js",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./loader.js": "./loader.js"
+  },
+  "files": [
+    "index.js",
+    "loader.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swetmr/pythscribe.git",
+    "directory": "packages/next-plugin-pyths"
+  },
+  "homepage": "https://github.com/swetmr/pythscribe#readme",
+  "bugs": {
+    "url": "https://github.com/swetmr/pythscribe/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "next": ">=13.0.0"
+  },
+  "keywords": [
+    "nextjs",
+    "next-plugin",
+    "pyths",
+    "pythscribe",
+    "python",
+    "compiler",
+    "react",
+    "fast-refresh"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

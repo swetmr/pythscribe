@@ -1,0 +1,38 @@
+# LFK 15 - casual Fortran matrix manipulation (flattened, ng x nz)
+def k15_casual(nz: int, loop: int) -> float:
+    ng = 7
+    vy = [0.0] * (ng * nz)
+    vs = [0.0] * (ng * nz)
+    ve = [0.0] * (ng * nz)
+    i = 0
+    while i < ng * nz:
+        vy[i] = 0.001 * (i % 37 + 1)
+        vs[i] = 0.002 * (i % 41 + 1)
+        i = i + 1
+    l = 0
+    while l < loop:
+        j = 1
+        while j < ng - 1:
+            k = 1
+            while k < nz - 1:
+                idx = j * nz + k
+                t = vy[idx]
+                if t < 0.5:
+                    ve[idx] = vs[idx] * 2.0
+                else:
+                    r = vy[idx + 1]
+                    if r > t:
+                        ve[idx] = vs[idx] + (r - t)
+                    else:
+                        ve[idx] = vs[idx] - (t - r)
+                k = k + 1
+            j = j + 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < ng * nz:
+        s = s + ve[i]
+        i = i + 1
+    return s
+
+print(repr(k15_casual(150, 3)))

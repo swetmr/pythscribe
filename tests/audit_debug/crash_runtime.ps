@@ -1,0 +1,7 @@
+from pyths.web import fetch
+
+async def get_user(user_id: int) -> dict:
+    response = await fetch(f"https://example.com/api/users/{user_id}")
+    return await response.json()
+
+result = get_user(42)

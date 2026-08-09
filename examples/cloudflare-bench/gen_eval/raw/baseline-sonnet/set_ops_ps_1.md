@@ -1,0 +1,9 @@
+<!-- exp=baseline-sonnet task=set_ops cond=ps sample=1 model=claude-sonnet-5 cost_usd=0.027921 -->
+```python
+a = {1, 2, 3, 4, 5}
+b = {4, 5, 6, 7, 8}
+
+print(sorted(a | b))
+print(sorted(a & b))
+print(sorted(a - b))
+```

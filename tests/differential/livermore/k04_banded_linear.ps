@@ -1,0 +1,33 @@
+# LFK 4 — banded linear equations fragment
+def k04_banded(n: int, loop: int) -> float:
+    x = [0.0] * n
+    y = [0.0] * n
+    i = 0
+    while i < n:
+        x[i] = 0.0015 * (i + 1)
+        y[i] = 0.0007 * (i + 2)
+        i = i + 1
+    m = (1001 - 7) // 300
+    l = 0
+    while l < loop:
+        k = 6
+        while k < 1001:
+            if k < n:
+                lw = k - 6
+                temp = x[k - 1]
+                j = 4
+                while j < n and lw < n:
+                    temp = temp - x[lw] * y[j]
+                    j = j + 5
+                    lw = lw + 1
+                x[k - 1] = y[4] * temp
+            k = k + m
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < n:
+        s = s + x[i]
+        i = i + 1
+    return s
+
+print(repr(k04_banded(512, 3)))

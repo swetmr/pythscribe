@@ -1,0 +1,48 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+*.exe
+*.rlib
+
+# Node
+node_modules/
+package-lock.json.bak
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Incremental compilation cache
+.pyths/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Test scratch
+target/differential/
+.scratch_*
+
+# Local environment
+.env
+.env.local
+
+# SynCode grammar-constrained-decoding mask-store cache + local model downloads (repairability demo)
+cache/
+examples/constrained-decoding/**/*.pkl
+
+# Livermore harness scratch
+tests/differential/livermore/.scratch/
+tests/differential/i64_boundary/.scratch/
+examples/cloudflare-bench/bench/livermore/.scratch/
+examples/cloudflare-bench/bench/.memscratch/
+__pycache__/
+.claude/settings.local.json
+m2target/
+..pythscribe-docs2/

@@ -1,0 +1,24 @@
+# Coursera clone RSC page (Next production track). A .ps server page that
+# renders the shared "use client" CourseraApp island - next-plugin-pyths's
+# loader rewrites the extensionless import below to the precompiled
+# CourseraApp.client.js (built by scripts/precompile-client.mjs via the
+# predev/prebuild hooks). Dual-track with
+# app/react-reference/coursera/page.tsx.
+#
+# NOTE: `#` comments, not a triple-quoted docstring - see CONTRIBUTING.md
+# "Known friction" (Turbopack UTF-8 char-boundary panic).
+from pyths.react import component
+from ....shared.coursera.CourseraApp import CourseraApp
+
+
+@component
+def CourseraPage():
+    return main(
+        style={"padding": "20px"},
+        p(a(href="/", "← home")),
+        h1("Coursera (PythScribe, production)"),
+        CourseraApp(),
+    )
+
+
+__default__ = CourseraPage

@@ -1,0 +1,47 @@
+# Mixed-workload fixture for the auto-routing E2E test.
+# - `fibonacci` and `prime_count` are pure numeric → eligible for WASM.
+# - `Greeting` is a @component using strings + DOM → must stay in JS.
+# - `format_result` uses string formatting → stays in JS.
+
+from pyths.react import component
+
+
+def fibonacci(n: int) -> int:
+    a = 0
+    b = 1
+    i = 0
+    while i < n:
+        c = a + b
+        a = b
+        b = c
+        i = i + 1
+    return a
+
+
+def prime_count(limit: int) -> int:
+    count = 0
+    n = 2
+    while n < limit:
+        is_prime = 1
+        d = 2
+        while d * d <= n:
+            if n % d == 0:
+                is_prime = 0
+                d = limit
+            d = d + 1
+        if is_prime == 1:
+            count = count + 1
+        n = n + 1
+    return count
+
+
+def format_result(label, value):
+    return f"{label} = {value}"
+
+
+@component
+def Greeting():
+    return div()(
+        h1()(format_result("fib(20)", fibonacci(20))),
+        p()(format_result("primes < 100", prime_count(100)))
+    )

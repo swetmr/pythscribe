@@ -1,0 +1,14 @@
+"use client"
+
+from react import use_state
+
+@component
+def Counter():
+    count, set_count = use_state(0)
+
+    return div(class_name="counter",
+        h1("Counter App"),
+        p(f"Count: {count}"),
+        button(on_click=lambda: set_count(count + 1), "Increment"),
+        button(on_click=lambda: set_count(count - 1), "Decrement"),
+    )

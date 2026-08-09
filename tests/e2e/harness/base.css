@@ -1,0 +1,28 @@
+/* Shared baseline for parity tests. Both the PythScribe-rendered page
+ * and the React-rendered page load this same file so layout-affecting
+ * CSS resets are identical and any visual diff is caused by content,
+ * not by box-model defaults. */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Animations disabled so screenshots are deterministic. */
+*, *::before, *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #f9fafb;
+  color: #111827;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}

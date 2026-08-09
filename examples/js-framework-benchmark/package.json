@@ -1,0 +1,23 @@
+{
+  "name": "pythscribe-js-framework-benchmark",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "js-framework-benchmark (keyed) row-table app in PythScribe .ps, dual-tracked against a React reference.",
+  "scripts": {
+    "dev": "vite",
+    "dev:react": "vite --open /index-react.html",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "pyths-runtime": "file:../../runtime"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.0",
+    "vite": "^6.0.0",
+    "vite-plugin-pyths": "file:../../packages/vite-plugin-pyths"
+  }
+}

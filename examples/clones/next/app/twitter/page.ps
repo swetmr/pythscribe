@@ -1,0 +1,27 @@
+# Twitter clone RSC page (production track) - renders the precompiled
+# TwitterApp.client.js "use client" island from a PythScribe server page.
+# The extensionless relative import below is rewritten by next-plugin-pyths's
+# loader to prefer the precompiled island (see CONTRIBUTING.md). fixtures is
+# a plain .ts module - it stays extensionless and resolves normally; the
+# fixture arrays are serializable plain data, safe across the RSC boundary.
+#
+# Dual-track with app/react-reference/twitter/page.tsx.
+#
+# NOTE: `#` comments, not a triple-quoted docstring - see HelloCard.ps
+# (Turbopack UTF-8 char-boundary panic on non-ASCII docstring statements).
+from pyths.react import component
+from ....shared.twitter.TwitterApp import TwitterApp
+from ....shared.twitter.fixtures import TWEETS, NOW_TS, ME
+
+
+@component
+def TwitterPage():
+    return main(
+        style={"padding": "20px"},
+        p(a(href="/", "← home")),
+        h1("Twitter (PythScribe, production)"),
+        TwitterApp(tweets=TWEETS, now_ts=NOW_TS, me=ME),
+    )
+
+
+__default__ = TwitterPage

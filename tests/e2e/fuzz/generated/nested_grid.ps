@@ -1,0 +1,18 @@
+from pyths.react import component
+
+@component
+def App():
+    return div(className="grid")(
+        div(className="row")(
+            span()(f"o0i0"),
+            span()(f"o0i1")
+        ),
+        div(className="row")(
+            span()(f"o1i0"),
+            span()(f"o1i1")
+        ),
+        div(className="row")(
+            span()(f"o2i0"),
+            span()(f"o2i1")
+        )
+    )

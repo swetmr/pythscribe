@@ -1,0 +1,20 @@
+from pyths.react import component
+
+
+@component
+def Home():
+    return main(style={"padding": "20px", "font_family": "system-ui, sans-serif"})(
+        h1()("PythScribe + Next.js RSC example"),
+        p()(
+            "This site demonstrates async server components, server actions, ",
+            "client components with Fast Refresh, and `.psc` compressed source ",
+            "— all authored in PythScribe.",
+        ),
+        ul()(
+            li()(a(href="/posts")("/posts — async server component fetching data")),
+            li()(a(href="/counter")("/counter — client component (use_state, Fast Refresh)")),
+        ),
+    )
+
+
+__default__ = Home

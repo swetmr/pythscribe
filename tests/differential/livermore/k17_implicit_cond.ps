@@ -1,0 +1,45 @@
+# LFK 17 - implicit conditional computation (goto ladder as while+state)
+def k17_implicit(n: int, loop: int) -> float:
+    vxne = [0.0] * (n + 2)
+    vxnd = [0.0] * (n + 2)
+    ve3v = [0.0] * (n + 2)
+    vlr = [0.0] * (n + 2)
+    vlin = [0.0] * (n + 2)
+    i = 0
+    while i < n + 2:
+        vxne[i] = 0.001 * (i % 43 + 1)
+        vxnd[i] = 0.002 * (i % 47 + 1)
+        vlr[i] = 0.0015 * (i % 53 + 1)
+        vlin[i] = 0.0025 * (i % 59 + 1)
+        i = i + 1
+    l = 0
+    while l < loop:
+        xnm = 0.0025
+        i = n
+        while i > 0:
+            xnei = vxne[i]
+            vxnd[i] = ve3v[i]
+            xnc = xnm * vlr[i]
+            if xnei <= xnc:
+                if vxnd[i] > xnc:
+                    ve3v[i] = xnc * vlin[i]
+                    vxne[i] = xnc
+                    xnm = xnc
+                else:
+                    ve3v[i] = vxnd[i] * vlin[i]
+                    vxne[i] = vxnd[i]
+                    xnm = vxnd[i]
+            else:
+                ve3v[i] = xnei * vlin[i]
+                vxne[i] = xnei
+                xnm = xnei
+            i = i - 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < n + 2:
+        s = s + ve3v[i] + vxne[i]
+        i = i + 1
+    return s
+
+print(repr(k17_implicit(300, 3)))

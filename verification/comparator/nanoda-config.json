@@ -1,0 +1,13 @@
+{
+  "_comment": "nanoda_bin (independent Rust Lean 4 kernel) config for the Comparator re-check. Re-type-checks the FULL exported PythExpandVerify environment and hard-errors if ANY declaration USES an axiom outside permitted_axioms (unpermitted_axiom_hard_error:false => an unpermitted axiom that is only DECLARED-but-unused is skipped, not fatal). export_file_path is patched by run_comparator.sh.",
+  "_pinned_footprint_note": "Our OWN theorems use ONLY {propext, Classical.choice, Quot.sound} — enforced per-decl by the L1 axiom_footprint gate. Lean.trustCompiler is added here ONLY because exporting the WHOLE environment includes Lean-core declarations that reference it; no PythExpandVerify claim depends on it (L1 proves this).",
+  "export_file_path": "pythexpand.ndjson",
+  "use_stdin": false,
+  "permitted_axioms": ["propext", "Classical.choice", "Quot.sound", "Lean.trustCompiler"],
+  "unpermitted_axiom_hard_error": false,
+  "unsafe_permit_all_axioms": false,
+  "nat_extension": true,
+  "string_extension": true,
+  "print_success_message": true,
+  "pp_to_stdout": false
+}

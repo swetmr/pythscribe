@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <!--
+    PythScribe icon — small-size variant (file-tree icons).
+    Same PS knot as pyths.svg but with:
+      - Accent dots removed (illegible at 16x16)
+      - Thicker stroke (36 vs 28) to survive downsampling
+      - Tails shortened slightly so the mark stays compact
+  -->
+
+  <!-- Indigo p -->
+  <g stroke="#4F46E5" stroke-width="36" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 90 56 A 48 48 0 1 1 90 152" />
+    <path d="M 90 56 L 90 200" />
+  </g>
+
+  <!-- Amber d (mirror of p) -->
+  <g stroke="#F59E0B" stroke-width="36" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 166 200 A 48 48 0 1 1 166 104" />
+    <path d="M 166 200 L 166 56" />
+  </g>
+</svg>

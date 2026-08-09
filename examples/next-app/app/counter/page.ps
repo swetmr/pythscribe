@@ -1,0 +1,15 @@
+from pyths.react import component
+from .Counter import Counter
+
+
+@component
+def CounterPage():
+    return main(style={"padding": "20px", "font_family": "system-ui, sans-serif"})(
+        h1()("Counter"),
+        p()(a(href="/")("← home")),
+        p()("The box below is a client component (use_state) embedded in this server component:"),
+        Counter(start=5),
+    )
+
+
+__default__ = CounterPage

@@ -1,0 +1,55 @@
+from dataclasses import dataclass, field, Field
+from typing import Optional
+from pydantic import validator
+
+@dataclass
+class Point:
+    x: int
+    y: int
+
+@dataclass
+class Config:
+    name: str = Field(min_length=1, max_length=50)
+    debug: bool = False
+
+@dataclass(frozen=True)
+class User:
+    name: str = Field(min_length=1, max_length=50)
+    age: int = Field(ge=0, le=150)
+    email: Optional[str] = None
+
+@dataclass
+class Address:
+    city: str
+    zip_code: str = Field(pattern="^[0-9]{5}$")
+
+@dataclass
+class Team:
+    name: str
+    members: list[str] = field(default_factory=list)
+
+@dataclass
+class Score:
+    value: float = Field(gt=0, lt=100)
+
+@dataclass
+class Container:
+    items: list[int]
+
+@dataclass
+class Company:
+    name: str
+    address: Address
+
+@dataclass
+class Product:
+    name: str
+    price: float = Field(ge=0)
+
+    @validator("name")
+    def validate_name(self, value):
+        return value.strip()
+
+p = Point(1, 2)
+u = User("Alice", 30, "alice@example.com")
+print(u)

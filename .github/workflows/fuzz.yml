@@ -1,0 +1,61 @@
+name: Fuzz
+
+# Coverage-guided fuzz runs against the lexer, expander, parser, and type
+# checker. Runs on a weekly schedule (no per-PR cost) and on-demand via
+# the `workflow_dispatch` button. Crashes upload as workflow artifacts.
+#
+# Time budget: 4 targets × 10 min = 40 min wall-clock per scheduled run.
+# Tune `FUZZ_DURATION_S` below if the CI minute budget shifts.
+
+on:
+  schedule:
+    # Saturday 06:00 UTC — a slow time globally so nightly maintenance
+    # doesn't interleave with active development.
+    - cron: "0 6 * * 6"
+  workflow_dispatch:
+    inputs:
+      duration_s:
+        description: "Per-target fuzz duration in seconds"
+        required: false
+        default: "600"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_lexer, fuzz_expand, fuzz_parser, fuzz_check]
+    env:
+      FUZZ_DURATION_S: ${{ github.event.inputs.duration_s || '600' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Seed corpus
+        run: |
+          mkdir -p fuzz/corpus/${{ matrix.target }}
+          cp -r fuzz/seed_corpus/${{ matrix.target }}/* fuzz/corpus/${{ matrix.target }}/
+
+      - name: Run ${{ matrix.target }}
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} \
+            -- -max_len=4096 -max_total_time=${{ env.FUZZ_DURATION_S }}
+        working-directory: ${{ github.workspace }}
+
+      - name: Upload artifacts on crash
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30

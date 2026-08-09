@@ -1,0 +1,251 @@
+/* Component-scoped stylesheet for the Kanban clone, imported as a side
+   effect from KanbanBoard.ps via the A2 extension (`import "./KanbanBoard.css"`)
+   and the normal ESM way from KanbanBoard.tsx — see CONTRIBUTING.md "Styling". */
+
+.kb-board {
+  padding: 20px;
+  min-height: calc(100vh - 40px);
+}
+
+.kb-board--dragging {
+  cursor: grabbing;
+}
+
+.kb-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.kb-title {
+  margin: 0;
+  font-size: 20px;
+}
+
+.kb-reset {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.kb-reset:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+.kb-cols {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 12px;
+}
+
+.kb-col {
+  flex: 0 0 272px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+
+.kb-col--drop {
+  border-color: var(--accent);
+  background: #191d28;
+}
+
+.kb-col--new {
+  background: transparent;
+  border-style: dashed;
+}
+
+.kb-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 8px;
+}
+
+.kb-col-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-count {
+  flex-shrink: 0;
+  min-width: 20px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
+.kb-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 8px;
+}
+
+.kb-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.kb-card:hover {
+  border-color: var(--muted);
+}
+
+.kb-card--dragging {
+  opacity: 0.35;
+}
+
+.kb-card--editing {
+  padding: 4px;
+  cursor: default;
+}
+
+.kb-card-text {
+  flex: 1 1 auto;
+  font-size: 13.5px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.kb-del {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.kb-card:hover .kb-del {
+  opacity: 1;
+}
+
+.kb-del:hover {
+  background: var(--rule);
+  color: var(--ink);
+}
+
+.kb-edit,
+.kb-compose {
+  width: 100%;
+  min-height: 56px;
+  resize: none;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.kb-col-foot {
+  padding-top: 8px;
+}
+
+.kb-add-card,
+.kb-add-col {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13.5px;
+}
+
+.kb-add-card:hover,
+.kb-add-col:hover {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.kb-composer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.kb-compose-add,
+.kb-newcol-add {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.kb-compose-cancel,
+.kb-newcol-cancel {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.kb-rename,
+.kb-newcol-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.kb-ghost {
+  position: fixed;
+  z-index: 100;
+  pointer-events: none;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--ink);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
+  transform: rotate(2deg);
+}

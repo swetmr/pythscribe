@@ -1,0 +1,27 @@
+def truthy_test() -> str:
+    empty: list = []
+    if empty:
+        return "js"
+    return "python"
+
+def eq_test() -> bool:
+    a: list = [1, 2, 3]
+    b: list = [1, 2, 3]
+    return a == b
+
+def concat_test() -> int:
+    a: list = [1, 2]
+    b: list = [3, 4]
+    c = a + b
+    return len(c)
+
+def dict_truthy_test() -> str:
+    d: dict = {}
+    if d:
+        return "js"
+    return "python"
+
+def neq_test() -> bool:
+    a: list = [1, 2]
+    b: list = [1, 2, 3]
+    return a != b

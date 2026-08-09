@@ -1,0 +1,71 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pyths_lexer",
+    "crates/pyths_syntax",
+    "crates/pyths_parser",
+    "crates/pyths_codegen_js",
+    "crates/pyths_codegen_wasm",
+    "crates/pyths_diagnostic",
+    "crates/pyths_cli",
+    "crates/pyths_resolve",
+    "crates/pyths_types",
+    "crates/pyths_hir",
+    "crates/pyths_runtime",
+    "crates/pyths_lsp",
+    "crates/pyths_expand",
+    "crates/pyths_config",
+    "crates/pyths_print",
+]
+
+[workspace.package]
+version = "0.2.1"
+edition = "2021"
+license-file = "LICENSE.md"
+repository = "https://github.com/swetmr/pythscribe"
+
+[workspace.dependencies]
+# Lexer
+logos = "0.14"
+
+# Parser - we'll use manual recursive descent for now
+# chumsky = "0.9"
+
+# Error reporting
+ariadne = "0.4"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+serde_json = "1"
+
+# Testing
+insta = { version = "1", features = ["yaml"] }
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Colored output
+owo-colors = "4"
+
+# WASM
+wasm-encoder = "0.225"
+
+# Internal crates
+pyths_lexer = { path = "crates/pyths_lexer" }
+pyths_syntax = { path = "crates/pyths_syntax" }
+pyths_parser = { path = "crates/pyths_parser" }
+pyths_codegen_js = { path = "crates/pyths_codegen_js" }
+pyths_codegen_wasm = { path = "crates/pyths_codegen_wasm" }
+pyths_diagnostic = { path = "crates/pyths_diagnostic" }
+pyths_resolve = { path = "crates/pyths_resolve" }
+pyths_types = { path = "crates/pyths_types" }
+pyths_hir = { path = "crates/pyths_hir" }
+pyths_runtime = { path = "crates/pyths_runtime" }
+pyths_lsp = { path = "crates/pyths_lsp" }
+pyths_expand = { path = "crates/pyths_expand" }
+pyths_config = { path = "crates/pyths_config" }
+pyths_print = { path = "crates/pyths_print" }

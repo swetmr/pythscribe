@@ -1,0 +1,5 @@
+<!-- exp=baseline-001 task=iter_accumulate cond=python sample=3 model=claude-opus-4-8 cost_usd=0.011076 -->
+```python
+import itertools
+print(list(itertools.accumulate([3, 1, 4, 1, 5])))
+```

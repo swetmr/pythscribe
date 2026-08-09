@@ -1,0 +1,40 @@
+name = "PythExpandVerify"
+defaultTargets = ["PythExpandVerify", "expanddiff"]
+
+# Dependency-free: pure Lean 4 core (no mathlib) so `lake build`
+# needs only the pinned toolchain, no network fetch.
+
+# Generated from crates/pyths_expand/src/strings.rs by gen-dict-data.py
+# (CI regenerates + diffs — see .github/workflows/ci.yml `verification`).
+[[lean_lib]]
+name = "DictData"
+
+# Generated from crates/pyths_expand/src/kwargs.rs by gen-kwarg-data.py
+# (CI regenerates + diffs — same drift gate as DictData).
+[[lean_lib]]
+name = "KwargData"
+
+# Generated from crates/pyths_expand/src/{presets,decorators}.rs by
+# gen-tiera-data.py (CI regenerates + diffs — same drift gate).
+[[lean_lib]]
+name = "TierAData"
+
+# Generated from crates/pyths_expand/src/hooks.rs by gen-hook-data.py.
+[[lean_lib]]
+name = "HookData"
+
+# Generated from verification/idiom-table.toml by gen-idiom-data.py.
+# Tier E has no compiler-side table (the `%NAME` map is config-supplied and
+# empty by default), so this is the committed FIXTURE both the Lean model
+# and the real `pyths expand` are differentially compared over.
+[[lean_lib]]
+name = "IdiomData"
+
+[[lean_lib]]
+name = "PythExpandVerify"
+
+# Executable model of the dictionary tier — subject of the
+# model-vs-implementation differential (diff_harness.py).
+[[lean_exe]]
+name = "expanddiff"
+root = "Main"

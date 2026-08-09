@@ -1,0 +1,6 @@
+# Platform binaries are populated from target/ at build time (build-platform-packages.mjs),
+# never committed. Only the package.json + LICENSE structure is tracked.
+@pythscribe/cli-*/bin/pyths
+@pythscribe/cli-*/bin/pyths.exe
+*/node_modules/
+SHASUMS256.txt

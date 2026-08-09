@@ -1,0 +1,14 @@
+from pyths.react import component, use_state
+
+
+@component
+def Counter():
+    count, set_count = use_state(0)
+
+    def click():
+        set_count(count + 1)
+
+    return div(
+        h1(f"Count: {count}"),
+        button(on_click=click)("Increment"),
+    )

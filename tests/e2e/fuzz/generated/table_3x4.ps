@@ -1,0 +1,24 @@
+from pyths.react import component
+
+@component
+def App():
+    return table()(
+        tr()(
+            td()(f"r0c0"),
+            td()(f"r0c1"),
+            td()(f"r0c2"),
+            td()(f"r0c3")
+        ),
+        tr()(
+            td()(f"r1c0"),
+            td()(f"r1c1"),
+            td()(f"r1c2"),
+            td()(f"r1c3")
+        ),
+        tr()(
+            td()(f"r2c0"),
+            td()(f"r2c1"),
+            td()(f"r2c2"),
+            td()(f"r2c3")
+        )
+    )

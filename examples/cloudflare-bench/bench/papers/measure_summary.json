@@ -1,0 +1,32 @@
+{
+  "corpus_files": 106,
+  "corpus_o200": 94008,
+  "corpus_cl": 92968,
+  "alias_o200": 2,
+  "simpy_rejected": true,
+  "shortcoder_rejected": true,
+  "ts_total": 799,
+  "ts_wildcard_free": 57,
+  "ts_bpe_survivors": 756,
+  "ts_applicable": 136,
+  "ts_realisable": 3,
+  "ts_realisable_o200": 49,
+  "ts_realisable_pct": 0.05212322355544209,
+  "realisable_patterns": [
+    {
+      "pattern": "[0]",
+      "freq": 37,
+      "per_occ_o200": 1
+    },
+    {
+      "pattern": "[1]",
+      "freq": 9,
+      "per_occ_o200": 1
+    },
+    {
+      "pattern": "return 0",
+      "freq": 3,
+      "per_occ_o200": 1
+    }
+  ]
+}

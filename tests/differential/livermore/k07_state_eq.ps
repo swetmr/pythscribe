@@ -1,0 +1,32 @@
+# LFK 7 — equation of state fragment
+def k07_state(n: int, loop: int) -> float:
+    u = [0.0] * (n + 6)
+    y = [0.0] * n
+    z = [0.0] * n
+    x = [0.0] * n
+    i = 0
+    while i < n + 6:
+        u[i] = 0.00025 * (i + 1)
+        i = i + 1
+    i = 0
+    while i < n:
+        y[i] = 0.0003 * (i + 1)
+        z[i] = 0.00015 * (i + 1)
+        i = i + 1
+    r = 0.5
+    t = 0.25
+    l = 0
+    while l < loop:
+        k = 0
+        while k < n:
+            x[k] = u[k] + r * (z[k] + r * y[k]) + t * (u[k + 3] + r * (u[k + 2] + r * u[k + 1]) + t * (u[k + 6] + r * (u[k + 5] + r * u[k + 4])))
+            k = k + 1
+        l = l + 1
+    s = 0.0
+    k = 0
+    while k < n:
+        s = s + x[k]
+        k = k + 1
+    return s
+
+print(repr(k07_state(995, 4)))

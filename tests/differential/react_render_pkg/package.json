@@ -1,0 +1,13 @@
+{
+  "name": "pyths-class-component-render-check",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Scratch npm package for tests/differential/class_component_test.mjs — real react + react-dom + jsdom so class-component/error-boundary regression tests render with a real reconciler, not a JS-string assertion.",
+  "devDependencies": {
+    "jsdom": "^25.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "pyths-runtime": "file:../../../runtime"
+  }
+}

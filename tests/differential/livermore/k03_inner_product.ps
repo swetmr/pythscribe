@@ -1,0 +1,21 @@
+# LFK 3 — inner product
+def k03_inner_product(n: int, loop: int) -> float:
+    x = [0.0] * n
+    z = [0.0] * n
+    i = 0
+    while i < n:
+        x[i] = 0.001 * (i + 1)
+        z[i] = 0.002 * (i + 1)
+        i = i + 1
+    q = 0.0
+    l = 0
+    while l < loop:
+        q = 0.0
+        k = 0
+        while k < n:
+            q = q + z[k] * x[k]
+            k = k + 1
+        l = l + 1
+    return q
+
+print(repr(k03_inner_product(1001, 5)))

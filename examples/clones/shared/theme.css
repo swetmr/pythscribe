@@ -1,0 +1,59 @@
+/* Shared dark theme tokens for both the Vite and Next clone-demo shells.
+   Loaded once at each app's entry point (not per-component) — see
+   CONTRIBUTING.md "Styling" section. */
+:root {
+  --bg: #0b0d12;
+  --panel: #14171f;
+  --ink: #eef0f4;
+  --muted: #8b93a5;
+  --rule: #262b36;
+  --accent: #ff6f61;
+  --accent-ink: #1a0e0c;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+a {
+  color: var(--accent);
+}
+
+.shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.clone-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.clone-card {
+  display: block;
+  padding: 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.clone-card:hover {
+  border-color: var(--accent);
+}

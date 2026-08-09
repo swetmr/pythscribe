@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>React reference fixture</title>
+    <link rel="stylesheet" href="./base.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <pre id="error" style="display:none;color:#b91c1c;padding:1rem;font:12px ui-monospace,monospace;white-space:pre-wrap"></pre>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "react":                "https://esm.sh/react@18.3.1",
+          "react/jsx-runtime":    "https://esm.sh/react@18.3.1/jsx-runtime",
+          "react/jsx-dev-runtime":"https://esm.sh/react@18.3.1/jsx-dev-runtime",
+          "react-dom":            "https://esm.sh/react-dom@18.3.1?deps=react@18.3.1",
+          "react-dom/client":     "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1"
+        }
+      }
+    </script>
+
+    <script type="module">
+      window.__pythsRenderError = null;
+      window.addEventListener("error", (e) => {
+        window.__pythsRenderError = (e.error && e.error.stack) || String(e.message);
+        const el = document.getElementById("error");
+        el.style.display = "block";
+        el.textContent = window.__pythsRenderError;
+      });
+
+      const params = new URLSearchParams(window.location.search);
+      const fixture = params.get("fixture") || "dashboard_500";
+      const tsxName = fixture === "dashboard_500" ? "Dashboard500" : "App1000";
+      const exportName = params.get("export") || (fixture === "dashboard_500" ? "Dashboard" : "App");
+
+      try {
+        // Compile the .tsx in-browser via esbuild-wasm. esm.sh wraps the
+        // package as ESM; the public API surface is exposed through the
+        // module's named exports, but `initialize` and `transform` only
+        // exist on the default export object in some builds. Try both.
+        const esbuildNs = await import(
+          "https://esm.sh/esbuild-wasm@0.21.5/esm/browser.js"
+        );
+        const esbuild = esbuildNs.default || esbuildNs;
+        await esbuild.initialize({
+          wasmURL: "https://esm.sh/esbuild-wasm@0.21.5/esbuild.wasm",
+        });
+        const tsxRes = await fetch(
+          `/examples/cloudflare-bench/large-samples/react-equivalent/${tsxName}.tsx`
+        );
+        if (!tsxRes.ok) throw new Error(`fetch ${tsxName}.tsx → ${tsxRes.status}`);
+        const tsxSource = await tsxRes.text();
+        const { code } = await esbuild.transform(tsxSource, {
+          loader: "tsx",
+          format: "esm",
+          target: "es2020",
+          jsx: "automatic",
+          jsxImportSource: "react",
+        });
+
+        // Eval the transformed module via a Blob URL so its `import "react"`
+        // resolves through the same importmap as the rest of the page.
+        const blob = new Blob([code], { type: "application/javascript" });
+        const url = URL.createObjectURL(blob);
+        const mod = await import(/* @vite-ignore */ url);
+
+        const Component = mod[exportName] || mod.default;
+        if (!Component) {
+          throw new Error(`export '${exportName}' not found in ${tsxName}.tsx. ` +
+            `Available: ${Object.keys(mod).join(", ")}`);
+        }
+        const { createRoot } = await import("react-dom/client");
+        const React = await import("react");
+        const root = createRoot(document.getElementById("root"));
+        root.render(React.createElement(Component));
+        await new Promise(r => setTimeout(r, 50));
+        window.__pythsReady = true;
+      } catch (err) {
+        window.__pythsRenderError = (err && err.stack) || String(err);
+        const el = document.getElementById("error");
+        el.style.display = "block";
+        el.textContent = window.__pythsRenderError;
+        window.__pythsReady = true;
+      }
+    </script>
+  </body>
+</html>

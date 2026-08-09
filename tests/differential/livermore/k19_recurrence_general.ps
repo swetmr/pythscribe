@@ -1,0 +1,32 @@
+# LFK 19 - general linear recurrence equations (forward + backward)
+def k19_recur(n: int, loop: int) -> float:
+    b5 = [0.0] * n
+    sa = [0.0] * n
+    sb = [0.0] * n
+    i = 0
+    while i < n:
+        sa[i] = 0.001 * (i % 89 + 1)
+        sb[i] = 0.002 * (i % 97 + 1)
+        i = i + 1
+    stb5 = 0.0157
+    l = 0
+    while l < loop:
+        k = 0
+        while k < n:
+            b5[k] = sa[k] + stb5 * sb[k]
+            stb5 = b5[k] - stb5
+            k = k + 1
+        k = n - 1
+        while k >= 0:
+            b5[k] = sa[k] + stb5 * sb[k]
+            stb5 = b5[k] - stb5
+            k = k - 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < n:
+        s = s + b5[i]
+        i = i + 1
+    return s
+
+print(repr(k19_recur(101, 5)))

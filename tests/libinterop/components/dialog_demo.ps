@@ -1,0 +1,33 @@
+# Radix Dialog — .ps twin (system under test).
+#
+# Probes: module-alias scoped import, snake_case props on library components
+# (on_open_change → onOpenChange, as_child → asChild), ref= on an asChild
+# Trigger, **props spread into Content (spread keys are verbatim — final JS
+# names in the dict), portal rendering.
+from pyths.react import component, use_state, use_effect, use_ref
+import at_radix_ui.react_dialog as Dialog
+
+
+@component
+def DialogDemo():
+    is_open, set_is_open = use_state(False)
+    ref_ok, set_ref_ok = use_state(False)
+    trigger_ref = use_ref(None)
+    content_props = {"data-testid": "content"}
+
+    def check_ref():
+        set_ref_ok(trigger_ref.current is not None)
+
+    use_effect(check_ref, [])
+
+    return Dialog.Root(open=is_open, on_open_change=set_is_open,
+        Dialog.Trigger(as_child=True, ref=trigger_ref,
+            button(data_testid="trigger", "open dialog")),
+        Dialog.Portal(
+            Dialog.Content(**content_props,
+                Dialog.Title("Settings"),
+                Dialog.Description("demo dialog"),
+                p(data_testid="state", "open" if is_open else "closed"),
+                p(data_testid="ref-state", "ref-attached" if ref_ok else "ref-missing"),
+                Dialog.Close(as_child=True,
+                    button(data_testid="close", "close")))))

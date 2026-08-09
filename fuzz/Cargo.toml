@@ -1,0 +1,51 @@
+[package]
+name = "pyths-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# This crate is intentionally outside the workspace — `cargo fuzz`
+# resolves it via its own toolchain (nightly + libfuzzer). Adding it
+# to the workspace would pull `libfuzzer-sys` into stable builds and
+# break `cargo build --workspace`.
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pyths_lexer = { path = "../crates/pyths_lexer" }
+pyths_expand = { path = "../crates/pyths_expand" }
+pyths_parser = { path = "../crates/pyths_parser" }
+pyths_types = { path = "../crates/pyths_types" }
+
+[[bin]]
+name = "fuzz_lexer"
+path = "fuzz_targets/fuzz_lexer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_expand"
+path = "fuzz_targets/fuzz_expand.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_parser"
+path = "fuzz_targets/fuzz_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_check"
+path = "fuzz_targets/fuzz_check.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

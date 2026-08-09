@@ -1,0 +1,26 @@
+# PythScribe Project Configuration
+# Copy this file to pyths.toml to configure your project.
+
+[project]
+name = "my-app"
+version = "0.1.0"
+description = "A PythScribe web application"
+
+[build]
+target = "js"            # "js" or "wasm"
+entry = "src/main.ps"
+output = "dist/"
+sourcemap = true
+
+# Runtime settings
+[runtime]
+# Whether to inline the runtime or import it
+inline = false
+# Runtime package name (for import statements)
+package = "pyths-runtime"
+
+# Development server settings
+[serve]
+port = 3000
+host = "localhost"
+open = true

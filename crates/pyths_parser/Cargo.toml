@@ -1,0 +1,11 @@
+[package]
+name = "pyths_parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pyths_lexer = { workspace = true }
+pyths_syntax = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

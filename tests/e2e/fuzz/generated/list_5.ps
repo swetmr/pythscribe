@@ -1,0 +1,14 @@
+from pyths.react import component
+
+@component
+def App():
+    return div()(
+        h1()("Items"),
+        ul()(
+            li()(f"item 1"),
+            li()(f"item 2"),
+            li()(f"item 3"),
+            li()(f"item 4"),
+            li()(f"item 5")
+        )
+    )

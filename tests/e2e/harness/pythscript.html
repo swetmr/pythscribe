@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PythScribe fixture</title>
+    <link rel="stylesheet" href="./base.css" />
+    <style>
+      /* Per-fixture wrapper so the rendered tree's outer box matches the
+         React reference — both pages use #root as the mount point. */
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <pre id="error" style="display:none;color:#b91c1c;padding:1rem;font:12px ui-monospace,monospace;white-space:pre-wrap"></pre>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "react":              "https://esm.sh/react@18.3.1",
+          "react-dom":          "https://esm.sh/react-dom@18.3.1?deps=react@18.3.1",
+          "react-dom/client":   "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
+          "pyths-runtime":      "/runtime/src/index.js",
+          "pyths-runtime/react":"/tests/e2e/harness/pyths-react-shim.js",
+          "pyths-runtime/asyncio":"/runtime/asyncio.js"
+        }
+      }
+    </script>
+
+    <script type="module">
+      // Capture errors visibly so DOM serialization can confirm a clean render.
+      window.__pythsRenderError = null;
+      window.addEventListener("error", (e) => {
+        window.__pythsRenderError = (e.error && e.error.stack) || String(e.message);
+        const el = document.getElementById("error");
+        el.style.display = "block";
+        el.textContent = window.__pythsRenderError;
+      });
+      window.addEventListener("unhandledrejection", (e) => {
+        window.__pythsRenderError = (e.reason && e.reason.stack) || String(e.reason);
+      });
+
+      const params = new URLSearchParams(window.location.search);
+      const fixture = params.get("fixture") || "dashboard_500";
+      const exportName = params.get("export") || (fixture === "dashboard_500" ? "Dashboard" : "App");
+
+      try {
+        const { createRoot } = await import("react-dom/client");
+        const React = await import("react");
+        const mod = await import(`/examples/cloudflare-bench/large-samples/pythscribe/${fixture}.js`);
+        const Component = mod[exportName];
+        if (!Component) {
+          throw new Error(`export '${exportName}' not found in ${fixture}.js. ` +
+            `Available: ${Object.keys(mod).join(", ")}`);
+        }
+        const root = createRoot(document.getElementById("root"));
+        root.render(React.createElement(Component));
+        // Tell Playwright the render finished so screenshots are stable.
+        await new Promise(r => setTimeout(r, 50));
+        window.__pythsReady = true;
+      } catch (err) {
+        window.__pythsRenderError = (err && err.stack) || String(err);
+        const el = document.getElementById("error");
+        el.style.display = "block";
+        el.textContent = window.__pythsRenderError;
+        window.__pythsReady = true; // mark ready so the test doesn't hang
+      }
+    </script>
+  </body>
+</html>

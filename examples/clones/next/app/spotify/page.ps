@@ -1,0 +1,28 @@
+# Spotify clone RSC page (production track) - renders the precompiled
+# SpotifyApp.client.js "use client" interactive island from a PythScribe
+# server component. next-plugin-pyths's loader rewrites the extensionless
+# island import below to the precompiled .client.js automatically (see
+# CONTRIBUTING.md '"use client" islands in the Next shell').
+#
+# PLAYLISTS comes straight from shared/spotify/fixtures.ts - a cross-language
+# .ts import from a .ps server page (the emitted JS import resolves through
+# Next's normal module resolution). Dual-track with
+# app/react-reference/spotify/page.tsx.
+#
+# NOTE: `#` comments, not a triple-quoted docstring - see CONTRIBUTING.md
+# "Known friction" (Turbopack UTF-8 char-boundary panic).
+from pyths.react import component
+from ....shared.spotify.SpotifyApp import SpotifyApp
+from ....shared.spotify.fixtures import PLAYLISTS
+
+
+@component
+def SpotifyPage():
+    return main(
+        class_name="shell",
+        p(a(href="/", "← home")),
+        SpotifyApp(playlists=PLAYLISTS),
+    )
+
+
+__default__ = SpotifyPage

@@ -1,0 +1,39 @@
+# LFK 23 - 2-D implicit hydrodynamics fragment (flattened 6 x jn)
+def k23_hydro_impl(jn: int, loop: int) -> float:
+    kn = 6
+    za = [0.0] * (kn * jn)
+    zb = [0.0] * (kn * jn)
+    zr = [0.0] * (kn * jn)
+    zu = [0.0] * (kn * jn)
+    zv = [0.0] * (kn * jn)
+    zz = [0.0] * (kn * jn)
+    i = 0
+    while i < kn * jn:
+        za[i] = 0.001 * (i % 107 + 1)
+        zb[i] = 0.0007 * (i % 109 + 1)
+        zr[i] = 0.0013 * (i % 113 + 1)
+        zu[i] = 0.0011 * (i % 127 + 1)
+        zv[i] = 0.0009 * (i % 131 + 1)
+        zz[i] = 0.0017 * (i % 137 + 1)
+        i = i + 1
+    fw = 0.175
+    l = 0
+    while l < loop:
+        j = 1
+        while j < kn - 1:
+            k = 1
+            while k < jn - 1:
+                c = j * jn + k
+                qa = za[c + jn] * zr[c] + za[c - jn] * zb[c] + za[c + 1] * zu[c] + za[c - 1] * zv[c] + zz[c]
+                za[c] = za[c] + fw * (qa - za[c])
+                k = k + 1
+            j = j + 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < kn * jn:
+        s = s + za[i]
+        i = i + 1
+    return s
+
+print(repr(k23_hydro_impl(100, 3)))

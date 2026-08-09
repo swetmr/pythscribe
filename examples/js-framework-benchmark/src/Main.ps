@@ -1,0 +1,124 @@
+# js-framework-benchmark — row-table app, KEYED, PythScribe `.ps` track.
+#
+# The DOM structure and control ids below match the official
+# krausest/js-framework-benchmark harness so this app can be dropped into its
+# `frameworks/keyed/` runner unchanged: buttons id=run/runlots/add/update/clear/
+# swaprows, a `table.test-data` whose <tr> carry the row id as `key`, four <td>
+# per row, an <a> to select (adds `danger`) and an <a> to remove. Dual-tracked
+# against `react-reference/Main.tsx` — both render byte-identical DOM.
+from pyths.react import component, use_state
+import random
+
+ADJECTIVES = ["pretty", "large", "big", "small", "tall", "short", "long",
+    "handsome", "plain", "quaint", "clean", "elegant", "easy", "angry",
+    "crazy", "helpful", "mushy", "odd", "unsightly", "adorable", "important",
+    "inexpensive", "cheap", "expensive", "fancy"]
+COLOURS = ["red", "yellow", "blue", "green", "pink", "brown", "purple",
+    "brown", "white", "black", "orange"]
+NOUNS = ["table", "chair", "house", "bbq", "desk", "car", "pony", "cookie",
+    "sandwich", "burger", "pizza", "mouse", "keyboard"]
+
+# Monotonic module-level row-id counter. Each row created across the app's life
+# gets a unique id, so `build_data` rebinds the module `next_id` via `global`.
+next_id = 1
+
+
+def build_data(count):
+    global next_id
+    data = []
+    for i in range(count):
+        label = random.choice(ADJECTIVES) + " " + random.choice(COLOURS) + " " + random.choice(NOUNS)
+        data.append({"id": next_id, "label": label})
+        next_id = next_id + 1
+    return data
+
+
+# A single keyed row. `item`, `sel` and `rem` arrive as props, so the click
+# handlers close over stable prop values — never over a loop variable — which is
+# the loop-capture pitfall the js-framework-benchmark keyed spec exists to avoid.
+# `**props` is the whole-props-object form (#351): the single kwargs param
+# binds the flat props object React passes; named params would be PROP NAMES.
+@component
+def Row(**props):
+    item = props.item
+    return tr(class_name="danger" if props.selected else "",
+        td(class_name="col-md-1", item["id"]),
+        td(class_name="col-md-4",
+            a(on_click=lambda: props.sel(item["id"]), item["label"])),
+        td(class_name="col-md-1",
+            a(on_click=lambda: props.rem(item["id"]),
+                span(class_name="glyphicon glyphicon-remove"))),
+        td(class_name="col-md-6"),
+    )
+
+
+# One toolbar button. `action` (not `on_click`) is the prop name so it passes
+# through to a user component without any DOM-event aliasing.
+@component
+def Button(**props):
+    return div(class_name="col-sm-6 smallpad",
+        button(type="button", class_name="btn btn-primary btn-block",
+            id=props.id, on_click=props.action, props.label))
+
+
+@component
+def App():
+    data, set_data = use_state([])
+    selected, set_selected = use_state(0)
+
+    def run():
+        set_data(build_data(1000))
+
+    def run_lots():
+        set_data(build_data(10000))
+
+    def add():
+        set_data(data + build_data(1000))
+
+    def update():
+        updated = [t for t in data]
+        i = 0
+        while i < len(updated):
+            item = updated[i]
+            updated[i] = {"id": item["id"], "label": item["label"] + " !!!"}
+            i = i + 10
+        set_data(updated)
+
+    def clear():
+        set_data([])
+
+    def swap_rows():
+        if len(data) > 998:
+            updated = [t for t in data]
+            tmp = updated[1]
+            updated[1] = updated[998]
+            updated[998] = tmp
+            set_data(updated)
+
+    def select(row_id):
+        set_selected(row_id)
+
+    def remove(row_id):
+        set_data([t for t in data if t["id"] != row_id])
+
+    return div(class_name="container",
+        div(class_name="jumbotron",
+            div(class_name="row",
+                div(class_name="col-md-6", h1("PythScribe-keyed")),
+                div(class_name="col-md-6",
+                    div(class_name="row",
+                        Button(id="run", label="Create 1,000 rows", action=run),
+                        Button(id="runlots", label="Create 10,000 rows", action=run_lots),
+                        Button(id="add", label="Append 1,000 rows", action=add),
+                        Button(id="update", label="Update every 10th row", action=update),
+                        Button(id="clear", label="Clear", action=clear),
+                        Button(id="swaprows", label="Swap Rows", action=swap_rows))))),
+        table(class_name="table table-hover table-striped test-data",
+            tbody(
+                *[Row(key=item["id"], item=item, selected=item["id"] == selected,
+                    sel=select, rem=remove) for item in data])),
+        span(class_name="preloadicon glyphicon glyphicon-remove"),
+    )
+
+
+__default__ = App

@@ -1,0 +1,25 @@
+def fibonacci(n: int) -> int:
+    if n <= 1:
+        return n
+    a: int = 0
+    b: int = 1
+    i: int = 2
+    while i <= n:
+        temp: int = a + b
+        a = b
+        b = temp
+        i += 1
+    return b
+
+def sum_range(n: int) -> int:
+    total: int = 0
+    for i in range(n):
+        total += i
+    return total
+
+def gcd(a: int, b: int) -> int:
+    while b != 0:
+        temp: int = b
+        b = a % b
+        a = temp
+    return a

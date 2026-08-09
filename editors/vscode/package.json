@@ -1,0 +1,80 @@
+{
+  "name": "pyths-lang",
+  "displayName": "PythScribe Language",
+  "description": "PythScribe (.ps) language support: syntax highlighting, diagnostics, hover, completion, document symbols, goto-definition.",
+  "version": "0.3.0",
+  "publisher": "pyths-lang",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:pyths"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "pyths",
+        "aliases": [
+          "PythScribe",
+          "pyths"
+        ],
+        "extensions": [
+          ".ps"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pyths",
+        "scopeName": "source.pyths",
+        "path": "./syntaxes/pyths.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "PythScribe",
+      "properties": {
+        "pyths.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the pyths-lsp binary. If empty, the extension will look for `pyths-lsp` on PATH and fall back to `<workspace>/target/release/pyths-lsp.exe`."
+        },
+        "pyths.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Traces communication between VS Code and the pyths-lsp server."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "pyths.restartServer",
+        "title": "PythScribe: Restart Language Server",
+        "category": "PythScribe"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "pyths",
+        "label": "PythScribe Icons",
+        "path": "./iconThemes/pyths-icon-theme.json"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "scripts": {
+    "vscode:prepublish": "echo 'no build step (plain JS)'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pyths-lang/pyths"
+  },
+  "license": "MIT"
+}

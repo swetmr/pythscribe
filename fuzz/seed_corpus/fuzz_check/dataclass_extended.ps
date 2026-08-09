@@ -1,0 +1,23 @@
+from dataclasses import dataclass, Field
+
+@dataclass
+class EmailRecord:
+    email: str = Field(trim=True, email=True)
+    tag: str = Field(to_lower=True, starts_with="tag-")
+
+@dataclass
+class Config:
+    name: str = Field(trim=True, min_length=1, max_length=100)
+    url: str = Field(url=True)
+    uuid: str = Field(uuid=True)
+    prefix: str = Field(starts_with="cfg-")
+    suffix: str = Field(ends_with=".json")
+    keyword: str = Field(includes="key")
+
+@dataclass
+class NumericRecord:
+    score: float = Field(positive=True, finite=True)
+    delta: float = Field(negative=True)
+    count: int = Field(nonnegative=True, multiple_of=5)
+    level: int = Field(choices=[1, 2, 3])
+    code: str = Field(to_upper=True)

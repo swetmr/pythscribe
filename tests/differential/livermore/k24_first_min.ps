@@ -1,0 +1,21 @@
+# LFK 24 - find location of first minimum in array
+def k24_first_min(n: int, loop: int) -> int:
+    x = [0.0] * n
+    i = 0
+    while i < n:
+        x[i] = 0.001 * ((i * 7919) % 1009)
+        i = i + 1
+    x[n // 2] = -1.0e-2
+    m = 0
+    l = 0
+    while l < loop:
+        m = 0
+        k = 1
+        while k < n:
+            if x[k] < x[m]:
+                m = k
+            k = k + 1
+        l = l + 1
+    return m
+
+print(repr(k24_first_min(1001, 5)))

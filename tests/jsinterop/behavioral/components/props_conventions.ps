@@ -1,0 +1,47 @@
+# @component props-convention behavioral fixtures (#351 re-fix, #353 regression).
+#
+# Pins the THREE signature conventions end-to-end (React actually invoking the
+# compiled function with the flat props object), because the #353 regression
+# was invisible to compile-shape gates and only surfaced when React called the
+# component: reference-app's frontend suite caught it, the compiler suites didn't.
+#
+#   1. Named params are PROP NAMES at every arity — `def Frontier(data):` has
+#      one prop named `data`; `data` binds the prop VALUE (the #353 regression
+#      handed it the whole props object, so `data["points"]` raised KeyError).
+#   2. `def C(**props):` binds the WHOLE props object (documented form).
+#   3. `def C(props):` — single no-default param literally named `props` —
+#      whole-object pragmatic alias (what #351's consumers wrote).
+"use client"
+
+from pyths.react import component
+
+
+@component
+def Frontier(data):
+    # Arity-1 named prop holding a dict — subscript into the prop VALUE.
+    return ul(data_testid="frontier",
+        *[li(f"{p['x']},{p['y']}") for p in data["points"]])
+
+
+@component
+def PaperLink(run_id):
+    # The reference-app PaperUpload shape: arity-1 named prop interpolated into
+    # an f-string URL. Under #353 the whole props object interpolated
+    # ("[object Object]").
+    return a(data_testid="paper-link", href=f"/api/runs/{run_id}/paper.md",
+        "Download paper")
+
+
+@component
+def WholeProps(**props):
+    # Documented whole-props-object form: `props` IS the flat object React
+    # passes (dict-style access).
+    return div(data_testid="whole",
+        span(props["label"]),
+        span(str(props["count"])))
+
+
+@component
+def AliasProps(props):
+    # Pragmatic alias: single no-default param literally named `props`.
+    return div(data_testid="alias", props.name)

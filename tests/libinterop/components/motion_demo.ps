@@ -1,0 +1,25 @@
+# framer-motion — .ps twin (system under test).
+#
+# Probes: motion.div / motion.p member components (lowercase members of the
+# motion binding are PSX tags), animate/initial/transition dicts crossing as
+# plain objects, layout=True boolean prop, AnimatePresence with a
+# conditional child (exit animation on unmount).
+from pyths.react import component, use_state
+from framer_motion import motion, AnimatePresence
+
+
+@component
+def MotionDemo():
+    shown, set_shown = use_state(True)
+    return div(
+        motion.div(
+            data_testid="box",
+            initial={"opacity": 0},
+            animate={"opacity": 1},
+            transition={"duration": 0.01},
+            layout=True,
+            "animated box"),
+        button(data_testid="toggle", on_click=lambda: set_shown(not shown), "toggle"),
+        AnimatePresence(
+            motion.p(data_testid="presence", exit={"opacity": 0},
+                transition={"duration": 0.01}, "present") if shown else None))

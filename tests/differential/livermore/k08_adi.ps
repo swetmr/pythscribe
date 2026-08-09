@@ -1,0 +1,46 @@
+# LFK 8 — ADI integration (flattened 2-D arrays: idx = j*nz + k)
+def k08_adi(nz: int, loop: int) -> float:
+    n1 = 2 * nz
+    u1 = [0.0] * n1
+    u2 = [0.0] * n1
+    u3 = [0.0] * n1
+    i = 0
+    while i < n1:
+        u1[i] = 0.001 * (i + 1)
+        u2[i] = 0.0007 * (i + 1)
+        u3[i] = 0.0005 * (i + 1)
+        i = i + 1
+    a11 = 0.031
+    a12 = 0.032
+    a13 = 0.033
+    a21 = 0.034
+    a22 = 0.035
+    a23 = 0.036
+    sig = 0.25
+    du1 = 0.0
+    du2 = 0.0
+    du3 = 0.0
+    l = 0
+    while l < loop:
+        kx = 1
+        while kx < 2:
+            ky = 1
+            while ky < nz - 1:
+                base = kx * nz + ky
+                du1 = u1[base + 1] - u1[base - 1]
+                du2 = u2[base + 1] - u2[base - 1]
+                du3 = u3[base + 1] - u3[base - 1]
+                u1[base] = u1[base] + a11 * du1 + a12 * du2 + a13 * du3 + sig * (u1[base + 1] - 2.0 * u1[base] + u1[base - 1])
+                u2[base] = u2[base] + a21 * du1 + a22 * du2 + a23 * du3 + sig * (u2[base + 1] - 2.0 * u2[base] + u2[base - 1])
+                u3[base] = u3[base] + a11 * du1 + a21 * du2 + a22 * du3 + sig * (u3[base + 1] - 2.0 * u3[base] + u3[base - 1])
+                ky = ky + 1
+            kx = kx + 1
+        l = l + 1
+    s = 0.0
+    i = 0
+    while i < n1:
+        s = s + u1[i] + u2[i] + u3[i]
+        i = i + 1
+    return s
+
+print(repr(k08_adi(300, 4)))
