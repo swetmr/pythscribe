@@ -2,6 +2,11 @@
 
 **Python for the browser and the edge, compiled.**
 
+[![npm](https://img.shields.io/npm/v/pythscribe.svg)](https://www.npmjs.com/package/pythscribe)
+[![CI](https://github.com/swetmr/pythscribe/actions/workflows/ci.yml/badge.svg)](https://github.com/swetmr/pythscribe/actions/workflows/ci.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21875694.svg)](https://doi.org/10.5281/zenodo.21875694)
+[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue.svg)](./LICENSE.md)
+
 PythScribe is an ahead-of-time compiler that transcribes Python into JavaScript and WebAssembly via a blazing-fast Rust toolchain. Write classes, components, and APIs in `.ps` files using Python syntax and compile them to production-ready JS (and WASM for compute-heavy functions) that slots into React, Next.js, or any web project.
 
 
@@ -479,6 +484,8 @@ cargo build --release
 ```
 
 Total: **2,000+ automated checks across 12 layers** (1,432 cargo + 1,318 differential + 24 Livermore x3 + 279 clone-parity + ~28 pixel/DOM parity + acceptor corpus + Lean proofs + certificate corpus). CI runs them on every push (`.github/workflows/ci.yml`), including the Lean `verification` job and the tri-track `clones` job; the panic-resistance fuzz harness lives in `crates/pyths_cli/tests/fuzz_inputs.rs`. A separate weekly fuzz cron (`.github/workflows/fuzz.yml`) runs coverage-guided `cargo-fuzz` targets from `fuzz/`.
+
+The full assurance study behind these layers — oracle-diverse testing, per-compilation routing certificates, machine-checked Lean verification, and explicit trust accounting — is written up in *"Layered Assurance for an Agent-Written Python-to-JavaScript/WebAssembly Compiler"*: **https://doi.org/10.5281/zenodo.21875694**.
 
 ## Contributing
 

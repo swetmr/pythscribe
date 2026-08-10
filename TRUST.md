@@ -13,8 +13,9 @@ Expansion* (<https://doi.org/10.5281/zenodo.21386779>). The compilation-side sto
 — the four-phase testing / credible-compilation / machine-checked-routing
 validation of the `.ps` → JS/WASM path (the Livermore WASM benchmark,
 subscript-routing certificates, and the Lean `RouteModel` / `route_read_safety`) —
-is written up in the companion preprint *Testing, Credible Compilation, and
-Machine-Checked Routing in PythScribe*.
+is written up in the companion preprint *Layered Assurance for an
+Agent-Written Python-to-JavaScript/WebAssembly Compiler*
+(<https://doi.org/10.5281/zenodo.21875694>).
 
 ## Machine-checked (Lean 4, `verification/`)
 

@@ -2,8 +2,7 @@
 
 Transcrypt is PythScribe's closest peer: a mature, ahead-of-time Python→JavaScript
 compiler that ships **no interpreter**. This document compares them honestly, grounded
-in Transcrypt's own design article and repository (sources at the bottom), and ends with
-a **Transferable utility** section — things from Transcrypt worth adopting.
+in Transcrypt's own design article and repository (sources at the bottom).
 
 The short version: the two agree on architecture (AOT, no interpreter, differential
 testing, source maps) but sit on **opposite sides of the conformance-versus-performance
@@ -85,6 +84,40 @@ TanStack, tuple-destructure element typing (`count, set_count = use_state(0)` ty
 generic TypeVar inference, and `.d.ts` emission. Both honor Python type annotations; the
 difference is that PythScribe ships the checker rather than delegating to mypy.
 
+**TypeScript.** Neither compiler *ingests* TypeScript — both take Python. On the *output*
+side they differ: Transcrypt emits **JavaScript only** (readable, Python-mirroring) with no
+`.d.ts`; it consumes Python annotations for optional mypy checking but produces no TS
+artifacts. PythScribe **emits `.d.ts` declaration files** alongside its JS, so a compiled
+`.ps` module presents a typed surface to a TypeScript consumer. If your project's contract
+is expressed in TypeScript types, PythScribe interoperates with it; Transcrypt does not
+produce that surface.
+
+## State management and complex libraries
+
+Both can, in principle, reach the whole npm ecosystem — but the *manner* differs sharply,
+and state management is the sharpest example.
+
+- **Transcrypt** has **no first-class state-management layer**; everything is generic JS
+  interop. Redux is *reachable and community-demonstrated* (e.g. the `react-redux-transcrypt`
+  and `python-fullstack-transcrypt` example repos) but through **community** React wrappers
+  (`reactscrypt`, `pyreact`) that expose `createElement`/`createClass` with **no JSX**, not
+  through Transcrypt core. Zustand has no Transcrypt-specific support at all — it works only
+  as raw interop (import the npm module via a bundler's `require()`, call its hooks with JS
+  naming). The interop mechanism is manual: `__pragma__('js', …)` to inline JS, name-aliases
+  for Python-reserved identifiers, no type stubs. Transcrypt's type-unification (a dict *is*
+  a JS object) does make plain-object Redux actions/state interop naturally — but that is the
+  same unification that relaxes Python semantics.
+- **PythScribe** treats these as **native, typed, tested** libraries: it ships a
+  `zustand.pyi` type stub (plus React/Next/Router/TanStack), recognizes the state libraries
+  in codegen, and carries integration tests and a tutorial. The reference application
+  includes real `.ps` components — a Redux Toolkit + react-redux counter and a Zustand
+  counter — dual-track-verified against a React oracle. You write them in snake_case/PSX
+  idiom with full type inference, not as hand-wrapped JS.
+
+So: Transcrypt *can* drive Redux (community-proven) and *could* drive Zustand (raw interop
+only), with no first-class bindings, no type stubs, no JSX, and camelCase JS naming;
+PythScribe drives both as native, typed, verified libraries in Python idiom.
+
 ## Debuggability and source maps
 
 Both generate source maps for source-level breakpoints and stepping. Transcrypt adds
@@ -131,8 +164,10 @@ vs tested vs trusted.
 | Numbers | JS doubles (unified with JS types) | Exact hybrid `Number`/`BigInt` |
 | Guiding property | **Isomorphism** (readable, JS mirrors Python) | **Semantic fidelity** (behaves like CPython) |
 | Typing | Dynamic inside, static at boundaries (mypy) | Built-in inference + checker, first-class static |
+| TypeScript output | JS only, no `.d.ts` | Emits `.d.ts` declarations alongside JS |
 | Debugging | Source maps, line annotations, inline-JS | Source maps, `--explain`, Python-named errors |
 | Frontend | React as a JS library (createElement, camelCase) | `@component`/PSX, snake_case, Next.js, 30+ libs |
+| State mgmt | Redux via community wrappers (no JSX); Zustand raw interop only; no type stubs | Redux Toolkit + react-redux + Zustand native, `.pyi`-stubbed, dual-track-tested |
 | Compression | — | `.psc` LOIR + verified expander |
 | Assurance | Autotester (back-to-back) | + routing certificate, Lean proofs, trust manifest |
 | Maturity | Mature, years in production | Newer |
@@ -145,41 +180,9 @@ interop dominate; pick PythScribe when Python semantics, a React/Next idiom, and
 scope matter — especially for LLM-generated code, where silent semantic drift is a hidden
 failure mode.
 
-## Transferable utility — what PythScribe can borrow
-
-Concrete, actionable items from the Transcrypt repository (Apache-2.0):
-
-1. **Their autotester corpus to expand our differential coverage.** Transcrypt's
-   `transcrypt/development/automated_tests/transcrypt/` holds *testlets* — small modules
-   exercising specific language features that repeatedly call
-   `org.transcrypt.autotester.AutoTester.check()` to build an output sequence compared
-   back-to-back against CPython. This is the same shape as our differential corpus. We can
-   **port these testlets through `pyths` and diff against CPython** to (a) grow the
-   1,318-corpus and (b) surface conformance gaps in areas Transcrypt exercises heavily —
-   multiple inheritance, metaclasses, properties, decorators, async/await, generators, and
-   operator overloading. *License note:* Apache-2.0 test files are permissively reusable
-   with attribution; keep them in a clearly attributed, separate corpus directory rather
-   than mixed into first-party tests.
-
-2. **The `AutoTester.check()` sequence pattern** as a lightweight authoring convention for
-   new feature tests — accumulate a deterministic output sequence, oracle it once under
-   CPython. We already do this at corpus scale; adopting the per-feature testlet ergonomic
-   makes it cheap for contributors to add coverage.
-
-3. **Optional source-line annotation in emitted JS** (Transcrypt annotates output with
-   source line numbers). We ship source maps; adding an opt-in line-annotation mode is a
-   small debuggability nicety for readers inspecting compiled output directly.
-
-4. **The conformance-vs-performance framing itself** as a positioning lens — Transcrypt
-   makes the trade explicit and lets the user choose per scope; documenting our inverse
-   choice (conformance default, WASM for speed) in exactly these terms sharpens the story.
-
-What is **not** worth borrowing: the type-unification default (it is the source of the
-semantic gaps PythScribe exists to close) and pragma-gated correctness (per-module opt-in
-is precisely the LLM-drift failure mode we avoid).
-
 ## Sources
 
+- [PythScribe — *Layered Assurance for an Agent-Written Python-to-JavaScript/WebAssembly Compiler*](https://doi.org/10.5281/zenodo.21875694) (the head-to-head steady-state Livermore benchmark and full protocol behind the conformance-vs-performance claims here — Transcrypt `opov`-global/scoped vs PythScribe's auto-routed JS+WASM — are in its Appendix C).
 - [Transcrypt: design requirements and architecture — InfoQ](https://www.infoq.com/articles/transcrypt-python-javascript-compiler/) (the author's design article: the three demands, isomorphism, conformance-vs-performance pragmas, type unification, hybrid typing).
 - [TranscryptOrg/Transcrypt — GitHub](https://github.com/TranscryptOrg/Transcrypt) (README: features, source maps, Apache-2.0; layout `transcrypt/modules/org/transcrypt`).
 - [Autotesting Transcrypt code — Transcrypt docs](https://www.transcrypt.org/docs/html/autotesting_transcrypt.html) (`development/automated_tests/transcrypt`, `AutoTester.check()`, back-to-back CPython testing).

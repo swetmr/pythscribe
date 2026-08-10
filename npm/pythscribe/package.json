@@ -25,9 +25,13 @@
   },
   "files": [
     "bin/pyths.js",
+    "skills/",
     "README.md",
     "LICENSE.md"
   ],
+  "scripts": {
+    "prepack": "node scripts/copy-skills.cjs"
+  },
   "engines": {
     "node": ">=18"
   },

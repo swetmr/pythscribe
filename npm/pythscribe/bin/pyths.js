@@ -10,6 +10,49 @@ const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 
+// `pyths skill [name]` — emit a bundled authoring skill so an LLM/agent can pick it
+// up from the installed package (node_modules/pythscribe/skills/*.md). Handled here,
+// before we resolve the native binary, since it needs no compiler. With no name it
+// lists what shipped; with a name it prints that skill's markdown to stdout.
+if (process.argv[2] === "skill") {
+  const skillsDir = path.join(__dirname, "..", "skills");
+  let files = [];
+  try {
+    files = fs.readdirSync(skillsDir).filter((f) => f.endsWith(".md"));
+  } catch {
+    /* dir absent -> handled below */
+  }
+  if (files.length === 0) {
+    process.stderr.write(
+      `pyths: no bundled skills found (expected under ${skillsDir}).\n`,
+    );
+    process.exit(1);
+  }
+  const want = process.argv[3];
+  if (!want) {
+    process.stdout.write(
+      "Bundled PythScribe skills (pass a name to print one):\n",
+    );
+    for (const f of files) {
+      const name = f.replace(/\.md$/, "");
+      process.stdout.write(`  ${name}\n    ${path.join(skillsDir, f)}\n`);
+    }
+    process.exit(0);
+  }
+  const match =
+    files.find((f) => f.replace(/\.md$/, "") === want) ||
+    files.find((f) => f.includes(want));
+  if (!match) {
+    const names = files.map((f) => f.replace(/\.md$/, "")).join(", ");
+    process.stderr.write(
+      `pyths: no skill matching "${want}". Available: ${names}.\n`,
+    );
+    process.exit(1);
+  }
+  process.stdout.write(fs.readFileSync(path.join(skillsDir, match), "utf8"));
+  process.exit(0);
+}
+
 // host key -> platform package name
 const PLATFORM_PACKAGES = {
   "win32 x64": "@pythscribe/cli-win32-x64",

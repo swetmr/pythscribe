@@ -46,3 +46,7 @@ __pycache__/
 .claude/settings.local.json
 m2target/
 ..pythscribe-docs2/
+
+# Generated skill bundles (prepack copies repo-root SKILL*.md here; source stays at root)
+npm/pythscribe/skills/
+packages/create-pyths-app/skills/

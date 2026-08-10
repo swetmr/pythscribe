@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { resolve, join, isAbsolute, relative } from "node:path";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { resolve, join, isAbsolute, relative, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const projectName = process.argv[2] || "my-pyths-app";
 
@@ -133,12 +134,33 @@ def Header(title):
 `
 );
 
+// Claude Code skills — scaffold the authoring skills into .claude/skills/ so an
+// agent working in this project can write idiomatic .ps and compress to .psc. The
+// bundle ships in this package under ./skills/ (see scripts/copy-skills.cjs).
+const skillsSrc = join(dirname(fileURLToPath(import.meta.url)), "skills");
+const skillMap = [
+    ["pythscribe-language.md", "pythscribe-language"],
+    ["compressing-ps-to-psc.md", "compressing-ps-to-psc"],
+];
+const scaffoldedSkills = [];
+for (const [file, name] of skillMap) {
+    const from = join(skillsSrc, file);
+    if (!existsSync(from)) continue; // bundle absent (running from source w/o prepack)
+    const destDir = join(projectDir, ".claude", "skills", name);
+    mkdirSync(destDir, { recursive: true });
+    writeFileSync(join(destDir, "SKILL.md"), readFileSync(from, "utf8"));
+    scaffoldedSkills.push(name);
+}
+
 console.log("Created project files:");
 console.log("  package.json");
 console.log("  next.config.mjs");
 console.log("  app/layout.ps");
 console.log("  app/page.ps");
 console.log("  components/header.ps");
+for (const name of scaffoldedSkills) {
+    console.log(`  .claude/skills/${name}/SKILL.md`);
+}
 console.log("");
 console.log("Get started:");
 console.log(`  cd ${projectName}`);

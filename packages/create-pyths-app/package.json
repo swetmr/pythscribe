@@ -8,9 +8,13 @@
   "type": "module",
   "files": [
     "index.js",
+    "skills/",
     "README.md",
     "LICENSE"
   ],
+  "scripts": {
+    "prepack": "node scripts/copy-skills.cjs"
+  },
   "keywords": [
     "pyths",
     "python",
