@@ -141,7 +141,6 @@ npm install -D next-plugin-pyths@0.2.1     # Next.js
 
 ```bash
 pyths --version          # 0.2.1
-pyths run hello.ps       # → Hello, World!
 ```
 
 Standalone scripts (`pyths run …`) work with just the compiler — the runtime is built in. Framework projects also need `pyths-runtime` (imported by the compiled output) and the matching bundler plugin above.
