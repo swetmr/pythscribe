@@ -6,6 +6,13 @@ import { fileURLToPath } from "node:url";
 
 const projectName = process.argv[2] || "my-pyths-app";
 
+// Pin the generated app's PythScribe deps to THIS scaffolder's own version, read
+// at runtime — so they can never drift from the release (set-version bumps
+// create-pyths-app's package.json; this reflects it automatically).
+const PYTHS_VERSION = JSON.parse(
+    readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+).version;
+
 // A15 hardening: confine the scaffold target to a subdirectory of the CWD.
 // Reject absolute paths and any `..` escape (e.g. `../../../tmp/x`) so the
 // scaffolder cannot write files outside the directory it was invoked in.
@@ -56,9 +63,9 @@ writeFileSync(
                 next: "^16.2.9",
                 react: "^19.2.0",
                 "react-dom": "^19.2.0",
-                pythscribe: "^0.2.2",
-                "pyths-runtime": "^0.2.2",
-                "next-plugin-pyths": "^0.2.2",
+                pythscribe: `^${PYTHS_VERSION}`,
+                "pyths-runtime": `^${PYTHS_VERSION}`,
+                "next-plugin-pyths": `^${PYTHS_VERSION}`,
             },
         },
         null,

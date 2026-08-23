@@ -150,13 +150,7 @@ Everything installs from npm — no Rust toolchain required (installs `@latest` 
 npm install pythscribe
 ```
 
-**That one package brings the whole chain** — the `pyths` compiler (with your platform's prebuilt native binary), the `pyths-runtime`, and the **React / Vite** plugin (`vite-plugin-pyths`) — so a React + Vite project is ready to compile `.ps` files.
-
-**Using Next.js?** It's fully supported — add its plugin alongside:
-
-```bash
-npm install pythscribe next-plugin-pyths
-```
+**That one package brings the whole chain** — the `pyths` compiler (with your platform's prebuilt native binary), the `pyths-runtime`, and **both** framework plugins (`vite-plugin-pyths` and `next-plugin-pyths`) — so a **React / Vite _or_ Next.js** project is ready to compile `.ps` files out of the box. The plugins declare `vite`/`next` as *optional* peers, so you pull in only whichever framework you actually use — no extra install, no peer warnings.
 
 ```bash
 pyths --version
@@ -169,7 +163,19 @@ npm create pyths-app@latest my-app
 cd my-app && npm install && npm run dev
 ```
 
-This scaffolds a ready-to-run **Next.js** + PythScribe app (compiler, runtime, and plugin wired up). For **React / Vite** instead, use `npm install pythscribe` in your own Vite project (above).
+This scaffolds a ready-to-run **Next.js** + PythScribe app — compiler, runtime, and plugin already wired up.
+
+**Prefer your own base?** Scaffold with the framework's own tool, then add PythScribe and wire its plugin:
+
+```bash
+# React + Vite  (see docs/getting-started-with-vite.md)
+npm create vite@latest my-app
+cd my-app && npm install pythscribe
+
+# Next.js  (see docs/getting-started-with-next.md)
+npx create-next-app@latest my-app
+cd my-app && npm install pythscribe
+```
 
 ### Standalone scripts
 
@@ -371,9 +377,7 @@ pyths bundle app.ps --minify            # minified output
 
 ### Vite
 
-```bash
-npm link pyths-runtime vite-plugin-pyths
-```
+`vite-plugin-pyths` already ships with `npm install pythscribe` — no extra install. *(From-source checkout only: `npm link pyths-runtime vite-plugin-pyths`.)*
 
 ```js
 // vite.config.js
@@ -386,9 +390,7 @@ export default {
 
 ### Next.js
 
-```bash
-npm link pyths-runtime next-plugin-pyths
-```
+`next-plugin-pyths` already ships with `npm install pythscribe` — no extra install. *(From-source checkout only: `npm link pyths-runtime next-plugin-pyths`.)*
 
 ```js
 // next.config.mjs

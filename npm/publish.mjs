@@ -28,6 +28,8 @@ const repoRoot = join(__dirname, "..");
 const EXTRA_DIRS = {
   "pyths-runtime": join(repoRoot, "runtime"),
   "vite-plugin-pyths": join(repoRoot, "packages", "vite-plugin-pyths"),
+  "next-plugin-pyths": join(repoRoot, "packages", "next-plugin-pyths"),
+  "create-pyths-app": join(repoRoot, "packages", "create-pyths-app"),
 };
 function pkgDir(name) {
   return EXTRA_DIRS[name] || join(__dirname, name);
@@ -99,6 +101,35 @@ if (missing.length) {
     console.error(
       `Refusing to publish: the wrapper depends on intra-distribution package(s) NOT in the publish set:\n  ${orphans.join("\n  ")}\n` +
         `Add each to PRE_WRAPPER (and EXTRA_DIRS if it lives outside npm/) so the whole closure publishes together.`);
+    process.exit(1);
+  }
+}
+
+// DEEP GUARD 2 (distribution completeness): EVERY publishable package in the
+// distribution dirs must be in the publish set — even ones nothing depends on
+// (create-pyths-app, next-plugin-pyths). Guard 1 only covers wrapper deps; this
+// catches a standalone package left stale on npm (the 0.2.2 create-pyths-app /
+// next-plugin-pyths gap). Add a new package to EXTRA_DIRS/PLATFORM_PKGS, or mark
+// it `"private": true`, or the release fails here.
+{
+  const manifests = [join(__dirname, "pythscribe", "package.json"), join(repoRoot, "runtime", "package.json")];
+  for (const parent of [join(__dirname, "@pythscribe"), join(repoRoot, "packages")]) {
+    if (!existsSync(parent)) continue;
+    for (const name of readdirSync(parent)) {
+      const f = join(parent, name, "package.json");
+      if (existsSync(f)) manifests.push(f);
+    }
+  }
+  const published = new Set([...PRE_WRAPPER, "pythscribe"]);
+  const orphans = [];
+  for (const f of manifests) {
+    const j = JSON.parse(readFileSync(f, "utf8"));
+    if (j.name && !j.private && !published.has(j.name)) orphans.push(`${j.name}  (${f})`);
+  }
+  if (orphans.length) {
+    console.error(
+      `Refusing to publish: publishable package(s) in the distribution are NOT in the publish set:\n  ${orphans.join("\n  ")}\n` +
+        `Add each to PLATFORM_PKGS or EXTRA_DIRS, or set "private": true if it must not publish.`);
     process.exit(1);
   }
 }

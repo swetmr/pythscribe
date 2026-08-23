@@ -140,10 +140,15 @@ jobs:
         run: |
           set -eux
           VER="$(node -p "require('./npm/pythscribe/package.json').version")"
-          # allow for registry propagation after publish
-          for i in 1 2 3 4 5 6; do
-            if npm view "pythscribe@$VER" version >/dev/null 2>&1; then break; fi
-            echo "waiting for registry propagation ($i)…"; sleep 10
+          # Wait for the WHOLE install closure to propagate — not just the wrapper.
+          # On an idempotent backfill the wrapper is already visible while a freshly
+          # published dep is not (the 0.2.2 false-red), so poll the deps too.
+          for i in $(seq 1 12); do
+            if npm view "pythscribe@$VER" version >/dev/null 2>&1 \
+               && npm view "pyths-runtime@$VER" version >/dev/null 2>&1 \
+               && npm view "vite-plugin-pyths@$VER" version >/dev/null 2>&1 \
+               && npm view "next-plugin-pyths@$VER" version >/dev/null 2>&1; then break; fi
+            echo "waiting for registry propagation of the full closure ($i)…"; sleep 10
           done
           D="$(mktemp -d)"; cd "$D"; npm init -y >/dev/null
           npm pkg set type=module                       # emitted .js is ESM — don't rely on Node's ambiguous-file detection

@@ -39,8 +39,13 @@ function setPkgVersion(rel, version) {
   let s = readFileSync(p, "utf8");
   // the package's own `version` (first occurrence)
   s = s.replace(new RegExp(`("version":\\s*)"${SEMVER}"`), `$1"${version}"`);
-  // any @pythscribe/cli-* dependency pins
+  // any @pythscribe/cli-* dependency pins (exact-pinned)
   s = s.replace(new RegExp(`("@pythscribe/cli-[\\w-]+":\\s*)"${SEMVER}"`, "g"), `$1"${version}"`);
+  // intra-distribution JS-dep pins the wrapper carries (caret-pinned) — keep in lockstep
+  s = s.replace(
+    new RegExp(`("(?:pyths-runtime|vite-plugin-pyths|next-plugin-pyths)":\\s*)"\\^?${SEMVER}"`, "g"),
+    `$1"^${version}"`,
+  );
   writeFileSync(p, s);
 }
 
