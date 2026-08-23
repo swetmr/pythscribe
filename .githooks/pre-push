@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # pre-push — the last LOCAL gate before anything reaches the remote.
 #
-# Blocks exactly the two drift classes that have actually broken CI on main:
+# Blocks exactly the drift classes that have actually broken CI on main:
 #   1. rustfmt drift        -> the Lint job's `cargo fmt --all -- --check`
-#   2. stale formalization.yaml -> the Lean-proofs job's in-sync check
+#   2. clippy warnings      -> the Lint job's `cargo clippy --workspace -- -D warnings`
+#   3. stale formalization.yaml -> the Lean-proofs job's in-sync check
 #
 # Design (why pre-push, why this split):
 #   * `cargo fmt --check` is a few seconds — run it on EVERY push.
@@ -36,7 +37,13 @@ else
   fail "cargo not found on PATH — cannot verify formatting."
 fi
 
-# ---- 2. formalization.yaml in sync (only when verification/ is in the push)
+# ---- 2. clippy, exactly as the Lint job runs it (seconds on a warm cache) --
+echo "pre-push: cargo clippy --workspace -- -D warnings"
+if ! cargo clippy --workspace -- -D warnings; then
+  fail "clippy warnings. Fix them (or justify a targeted #[allow]) and re-commit."
+fi
+
+# ---- 3. formalization.yaml in sync (only when verification/ is in the push)
 verification_changed=0
 while read -r _local_ref local_sha _remote_ref remote_sha; do
   [ "$local_sha" = "$ZERO" ] && continue   # branch deletion — nothing to check

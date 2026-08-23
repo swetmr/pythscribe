@@ -460,7 +460,10 @@ fn alias_key(p: &Path) -> String {
 /// State of an output path after a no-follow inspection.
 enum Inspection {
     Absent,
-    Existing(std::fs::Metadata),
+    /// Destination exists and passed the no-follow safety checks (regular
+    /// file, not a symlink). The metadata itself is consumed inside
+    /// `inspect`; no caller needs it, so the variant carries no payload.
+    Existing,
 }
 
 /// SEC #5/#10/#12: shared no-follow, fail-closed inspection for EVERY
@@ -492,7 +495,7 @@ fn inspect(target: &Path) -> Result<Inspection, BoxError> {
                 )
                 .into());
             }
-            Ok(Inspection::Existing(meta))
+            Ok(Inspection::Existing)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Inspection::Absent),
         Err(e) => Err(format!(
@@ -521,7 +524,7 @@ fn hardlink_refusal(target: &Path, nlink: u64) -> BoxError {
 fn decide(o: &PlannedOutput, all: &[PlannedOutput], force: bool) -> Result<Decision, BoxError> {
     match inspect(&o.path)? {
         Inspection::Absent => return Ok(Decision::Create),
-        Inspection::Existing(_) => {}
+        Inspection::Existing => {}
     }
 
     // Existing scaffold: kept untouched, so no further checks apply.
@@ -948,7 +951,7 @@ pub fn write_user_named(path: &Path, contents: &[u8]) -> Result<(), BoxError> {
             create_new_write(path, contents)?;
             Ok(())
         }
-        Inspection::Existing(_) => overwrite_plain_on_fd(path, contents),
+        Inspection::Existing => overwrite_plain_on_fd(path, contents),
     }
 }
 

@@ -32,6 +32,7 @@ that have actually broken CI on `main`:
 | Check | CI job it protects | Cost | When it runs |
 |---|---|---|---|
 | `cargo fmt --all -- --check` | Lint | seconds | every push |
+| `cargo clippy --workspace -- -D warnings` | Lint | seconds on a warm cache | every push |
 | `formalization.yaml` in sync (`python comparator/axiom_footprint.py check --no-build`) | Lean proofs | tens of seconds | only when the push touches `verification/` |
 
 Design notes:

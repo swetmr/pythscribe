@@ -457,7 +457,7 @@ fn collect_dataclass_fields<'a>(body: &'a [Stmt]) -> Vec<DataclassField<'a>> {
             if is_classvar_annotation(annotation) {
                 continue;
             }
-            let property_default = value.as_ref().is_some_and(|v| is_property_call(v));
+            let property_default = value.as_ref().is_some_and(is_property_call);
             if let ExprKind::Name(field_name) = &target.kind {
                 // Check if value is Field(...) or field(...)
                 if let Some(val) = value {
@@ -3972,6 +3972,7 @@ function pyFormatDynamic(value, specStr) {
     ///     → CPython's dynamic globals → builtins chain: builtin-named reads
     ///     fall back to the builtin value, the rest raise NameError
     ///     (`__pyChkGlobal`).
+    ///
     /// `None`: not a sentinel read — the name resolves to a real binding
     /// before any sentinel-owning frame is reached.
     fn sentinel_read(&self, name: &str) -> Option<SentinelRead> {
@@ -10039,6 +10040,7 @@ function pyFormatDynamic(value, specStr) {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // mirrors the FuncDef AST node's own arity
     fn emit_func_def(
         &mut self,
         name: &str,
