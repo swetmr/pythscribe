@@ -1,5 +1,5 @@
 name = "PythExpandVerify"
-defaultTargets = ["PythExpandVerify", "expanddiff"]
+defaultTargets = ["PythExpandVerify", "expanddiff", "RpcBoundary", "Union7", "RoutingSoundness", "JsWasmMirror", "InternalConsistency", "EffectOrder", "C2TypeRepr", "C8HostInterop", "Union8", "C1C3C4Outcome"]
 
 # Dependency-free: pure Lean 4 core (no mathlib) so `lake build`
 # needs only the pinned toolchain, no network fetch.
@@ -38,3 +38,86 @@ name = "PythExpandVerify"
 [[lean_exe]]
 name = "expanddiff"
 root = "Main"
+
+# C7 (object identity / aliasing, rpc-boundary-spec §8.4) + §8.6 tag
+# disjointness. Model-level (the RPC boundary is a design doc — nothing
+# implemented); self-contained, Lean core only.
+[[lean_lib]]
+name = "RpcBoundary"
+
+# The 7-way exhaustive preservation union (C1∧C2∧C3∧C4∧C5∧C6∧C7) over the
+# wave/lattice fragments + the new C7 alias fragment, with the seven
+# separation worlds proving every conjunct load-bearing. Imports
+# PythExpandVerify.
+[[lean_lib]]
+name = "Union7"
+
+# Semantic admissibility of the credible-compilation subscript router
+# (all route kinds), with the §3b Float/Set-native mis-route as the
+# proved-inadmissible discriminating witness (the design notes §3b,
+# fix 3d7a83f2). Imports PythExpandVerify (RouteModel + Comp₀ checker).
+[[lean_lib]]
+name = "RoutingSoundness"
+
+# JS↔WASM mirror equivalence at the marshalling boundary
+# (proof/jswasm-mirrors): whole-list i64 crossing (∀-over-elements exactness,
+# all-or-nothing, round-trip) + the end-to-end routed-call mirror
+# (arg-marshal → evalW → __ovf guard → ret-marshal ≡ the pure-JS lowering),
+# with guard-deleted stub refutations at the recorded bug witnesses
+# (pick([2**63+7]) / #358). Imports PythExpandVerify for WExp/evalW/wrapI64.
+[[lean_lib]]
+name = "JsWasmMirror"
+
+# Internal-consistency invariants: runtime two-copy parity (WB-20 / the
+# pyDelItem drift) + container-method dispatch soundness and determinism
+# (F2/WB-3/WB-10). Model-level transliterations — provenance pinned in the
+# file header; self-contained, Lean core only.
+[[lean_lib]]
+name = "InternalConsistency"
+
+# C2 (type/representation) FULL preservation post-#451 Option A
+# (int=bigint, float=number): shipped typeof-dispatch repr preserves
+# CPython repr for scalars AND container elements; the pre-fix
+# Number.isInteger world ([8.0]→[8]) is the refuted discriminating
+# witness, plus the carrier information-loss theorem. Model-tier
+# transliteration provenance-pinned to dev-main c63d0dd7 (header);
+# self-contained, Lean core only.
+[[lean_lib]]
+name = "C2TypeRepr"
+
+# C5 slice 6c — SYNCHRONOUS left-to-right observable-effect order
+# (the design notes §2 C5). Fills the gap between 6a (short-circuit
+# WHETHER the RHS runs) and 6b (async reorder across await): the plain
+# synchronous operand/statement evaluation ORDER, with a right-to-left
+# lowering as the proved-inadmissible discriminating witness. Model-tier
+# (header pins the honesty boundary); self-contained, Lean core only.
+[[lean_lib]]
+name = "EffectOrder"
+
+# C8 (host-interop preservation, the design notes C8): shipped
+# minimal Option B (int native/hybrid, integer-valued float boxed+__pyJs
+# unbox at native sinks) is a well-formed JS-host citizen — sink-safe +
+# .d.ts-honest — with the REVERTED Option A (int=bigint, c63d0dd7) as the
+# machine-checked discriminating witness (the slice(0n) class + the .d.ts
+# type-lie), while A's C2-side source fidelity is PROVED (the punchline's
+# other half). Imports C2TypeRepr.
+[[lean_lib]]
+name = "C8HostInterop"
+
+# The 8-way exhaustive preservation union (C1..C7 + the NEW C8 host-interop
+# axis) at the shipped minimal-B world, with sep_C8 = Option A as shipped
+# (all source-fidelity axes hold, host-interop fails — the machine-checked
+# regression) and all eight 7-way-subset insufficiency theorems. Imports
+# Union7 + C8HostInterop.
+[[lean_lib]]
+name = "Union8"
+
+# The unified C1∧C3∧C4 outcome-preservation theorem (value ∧ error-occurrence
+# ∧ error-KIND+MESSAGE, jointly ⟺ full outcome equality via the Union7 crown
+# lemma) on the non-recursive operation fragment, transliteration-pinned to
+# merged main b28a36da (errkind fix + minimal B) and bound to the
+# errorkind-ps / slice / pyeq differentials. The pre-errkind-fix world is the
+# refuted false world (RangeError kind / raw-JS message / Ok-undefined
+# occurrence — one witness per conjunct). Imports Union7.
+[[lean_lib]]
+name = "C1C3C4Outcome"
