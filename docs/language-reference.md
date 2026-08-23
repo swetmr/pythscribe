@@ -946,26 +946,29 @@ PSX is gated on the decorator. Without `@component` or `@psx`, calls to names li
 PythScribe supports four equivalent forms for an HTML element. They all compile to the same `createElement` call.
 
 ```python
-# Form 1 — nested (default): tag(prop=val, …, child, …)
-# Props and children in the same call. PythScribe's parser
-# permits positional args after keyword args (CPython doesn't);
-# the codegen separates kwargs → props from positional → children
-# regardless of order. The most Pythonic form.
-div(class_name="card", h2("Hello"))
+@psx
+def forms():
+    # Form 1 — nested (default): tag(prop=val, …, child, …)
+    # Props and children in the same call. PythScribe's parser
+    # permits positional args after keyword args (CPython doesn't);
+    # the codegen separates kwargs → props from positional → children
+    # regardless of order. The most Pythonic form.
+    form1 = div(class_name="card", h2("Hello"))
 
-# Form 2 — direct: tag(children…) when there are no props
-div(h2("Hello"))
+    # Form 2 — direct: tag(children…) when there are no props
+    form2 = div(h2("Hello"))
 
-# Form 3 — curried: tag(prop=val, …)(children…)
-# Props in the first call, children in the second. Useful when
-# you want visual separation of props from children, especially
-# for deeply nested trees.
-div(class_name="card")(h2("Hello"))
+    # Form 3 — curried: tag(prop=val, …)(children…)
+    # Props in the first call, children in the second. Useful when
+    # you want visual separation of props from children, especially
+    # for deeply nested trees.
+    form3 = div(class_name="card")(h2("Hello"))
 
-# Form 4 — empty-props curried: tag()(children…)
-# The props-less analog of Form 3, for callsites where you want
-# the same shape as props-bearing elements.
-div()(h2("Hello"))
+    # Form 4 — empty-props curried: tag()(children…)
+    # The props-less analog of Form 3, for callsites where you want
+    # the same shape as props-bearing elements.
+    form4 = div()(h2("Hello"))
+    return form1
 ```
 
 All four compile to:
@@ -984,8 +987,10 @@ createElement("div", {className: "card"}, createElement("h2", null, "Hello"))
 Props are passed as keyword arguments. Snake_case auto-converts to camelCase:
 
 ```python
-div(class_name="card", on_click=handler)("Click me")
-# → createElement("div", {className: "card", onClick: handler}, "Click me")
+@psx
+def clickable(handler):
+    return div(class_name="card", on_click=handler)("Click me")
+    # → createElement("div", {className: "card", onClick: handler}, "Click me")
 ```
 
 | Python | JavaScript |
@@ -1004,16 +1009,20 @@ ARIA and `data_*` attributes use kebab-case (HTML convention). Other DOM attribu
 **`style` props get an extra layer**: when the value is a Dict literal at the call site, every CSS key snake→camel-cases at compile time:
 
 ```python
-div(style={"border_radius": "6px", "font_family": "system-ui"})("Hi")
-# → createElement("div", {style: {borderRadius: "6px", fontFamily: "system-ui"}}, "Hi")
+@psx
+def styled():
+    return div(style={"border_radius": "6px", "font_family": "system-ui"})("Hi")
+    # → createElement("div", {style: {borderRadius: "6px", fontFamily: "system-ui"}}, "Hi")
 ```
 
 When `style` is a variable instead of a literal, the codegen wraps it in `pyNormalizeStyle(...)` so the conversion happens at runtime:
 
 ```python
-my_styles = {"border_radius": "6px"}
-div(style=my_styles)("Hi")
-# → createElement("div", {style: pyNormalizeStyle(my_styles)}, "Hi")
+@psx
+def styled_var():
+    my_styles = {"border_radius": "6px"}
+    return div(style=my_styles)("Hi")
+    # → createElement("div", {style: pyNormalizeStyle(my_styles)}, "Hi")
 ```
 
 ### Member access is verbatim — calling JS / DOM / library methods
@@ -1082,33 +1091,41 @@ A bare `Name(...)` call inside a PSX function resolves in this precedence:
 Children are positional args after the props call:
 
 ```python
-ul()(
-    li()("Item 1"),
-    li()("Item 2"),
-    li()("Item 3"),
-)
+@psx
+def item_list():
+    return ul()(
+        li()("Item 1"),
+        li()("Item 2"),
+        li()("Item 3"),
+    )
 ```
 
 **Spread a list of children with `*`**:
 
 ```python
-items = ["a", "b", "c"]
-ul()(*[li()(item) for item in items])
-# → createElement("ul", null, ...items.map(item => createElement("li", null, item)))
+@psx
+def spread_list():
+    items = ["a", "b", "c"]
+    return ul()(*[li()(item) for item in items])
+    # → createElement("ul", null, ...items.map(item => createElement("li", null, item)))
 ```
 
 **Mixed text + dynamic content**: each comma-separated arg becomes a separate child node, matching JSX's `<p>Hello {name}</p>` semantics:
 
 ```python
-p()("Hello, ", name, "!")
-# → createElement("p", null, "Hello, ", name, "!")  // 3 text/expression children
+@psx
+def greeting(name):
+    return p()("Hello, ", name, "!")
+    # → createElement("p", null, "Hello, ", name, "!")  // 3 text/expression children
 ```
 
 If you instead concatenate via an f-string, the result is a single text child (one DOM text node):
 
 ```python
-p()(f"Hello, {name}!")
-# → createElement("p", null, `Hello, ${name}!`)  // 1 text child
+@psx
+def greeting_fstring(name):
+    return p()(f"Hello, {name}!")
+    # → createElement("p", null, `Hello, ${name}!`)  // 1 text child
 ```
 
 This matters for DOM-parity tests against React: JSX's `<p>Hello {name}!</p>` produces multiple text children, so prefer comma-separated children when DOM byte-equality is a goal.
