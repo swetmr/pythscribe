@@ -24,7 +24,10 @@ fn compile(source: &str) -> String {
 #[test]
 fn breakpoint_lowers_to_debugger() {
     let js = compile("def f():\n    breakpoint()\n    return 1\n");
-    assert!(js.contains("debugger;"), "breakpoint() should emit `debugger;`:\n{js}");
+    assert!(
+        js.contains("debugger;"),
+        "breakpoint() should emit `debugger;`:\n{js}"
+    );
     assert!(
         !js.contains("breakpoint()"),
         "bare breakpoint() call must be gone:\n{js}"
@@ -55,8 +58,14 @@ fn dxb1_nested_fn_uses_enclosing_binding() {
             "shadowed builtin leaked `{bad}` inside nested fn:\n{js}"
         );
     }
-    assert!(js.contains("set(1)"), "set must call the enclosing param:\n{js}");
-    assert!(js.contains("len([1])"), "len must call the enclosing param:\n{js}");
+    assert!(
+        js.contains("set(1)"),
+        "set must call the enclosing param:\n{js}"
+    );
+    assert!(
+        js.contains("len([1])"),
+        "len must call the enclosing param:\n{js}"
+    );
 }
 
 #[test]
@@ -71,7 +80,10 @@ fn dxb1_method_local_closure_uses_enclosing_binding() {
     let js = compile(
         "class K:\n    def meth(self, set):\n        def inner():\n            return set(4)\n        return inner()\n",
     );
-    assert!(!js.contains("pySetOf"), "method-local closure mis-lowered set:\n{js}");
+    assert!(
+        !js.contains("pySetOf"),
+        "method-local closure mis-lowered set:\n{js}"
+    );
     assert!(js.contains("set(4)"), "{js}");
 }
 
@@ -80,7 +92,10 @@ fn dxb1_deeply_nested_uses_enclosing_binding() {
     let js = compile(
         "def store(set):\n    def m1():\n        def m2():\n            return set(3)\n        return m2()\n    return m1()\n",
     );
-    assert!(!js.contains("pySetOf"), "doubly-nested closure mis-lowered set:\n{js}");
+    assert!(
+        !js.contains("pySetOf"),
+        "doubly-nested closure mis-lowered set:\n{js}"
+    );
     assert!(js.contains("set(3)"), "{js}");
 }
 
@@ -89,8 +104,14 @@ fn dxb1_unshadowed_builtin_still_lowers() {
     // Control: with no shadowing binding, `set(...)`/`len(...)` still lower to
     // the builtin forms — the fix must not disable legitimate lowering.
     let js = compile("def f():\n    s = set([1, 2])\n    xs = [1, 2, 3]\n    return len(xs)\n");
-    assert!(js.contains("pySetOf"), "unshadowed set() should still lower:\n{js}");
-    assert!(js.contains(".length"), "unshadowed len(list) should still lower:\n{js}");
+    assert!(
+        js.contains("pySetOf"),
+        "unshadowed set() should still lower:\n{js}"
+    );
+    assert!(
+        js.contains(".length"),
+        "unshadowed len(list) should still lower:\n{js}"
+    );
 }
 
 // ── DX-B2: cross-module import name collision ──
@@ -114,7 +135,10 @@ fn dxb2_camel_convergence_aliases_both_bindings() {
         "from zustand import create_store\nfrom redux import createStore\na = create_store(1)\nb = createStore(2)\n",
     );
     assert_valid(&js, "dxb2_alias_order_a");
-    assert!(!js.contains("import name collision"), "must not hard-error:\n{js}");
+    assert!(
+        !js.contains("import name collision"),
+        "must not hard-error:\n{js}"
+    );
     assert!(
         js.contains("import { createStore } from \"zustand\";"),
         "zustand keeps the plain binding:\n{js}"
@@ -123,7 +147,10 @@ fn dxb2_camel_convergence_aliases_both_bindings() {
         js.contains("import { createStore as __pyimp_createStore_0 } from \"redux\";"),
         "redux must hoist under a unique alias:\n{js}"
     );
-    assert!(js.contains("let a = createStore(1);"), "a binds zustand's:\n{js}");
+    assert!(
+        js.contains("let a = createStore(1);"),
+        "a binds zustand's:\n{js}"
+    );
     assert!(
         js.contains("let b = __pyimp_createStore_0(2);"),
         "b must call redux's aliased binding:\n{js}"
@@ -140,7 +167,10 @@ fn dxb2_camel_convergence_aliases_order_independent() {
         "from redux import createStore\nfrom zustand import create_store\na = create_store(1)\nb = createStore(2)\n",
     );
     assert_valid(&js, "dxb2_alias_order_b");
-    assert!(!js.contains("import name collision"), "must not hard-error:\n{js}");
+    assert!(
+        !js.contains("import name collision"),
+        "must not hard-error:\n{js}"
+    );
     assert!(
         js.contains("import { createStore } from \"redux\";"),
         "redux keeps the plain binding:\n{js}"
@@ -153,9 +183,15 @@ fn dxb2_camel_convergence_aliases_order_independent() {
         js.contains("let a = __pyimp_createStore_0(1);"),
         "a must call zustand's aliased binding:\n{js}"
     );
-    assert!(js.contains("let b = createStore(2);"), "b binds redux's:\n{js}");
+    assert!(
+        js.contains("let b = createStore(2);"),
+        "b binds redux's:\n{js}"
+    );
     // No unconverted create_store leaks (the old order-B ReferenceError).
-    assert!(!js.contains("create_store("), "unconverted create_store leaked:\n{js}");
+    assert!(
+        !js.contains("create_store("),
+        "unconverted create_store leaked:\n{js}"
+    );
 }
 
 #[test]
@@ -180,7 +216,13 @@ fn dxb2_alias_shadowed_by_function_local() {
         "from zustand import create_store\nfrom redux import createStore\ndef f(createStore):\n    return createStore(9)\nb = createStore(2)\n",
     );
     assert_valid(&js, "dxb2_alias_shadow");
-    let body = js.split("function f").nth(1).unwrap_or(&js).split('}').next().unwrap_or("");
+    let body = js
+        .split("function f")
+        .nth(1)
+        .unwrap_or(&js)
+        .split('}')
+        .next()
+        .unwrap_or("");
     assert!(
         body.contains("createStore(9)") && !body.contains("__pyimp"),
         "param must shadow the aliased import inside f:\n{js}"
@@ -209,10 +251,16 @@ fn dxb2_function_local_imports_distinct_scopes_bind_correct_modules() {
     let js = compile(
         "def f():\n    import numpy as m\n    return m\ndef g():\n    import pandas as m\n    return m\n",
     );
-    assert!(!js.contains("import name collision"), "wrongly flagged a collision:\n{js}");
+    assert!(
+        !js.contains("import name collision"),
+        "wrongly flagged a collision:\n{js}"
+    );
     // Both distinct modules must actually be imported (neither dropped).
     assert!(js.contains("from \"numpy\""), "numpy import dropped:\n{js}");
-    assert!(js.contains("from \"pandas\""), "pandas import DROPPED (silent miscompile):\n{js}");
+    assert!(
+        js.contains("from \"pandas\""),
+        "pandas import DROPPED (silent miscompile):\n{js}"
+    );
     // Round-4 (findings 2 & 3): each function-local import is genuinely
     // function-local — hoisted under a UNIQUE name and bound in the body via
     // `let m = <unique>`. Neither leaks a bare top-level `m`, so f resolves m
@@ -226,7 +274,10 @@ fn dxb2_function_local_imports_distinct_scopes_bind_correct_modules() {
     };
     let numpy_uniq = uniq_from("numpy");
     let pandas_uniq = uniq_from("pandas");
-    assert_ne!(numpy_uniq, pandas_uniq, "the two imports must get distinct hoist names:\n{js}");
+    assert_ne!(
+        numpy_uniq, pandas_uniq,
+        "the two imports must get distinct hoist names:\n{js}"
+    );
     assert!(
         js.contains(&format!("let m = {}", numpy_uniq)),
         "f's local `m` must bind the numpy namespace `{numpy_uniq}`:\n{js}"
@@ -236,7 +287,10 @@ fn dxb2_function_local_imports_distinct_scopes_bind_correct_modules() {
         "g's local `m` must bind the pandas namespace `{pandas_uniq}`:\n{js}"
     );
     // No bare top-level `m` binding leaks out of either function.
-    assert!(!js.contains("import * as m "), "function-local `m` must not leak to module top:\n{js}");
+    assert!(
+        !js.contains("import * as m "),
+        "function-local `m` must not leak to module top:\n{js}"
+    );
 }
 
 #[test]
@@ -247,7 +301,10 @@ fn dxb2_from_import_distinct_scopes_bind_correct_modules() {
         "def f():\n    from numpy import array\n    return array(1)\ndef g():\n    from pandas import array\n    return array(2)\n",
     );
     assert!(js.contains("from \"numpy\""), "numpy import dropped:\n{js}");
-    assert!(js.contains("from \"pandas\""), "pandas import DROPPED (silent miscompile):\n{js}");
+    assert!(
+        js.contains("from \"pandas\""),
+        "pandas import DROPPED (silent miscompile):\n{js}"
+    );
     // Round-4: both function-local from-imports hoist under unique names and
     // bind `array` in each body via `let array = <unique>`.
     let uniq_from = |module: &str| -> String {
@@ -260,7 +317,10 @@ fn dxb2_from_import_distinct_scopes_bind_correct_modules() {
     };
     let numpy_uniq = uniq_from("numpy");
     let pandas_uniq = uniq_from("pandas");
-    assert_ne!(numpy_uniq, pandas_uniq, "distinct hoist names expected:\n{js}");
+    assert_ne!(
+        numpy_uniq, pandas_uniq,
+        "distinct hoist names expected:\n{js}"
+    );
     assert!(
         js.contains(&format!("let array = {}", numpy_uniq)),
         "f's `array` must bind the numpy import `{numpy_uniq}`:\n{js}"
@@ -315,16 +375,28 @@ fn a_namespace_import_alias_reserved_word() {
     // `import math as default` must sanitize the binding AND its references.
     let js = compile("import math as default\nx = default.pi\n");
     assert_valid(&js, "a_ns_alias");
-    assert!(js.contains("import * as default$"), "namespace binding not sanitized:\n{js}");
-    assert!(js.contains("default$.pi"), "reference not sanitized to match:\n{js}");
-    assert!(!js.contains("import * as default "), "raw reserved binding emitted:\n{js}");
+    assert!(
+        js.contains("import * as default$"),
+        "namespace binding not sanitized:\n{js}"
+    );
+    assert!(
+        js.contains("default$.pi"),
+        "reference not sanitized to match:\n{js}"
+    );
+    assert!(
+        !js.contains("import * as default "),
+        "raw reserved binding emitted:\n{js}"
+    );
 }
 
 #[test]
 fn a_from_import_alias_reserved_word() {
     let js = compile("from math import sqrt as default\ny = default(4)\n");
     assert_valid(&js, "a_from_alias");
-    assert!(js.contains("sqrt as default$"), "from-import binding not sanitized:\n{js}");
+    assert!(
+        js.contains("sqrt as default$"),
+        "from-import binding not sanitized:\n{js}"
+    );
     assert!(js.contains("default$(4)"), "reference not sanitized:\n{js}");
 }
 
@@ -337,9 +409,18 @@ fn c_dataclass_reserved_word_field() {
     );
     assert_valid(&js, "c_dataclass");
     // Constructor param + RHS use the sanitized local; the property stays raw.
-    assert!(js.contains("constructor(default$"), "ctor param not sanitized:\n{js}");
-    assert!(js.contains("this.default = default$"), "assignment mismatched:\n{js}");
-    assert!(!js.contains("this.default = default;"), "raw reserved RHS emitted:\n{js}");
+    assert!(
+        js.contains("constructor(default$"),
+        "ctor param not sanitized:\n{js}"
+    );
+    assert!(
+        js.contains("this.default = default$"),
+        "assignment mismatched:\n{js}"
+    );
+    assert!(
+        !js.contains("this.default = default;"),
+        "raw reserved RHS emitted:\n{js}"
+    );
 }
 
 #[test]
@@ -350,13 +431,19 @@ fn c_dataclass_reserved_field_message_label_is_raw() {
         "from dataclasses import dataclass\nfrom pydantic import Field\n@dataclass\nclass Cfg:\n    default: int = Field(gt=5)\n",
     );
     assert_valid(&js, "c_msg_label");
-    assert!(js.contains("Cfg.default: "), "message label must be raw:\n{js}");
+    assert!(
+        js.contains("Cfg.default: "),
+        "message label must be raw:\n{js}"
+    );
     assert!(
         !js.contains("Cfg.default$"),
         "message label leaked the sanitized name:\n{js}"
     );
     // The condition still uses the sanitized JS binding.
-    assert!(js.contains("default$ <= 5"), "condition must use sanitized var:\n{js}");
+    assert!(
+        js.contains("default$ <= 5"),
+        "condition must use sanitized var:\n{js}"
+    );
 }
 
 // ── I: breakpoint() with kwargs must not drop side effects ──
@@ -367,13 +454,19 @@ fn i_breakpoint_with_kwargs_preserves_side_effects() {
     assert_valid(&js, "i_bp_kwargs");
     // The kwargs expression (mk()) must be evaluated, not dropped for a bare
     // `debugger;`.
-    assert!(js.contains("mk()"), "breakpoint kwargs side effect dropped:\n{js}");
+    assert!(
+        js.contains("mk()"),
+        "breakpoint kwargs side effect dropped:\n{js}"
+    );
 }
 
 #[test]
 fn i_bare_breakpoint_still_debugger() {
     let js = compile("def f():\n    breakpoint()\n");
-    assert!(js.contains("debugger;"), "bare breakpoint() must still be debugger:\n{js}");
+    assert!(
+        js.contains("debugger;"),
+        "bare breakpoint() must still be debugger:\n{js}"
+    );
 }
 
 // ── Issue #438: order-independent shadow resolution (binding pre-pass) ──
@@ -386,7 +479,10 @@ fn prepass_f_inner_def_sees_later_enclosing_binding() {
     let js = compile(
         "def store():\n    def inc():\n        return set(1)\n    set = lambda v: [v]\n    return inc\n",
     );
-    assert!(!js.contains("pySetOf"), "inner def mis-lowered a later-declared shadow:\n{js}");
+    assert!(
+        !js.contains("pySetOf"),
+        "inner def mis-lowered a later-declared shadow:\n{js}"
+    );
     assert!(js.contains("set(1)"), "{js}");
 }
 
@@ -395,8 +491,14 @@ fn prepass_e_comprehension_target_shadows_builtin() {
     // Case E: the comprehension for-target `len` shadows the builtin inside the
     // element, so `len(x)` calls the target, not pyLen/`.length`.
     let js = compile("def f(xs: list) -> list:\n    return [len(x) for len in xs]\n");
-    assert!(!js.contains("pyLen"), "comprehension target didn't shadow len:\n{js}");
-    assert!(!js.contains(").length"), "comprehension target didn't shadow len:\n{js}");
+    assert!(
+        !js.contains("pyLen"),
+        "comprehension target didn't shadow len:\n{js}"
+    );
+    assert!(
+        !js.contains(").length"),
+        "comprehension target didn't shadow len:\n{js}"
+    );
     assert!(js.contains("len(x)"), "{js}");
 }
 
@@ -418,7 +520,10 @@ fn prepass_forward_ref_builtin_name_is_local() {
     let js = compile(
         "def f():\n    def g():\n        return list([1])\n    list = lambda v: v\n    return g\n",
     );
-    assert!(!js.contains("Array.from"), "forward-ref shadow mis-lowered list:\n{js}");
+    assert!(
+        !js.contains("Array.from"),
+        "forward-ref shadow mis-lowered list:\n{js}"
+    );
     assert!(js.contains("list([1])"), "{js}");
 }
 
@@ -431,13 +536,19 @@ fn import_alias_shadowing_param_rebinds_locally() {
     let js = compile("def f(op):\n    import operator as op\n    return op\n");
     assert_valid(&js, "import_param_shadow");
     // The module is hoisted under a unique name and the param is reassigned.
-    assert!(js.contains("from \"pyths-runtime/stdlib/operator\""), "operator not imported:\n{js}");
+    assert!(
+        js.contains("from \"pyths-runtime/stdlib/operator\""),
+        "operator not imported:\n{js}"
+    );
     assert!(
         js.contains("op = __pyimp_op_0"),
         "param `op` must be rebound to the imported namespace:\n{js}"
     );
     // NOT a plain `import * as op` shadowed by the param.
-    assert!(!js.contains("import * as op "), "raw `op` import is shadowed by the param:\n{js}");
+    assert!(
+        !js.contains("import * as op "),
+        "raw `op` import is shadowed by the param:\n{js}"
+    );
 }
 
 #[test]
@@ -445,9 +556,7 @@ fn special_react_import_collision_hard_errors() {
     // The pyths.react HYBRID path must route through collision registration:
     // `from pyths.react import style` (→ pyths-runtime/react) beside
     // `from mylib import style` (→ mylib) is a real cross-module collision.
-    let js = compile(
-        "from pyths.react import style\nfrom mylib import style\nx = style()\n",
-    );
+    let js = compile("from pyths.react import style\nfrom mylib import style\nx = style()\n");
     assert!(
         js.contains("import name collision") && js.contains("throw new Error"),
         "special-import cross-module collision must hard-error:\n{js}"
@@ -459,9 +568,8 @@ fn special_react_same_effective_module_dedups() {
     // `from react import useState` and `from pyths.react import use_state`
     // (→ useState, both from "react") must DEDUP to one import, not emit a
     // duplicate `import { useState } from "react"` (an ESM parse error).
-    let js = compile(
-        "from react import useState\nfrom pyths.react import use_state\nx = useState(1)\n",
-    );
+    let js =
+        compile("from react import useState\nfrom pyths.react import use_state\nx = useState(1)\n");
     assert_valid(&js, "special_react_dedup");
     assert_eq!(
         js.matches("import { useState } from \"react\"").count(),
@@ -491,7 +599,10 @@ fn function_still_order_independent_after_module_fix() {
     let js = compile(
         "def f():\n    def g():\n        return list([1])\n    list = lambda v: v\n    return g\n",
     );
-    assert!(!js.contains("Array.from"), "function forward-ref shadow regressed:\n{js}");
+    assert!(
+        !js.contains("Array.from"),
+        "function forward-ref shadow regressed:\n{js}"
+    );
     assert!(js.contains("list([1])"), "{js}");
 }
 
@@ -514,8 +625,14 @@ fn comprehension_target_still_shadows_in_element() {
     // A target that does NOT appear in the leftmost iterable still shadows the
     // builtin inside the element (case E), keeping its own name.
     let js = compile("def f(xs: list) -> list:\n    return [len(0) for len in xs]\n");
-    assert!(js.contains("(len) => len(0)"), "target must stay `len` and shadow:\n{js}");
-    assert!(!js.contains("pyLen"), "element must call the target, not the builtin:\n{js}");
+    assert!(
+        js.contains("(len) => len(0)"),
+        "target must stay `len` and shadow:\n{js}"
+    );
+    assert!(
+        !js.contains("pyLen"),
+        "element must call the target, not the builtin:\n{js}"
+    );
 }
 
 #[test]
@@ -525,8 +642,14 @@ fn comprehension_leftmost_list_builtin_not_target() {
     // binding (a valid identifier), not lowered to the builtin arrow.
     let js = compile("def f():\n    return [list for list in list([[1], [2]])]\n");
     assert_valid(&js, "comp_leftmost_list");
-    assert!(js.contains("pyListOf([[1], [2]])"), "leftmost list(...) must be the builtin:\n{js}");
-    assert!(js.contains("(list) => list"), "target `list` must stay a plain binding:\n{js}");
+    assert!(
+        js.contains("pyListOf([[1], [2]])"),
+        "leftmost list(...) must be the builtin:\n{js}"
+    );
+    assert!(
+        js.contains("(list) => list"),
+        "target `list` must stay a plain binding:\n{js}"
+    );
 }
 
 // ── Review finding 4: binding-walk completeness ──
@@ -538,8 +661,14 @@ fn del_makes_name_a_local_not_builtin() {
     let js = compile(
         "def f() -> int:\n    def g() -> int:\n        return len([1])\n    if False:\n        del len\n    return g()\n",
     );
-    assert!(!js.contains(".length"), "del-bound `len` wrongly lowered to builtin:\n{js}");
-    assert!(!js.contains("pyLen"), "del-bound `len` wrongly lowered to builtin:\n{js}");
+    assert!(
+        !js.contains(".length"),
+        "del-bound `len` wrongly lowered to builtin:\n{js}"
+    );
+    assert!(
+        !js.contains("pyLen"),
+        "del-bound `len` wrongly lowered to builtin:\n{js}"
+    );
 }
 
 #[test]
@@ -550,7 +679,10 @@ fn walrus_in_nested_def_default_binds_enclosing() {
         "def outer() -> int:\n    def inner(x=(len := lambda x: x)):\n        return x\n    return len([1])\n",
     );
     assert_valid(&js, "walrus_nested_default");
-    assert!(!js.contains(".length"), "walrus-bound len lowered to builtin:\n{js}");
+    assert!(
+        !js.contains(".length"),
+        "walrus-bound len lowered to builtin:\n{js}"
+    );
     assert!(js.contains("len([1])"), "{js}");
 }
 
@@ -561,8 +693,14 @@ fn from_import_shadowing_param_rebinds_locally() {
     // `def f(sqrt): from math import sqrt` must rebind the param inside f.
     let js = compile("def f(sqrt):\n    from math import sqrt\n    return sqrt(9)\n");
     assert_valid(&js, "from_import_param_shadow");
-    assert!(js.contains("sqrt as __pyimp_sqrt_0"), "sqrt not hoisted under a unique name:\n{js}");
-    assert!(js.contains("sqrt = __pyimp_sqrt_0"), "param sqrt must be reassigned:\n{js}");
+    assert!(
+        js.contains("sqrt as __pyimp_sqrt_0"),
+        "sqrt not hoisted under a unique name:\n{js}"
+    );
+    assert!(
+        js.contains("sqrt = __pyimp_sqrt_0"),
+        "param sqrt must be reassigned:\n{js}"
+    );
 }
 
 #[test]
@@ -582,7 +720,10 @@ fn from_import_same_alias_different_export_hard_errors() {
 fn from_import_same_export_still_dedups() {
     // Same export + module under the same alias is still an idempotent re-import.
     let js = compile("from math import sqrt\nfrom math import sqrt\nx = sqrt(4)\n");
-    assert!(!js.contains("import name collision"), "same export re-import must not error:\n{js}");
+    assert!(
+        !js.contains("import name collision"),
+        "same export re-import must not error:\n{js}"
+    );
     assert_eq!(
         js.matches("import { sqrt } from").count(),
         1,
@@ -591,7 +732,10 @@ fn from_import_same_export_still_dedups() {
     // Round-3: TRUE dedup — no unique re-hoist, and above all no
     // `sqrt = __pyimp_sqrt_0;` (assignment to an immutable import binding —
     // a runtime TypeError the pre-planner ordering emitted).
-    assert!(!js.contains("__pyimp"), "idempotent re-import must fully dedup:\n{js}");
+    assert!(
+        !js.contains("__pyimp"),
+        "idempotent re-import must fully dedup:\n{js}"
+    );
 }
 
 #[test]
@@ -606,8 +750,14 @@ fn plain_import_same_module_dedups_without_reassign() {
         1,
         "duplicate json namespace import:\n{js}"
     );
-    assert!(!js.contains("__pyimp"), "idempotent namespace re-import must fully dedup:\n{js}");
-    assert!(!js.contains("json = "), "must not reassign an import binding:\n{js}");
+    assert!(
+        !js.contains("__pyimp"),
+        "idempotent namespace re-import must fully dedup:\n{js}"
+    );
+    assert!(
+        !js.contains("json = "),
+        "must not reassign an import binding:\n{js}"
+    );
 }
 
 #[test]
@@ -733,7 +883,10 @@ fn relative_import_cross_module_collision_hard_errors() {
         "relative cross-module collision must hard-error:\n{js}"
     );
     // The diagnostic names the Python-source dotted modules.
-    assert!(js.contains(".a") && js.contains(".b"), "diagnostic should show .a/.b:\n{js}");
+    assert!(
+        js.contains(".a") && js.contains(".b"),
+        "diagnostic should show .a/.b:\n{js}"
+    );
 }
 
 #[test]
@@ -741,8 +894,15 @@ fn relative_import_same_module_reimport_dedups() {
     // Idempotent relative re-import — one declaration, no unique re-hoist.
     let js = compile("from .a import x\nfrom .a import x\nprint(x)\n");
     assert_valid(&js, "relative_reimport_dedup");
-    assert_eq!(js.matches("import { x }").count(), 1, "duplicate x import:\n{js}");
-    assert!(!js.contains("__pyimp"), "same-module relative re-import must dedup:\n{js}");
+    assert_eq!(
+        js.matches("import { x }").count(),
+        1,
+        "duplicate x import:\n{js}"
+    );
+    assert!(
+        !js.contains("__pyimp"),
+        "same-module relative re-import must dedup:\n{js}"
+    );
 }
 
 #[test]
@@ -755,7 +915,10 @@ fn relative_import_shadowing_param_rebinds_locally() {
         js.contains("x as __pyimp_x_0"),
         "relative import must hoist under a unique name:\n{js}"
     );
-    assert!(js.contains("x = __pyimp_x_0"), "param `x` must be reassigned:\n{js}");
+    assert!(
+        js.contains("x = __pyimp_x_0"),
+        "param `x` must be reassigned:\n{js}"
+    );
     assert!(
         !js.contains("const x = __pyimp") && !js.contains("let x = __pyimp"),
         "must not redeclare `x` beside the param:\n{js}"
@@ -770,7 +933,10 @@ fn relative_import_distinct_function_scopes_bind_correct_modules() {
     let js = compile(
         "def f():\n    from .a import x\n    return x\ndef g():\n    from .b import x\n    return x\n",
     );
-    assert!(!js.contains("import name collision"), "wrongly flagged a collision:\n{js}");
+    assert!(
+        !js.contains("import name collision"),
+        "wrongly flagged a collision:\n{js}"
+    );
     assert!(js.contains("from \"./a\""), "./a import dropped:\n{js}");
     assert!(js.contains("from \"./b\""), "./b import dropped:\n{js}");
     assert!(
@@ -825,7 +991,10 @@ fn function_local_import_does_not_dedup_against_outer() {
     // not a resolved call to the module `sqrt`.
     let use_at = body.find("sqrt(4)").expect("early use");
     let let_at = body.find("let sqrt =").expect("local binding");
-    assert!(use_at < let_at, "the early use must precede the local binding (TDZ):\n{js}");
+    assert!(
+        use_at < let_at,
+        "the early use must precede the local binding (TDZ):\n{js}"
+    );
 }
 
 #[test]
@@ -852,7 +1021,10 @@ fn function_local_reimport_rebind_no_function_wide_tdz() {
     // `op(4)` (first read) precedes the reassignment — no function-wide TDZ.
     let first_read = body.find("op(4)").expect("first read");
     let reassign = body.rfind("op = __pyimp_op_").expect("reassign");
-    assert!(first_read < reassign, "first read must precede the rebind:\n{js}");
+    assert!(
+        first_read < reassign,
+        "first read must precede the rebind:\n{js}"
+    );
 }
 
 #[test]
@@ -901,7 +1073,10 @@ fn dotted_import_no_alias_binds_head() {
         js.contains("pkg.sub = __pyimp_pkg_sub_0;"),
         "dotted path not grafted onto the head:\n{js}"
     );
-    assert!(js.contains("pkg.sub.f()"), "reference site must stay dotted:\n{js}");
+    assert!(
+        js.contains("pkg.sub.f()"),
+        "reference site must stay dotted:\n{js}"
+    );
 }
 
 #[test]
@@ -915,9 +1090,18 @@ fn dotted_import_no_alias_deep_and_shared_head() {
         1,
         "exactly one head object:\n{js}"
     );
-    assert!(js.contains("a.b = {};"), "intermediate level missing:\n{js}");
-    assert!(js.contains("a.b.c = __pyimp_a_b_c_0;"), "deep leaf graft:\n{js}");
-    assert!(js.contains("a.d = __pyimp_a_d_1;"), "second leaf graft:\n{js}");
+    assert!(
+        js.contains("a.b = {};"),
+        "intermediate level missing:\n{js}"
+    );
+    assert!(
+        js.contains("a.b.c = __pyimp_a_b_c_0;"),
+        "deep leaf graft:\n{js}"
+    );
+    assert!(
+        js.contains("a.d = __pyimp_a_d_1;"),
+        "second leaf graft:\n{js}"
+    );
 }
 
 #[test]
@@ -976,7 +1160,11 @@ print(r)
     let got = node_run(&dir, &js, "dxb1_closure");
     let _ = std::fs::remove_dir_all(&dir);
     let Some(got) = got else { return }; // node unavailable → skip
-    assert_eq!(got.trim(), "[42]", "closure must call the enclosing param:\n{js}");
+    assert_eq!(
+        got.trim(),
+        "[42]",
+        "closure must call the enclosing param:\n{js}"
+    );
 }
 
 #[test]
@@ -1060,8 +1248,14 @@ fn wb3_positional_comparator_diverts_from_pylistsort() {
 fn wb3_positional_comparator_def_also_diverts() {
     // A named `def cmp(a, b)` comparator (the WB-3 reproducer shape) too.
     let js = compile("xs = [3, 1, 2]\ndef cmp(a, b):\n    return b - a\nxs.sort(cmp)\n");
-    assert!(js.contains("xs.sort(cmp)"), "verbatim comparator sort:\n{js}");
-    assert!(!js.contains("pyListSort"), "must not lower to pyListSort:\n{js}");
+    assert!(
+        js.contains("xs.sort(cmp)"),
+        "verbatim comparator sort:\n{js}"
+    );
+    assert!(
+        !js.contains("pyListSort"),
+        "must not lower to pyListSort:\n{js}"
+    );
 }
 
 #[test]
@@ -1145,8 +1339,14 @@ fn wf1_layout_and_insertion_effects_wrapped() {
     let js = compile(
         "from pyths.react import component, use_layout_effect, use_insertion_effect\n@component\ndef Eff():\n    def _l():\n        return None\n    def _i():\n        return None\n    use_layout_effect(_l, [])\n    use_insertion_effect(_i, [])\n    return None\n",
     );
-    assert!(js.contains("useLayoutEffect(__pyEffect(_l), [])"), "layout effect wrapped:\n{js}");
-    assert!(js.contains("useInsertionEffect(__pyEffect(_i), [])"), "insertion effect wrapped:\n{js}");
+    assert!(
+        js.contains("useLayoutEffect(__pyEffect(_l), [])"),
+        "layout effect wrapped:\n{js}"
+    );
+    assert!(
+        js.contains("useInsertionEffect(__pyEffect(_i), [])"),
+        "insertion effect wrapped:\n{js}"
+    );
 }
 
 #[test]
@@ -1159,7 +1359,10 @@ fn wf1_value_hooks_not_wrapped() {
         !js.contains("__pyEffect"),
         "value-returning hooks must NOT be wrapped in __pyEffect:\n{js}"
     );
-    assert!(js.contains("useMemo(") && js.contains("useCallback("), "hooks still emitted:\n{js}");
+    assert!(
+        js.contains("useMemo(") && js.contains("useCallback("),
+        "hooks still emitted:\n{js}"
+    );
 }
 
 #[test]

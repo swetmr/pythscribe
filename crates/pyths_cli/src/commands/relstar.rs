@@ -117,10 +117,7 @@ fn is_named_relative_import(stmt: &Stmt) -> bool {
 ///
 /// No-op when the module has neither form. Errors are loud, human-readable
 /// strings.
-pub fn normalize_relative_imports(
-    module: &mut Module,
-    source_path: &Path,
-) -> Result<(), String> {
+pub fn normalize_relative_imports(module: &mut Module, source_path: &Path) -> Result<(), String> {
     if !module
         .body
         .iter()
@@ -133,9 +130,13 @@ pub fn normalize_relative_imports(
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let source_dir = source_dir
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve directory of {}: {}", source_path.display(), e))?;
+    let source_dir = source_dir.canonicalize().map_err(|e| {
+        format!(
+            "cannot resolve directory of {}: {}",
+            source_path.display(),
+            e
+        )
+    })?;
 
     let body = std::mem::take(&mut module.body);
     let mut new_body: Vec<Stmt> = Vec::with_capacity(body.len());
@@ -144,9 +145,7 @@ pub fn normalize_relative_imports(
         // package-index symbol), by filesystem probe.
         if is_dot_only_import(&stmt) {
             let (names, level, span) = match &stmt.kind {
-                StmtKind::ImportFrom { names, level, .. } => {
-                    (names.clone(), *level, stmt.span)
-                }
+                StmtKind::ImportFrom { names, level, .. } => (names.clone(), *level, stmt.span),
                 _ => unreachable!(),
             };
             let mut submodules: Vec<ImportAlias> = Vec::new();
@@ -276,8 +275,14 @@ pub fn normalize_relative_imports(
         })?;
 
         let mut visited: HashSet<PathBuf> = HashSet::new();
-        let publics = collect_star_visible(&target, &mut visited)
-            .map_err(|e| format!("{}: cannot expand `{}`: {}", source_path.display(), py_form, e))?;
+        let publics = collect_star_visible(&target, &mut visited).map_err(|e| {
+            format!(
+                "{}: cannot expand `{}`: {}",
+                source_path.display(),
+                py_form,
+                e
+            )
+        })?;
 
         if !publics.unsupported.is_empty() {
             eprintln!(
@@ -508,9 +513,7 @@ fn resolve_relative_module(dir: &Path, level: u32, module: &str) -> Option<PathB
 /// directory. Returns `None` when the target is not under any ancestor of
 /// `from_dir` (not spellable as a relative import).
 fn relativize_module(from_dir: &Path, target: &Path) -> Option<(u32, String)> {
-    let is_init = target
-        .file_stem()
-        .is_some_and(|s| s == "__init__");
+    let is_init = target.file_stem().is_some_and(|s| s == "__init__");
     let logical: PathBuf = if is_init {
         target.parent()?.to_path_buf()
     } else {
@@ -570,7 +573,10 @@ fn parse_all_list(value: &Expr) -> Option<Vec<String>> {
 ///
 /// Names bound by absolute imports / submodule bindings are reported as
 /// `unsupported` (compiled ESM cannot re-import them through the sibling).
-fn collect_star_visible(file: &Path, visited: &mut HashSet<PathBuf>) -> Result<StarVisible, String> {
+fn collect_star_visible(
+    file: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<StarVisible, String> {
     let canonical = file
         .canonicalize()
         .map_err(|e| format!("cannot open {}: {}", file.display(), e))?;
@@ -586,7 +592,11 @@ fn collect_star_visible(file: &Path, visited: &mut HashSet<PathBuf>) -> Result<S
         .map_err(|e| format!("cannot read {}: {}", canonical.display(), e))?;
     let parsed = pyths_parser::parse(&source).map_err(|errors| {
         let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
-        format!("parse error in {}: {}", canonical.display(), msgs.join(", "))
+        format!(
+            "parse error in {}: {}",
+            canonical.display(),
+            msgs.join(", ")
+        )
     })?;
     let dir = canonical
         .parent()
@@ -602,10 +612,10 @@ fn collect_star_visible(file: &Path, visited: &mut HashSet<PathBuf>) -> Result<S
     let mut all_list: Option<Vec<String>> = None;
 
     let bind = |names: &mut Vec<Option<StarName>>,
-                    index: &mut HashMap<String, usize>,
-                    public: String,
-                    defining_file: PathBuf,
-                    original: String| {
+                index: &mut HashMap<String, usize>,
+                public: String,
+                defining_file: PathBuf,
+                original: String| {
         let entry = StarName {
             public: public.clone(),
             defining_file,
@@ -620,9 +630,9 @@ fn collect_star_visible(file: &Path, visited: &mut HashSet<PathBuf>) -> Result<S
         }
     };
     let bind_unsupported = |names: &mut Vec<Option<StarName>>,
-                                index: &mut HashMap<String, usize>,
-                                unsupported: &mut Vec<String>,
-                                public: &str| {
+                            index: &mut HashMap<String, usize>,
+                            unsupported: &mut Vec<String>,
+                            public: &str| {
         if let Some(&i) = index.get(public) {
             names[i] = None; // shadowed by an unexpandable binding
         }
@@ -684,17 +694,24 @@ fn collect_star_visible(file: &Path, visited: &mut HashSet<PathBuf>) -> Result<S
                     // Chained relative star — recurse; the deeper module's
                     // star-visible set flows through with its own defining
                     // files (and its own __all__ filter already applied).
-                    let deeper = resolve_relative_module(&dir, *level, module).ok_or_else(|| {
-                        format!(
-                            "{}: no module file found for `from {}{} import *`",
-                            canonical.display(),
-                            ".".repeat(*level as usize),
-                            module
-                        )
-                    })?;
+                    let deeper =
+                        resolve_relative_module(&dir, *level, module).ok_or_else(|| {
+                            format!(
+                                "{}: no module file found for `from {}{} import *`",
+                                canonical.display(),
+                                ".".repeat(*level as usize),
+                                module
+                            )
+                        })?;
                     let sub = collect_star_visible(&deeper, visited)?;
                     for s in sub.names {
-                        bind(&mut names, &mut index, s.public, s.defining_file, s.original);
+                        bind(
+                            &mut names,
+                            &mut index,
+                            s.public,
+                            s.defining_file,
+                            s.original,
+                        );
                     }
                     for u in sub.unsupported {
                         bind_unsupported(&mut names, &mut index, &mut unsupported, &u);
@@ -764,7 +781,9 @@ fn collect_star_visible(file: &Path, visited: &mut HashSet<PathBuf>) -> Result<S
                     }
                 }
             }
-            StmtKind::Import { names: import_names } => {
+            StmtKind::Import {
+                names: import_names,
+            } => {
                 for a in import_names {
                     let local = match &a.alias {
                         Some(alias) => alias.clone(),
@@ -917,8 +936,14 @@ mod tests {
         let imports = import_stmts(&m);
         assert_eq!(imports[0], "sideeffect ./hub");
         // Q must come from base (its defining module), H from hub.
-        assert!(imports.contains(&"from .base import Q".to_string()), "{imports:?}");
-        assert!(imports.contains(&"from .hub import H".to_string()), "{imports:?}");
+        assert!(
+            imports.contains(&"from .base import Q".to_string()),
+            "{imports:?}"
+        );
+        assert!(
+            imports.contains(&"from .hub import H".to_string()),
+            "{imports:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -930,8 +955,14 @@ mod tests {
         std::fs::write(dir.join("main.ps"), "from .impl import *\n").unwrap();
         let m = expand(&dir, "main.ps").unwrap();
         let imports = import_stmts(&m);
-        assert!(imports.contains(&"from .base import q as r".to_string()), "{imports:?}");
-        assert!(imports.contains(&"from .impl import W".to_string()), "{imports:?}");
+        assert!(
+            imports.contains(&"from .base import q as r".to_string()),
+            "{imports:?}"
+        );
+        assert!(
+            imports.contains(&"from .impl import W".to_string()),
+            "{imports:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1043,7 +1074,10 @@ mod tests {
         let m = expand(&dir, "mod.ps").unwrap();
         match &m.body[0].kind {
             StmtKind::ImportFrom { module, names, .. } => {
-                assert_eq!(module, ".", "init-defined X must be the index symbol, not the submodule");
+                assert_eq!(
+                    module, ".",
+                    "init-defined X must be the index symbol, not the submodule"
+                );
                 assert_eq!(names[0].name, "X");
             }
             other => panic!("expected sentinel ImportFrom, got {other:?}"),
@@ -1084,11 +1118,25 @@ mod tests {
         std::fs::write(dir.join("main.ps"), "from .sub import mod\nprint(mod.Z)\n").unwrap();
         let m = expand(&dir, "main.ps").unwrap();
         match &m.body[0].kind {
-            StmtKind::ImportFrom { module, names, level } => {
-                assert_eq!(module, "", "submodule import must become the leading-dot namespace form");
+            StmtKind::ImportFrom {
+                module,
+                names,
+                level,
+            } => {
+                assert_eq!(
+                    module, "",
+                    "submodule import must become the leading-dot namespace form"
+                );
                 assert_eq!(*level, 1);
-                assert_eq!(names[0].name, "sub/mod", "path is encoded for the emitter's ./<name> specifier");
-                assert_eq!(names[0].alias.as_deref(), Some("mod"), "local binding is mod");
+                assert_eq!(
+                    names[0].name, "sub/mod",
+                    "path is encoded for the emitter's ./<name> specifier"
+                );
+                assert_eq!(
+                    names[0].alias.as_deref(),
+                    Some("mod"),
+                    "local binding is mod"
+                );
             }
             other => panic!("expected namespace ImportFrom, got {other:?}"),
         }
@@ -1146,8 +1194,14 @@ mod tests {
         let m = expand(&dir, "main.ps").unwrap();
         let imports = import_stmts(&m);
         // submodule → namespace (leading-dot, encoded path); symbol → named.
-        assert!(imports.contains(&"from . import sub/mod as mod".to_string()), "{imports:?}");
-        assert!(imports.contains(&"from .sub import sym".to_string()), "{imports:?}");
+        assert!(
+            imports.contains(&"from . import sub/mod as mod".to_string()),
+            "{imports:?}"
+        );
+        assert!(
+            imports.contains(&"from .sub import sym".to_string()),
+            "{imports:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1164,7 +1218,10 @@ mod tests {
         match &m.body[0].kind {
             StmtKind::ImportFrom { module, names, .. } => {
                 assert_eq!(module, "");
-                assert_eq!(names[0].name, "pkg/sub/mod", "nested path encoded with slashes");
+                assert_eq!(
+                    names[0].name, "pkg/sub/mod",
+                    "nested path encoded with slashes"
+                );
                 assert_eq!(names[0].alias.as_deref(), Some("mod"));
             }
             other => panic!("expected namespace ImportFrom, got {other:?}"),
@@ -1180,7 +1237,10 @@ mod tests {
         std::fs::write(dir.join("main.ps"), "from .pkg import *\nprint(V)\n").unwrap();
         let m = expand(&dir, "main.ps").unwrap();
         let imports = import_stmts(&m);
-        assert!(imports.contains(&"from .pkg import V".to_string()), "{imports:?}");
+        assert!(
+            imports.contains(&"from .pkg import V".to_string()),
+            "{imports:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

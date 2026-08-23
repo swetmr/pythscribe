@@ -109,7 +109,9 @@ fn every_routed_identifier_exists_in_real_react19_packages() {
         .iter()
         .map(|e| {
             assert!(
-                react::REACT_HELPER_TABLE.iter().any(|(n, _)| *n == e.py_name),
+                react::REACT_HELPER_TABLE
+                    .iter()
+                    .any(|(n, _)| *n == e.py_name),
                 "{} must have a would-be route in REACT_HELPER_TABLE",
                 e.py_name
             );

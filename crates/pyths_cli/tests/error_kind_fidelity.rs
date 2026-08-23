@@ -71,7 +71,10 @@ fn expect_err(name: &str, src: &str, kind: &str, python_msg: &str, leaked_js_msg
 /// Assert the snippet SUCCEEDS with the expected stdout (fast-path guard).
 fn expect_ok(name: &str, src: &str, expected_stdout: &str) {
     let (ok, stdout, stderr) = run_ps(name, src);
-    assert!(ok, "{name}: expected success; stderr={stderr}\nstdout={stdout}");
+    assert!(
+        ok,
+        "{name}: expected success; stderr={stderr}\nstdout={stdout}"
+    );
     assert_eq!(stdout, expected_stdout, "{name}: wrong stdout");
 }
 

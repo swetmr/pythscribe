@@ -65,9 +65,7 @@ fn component_defaulted_param_is_optional_member() {
     // so the props-object member is optional (`b?`).
     let d = dts("@component\ndef WithDefault(a, b=1):\n    return ul(child=\"x\")\n");
     assert!(
-        d.contains(
-            "export declare function WithDefault(props: { a: any; b?: any }): JSX.Element;"
-        ),
+        d.contains("export declare function WithDefault(props: { a: any; b?: any }): JSX.Element;"),
         "defaulted component prop must be optional in the props object:\n{d}"
     );
 }

@@ -887,6 +887,16 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-cov-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-cov-
+      # The instrumented run executes the SAME workspace test suite as the
+      # `test` job, so it has the same external prerequisites: the
+      # TS-.d.ts-run interop lane (int_float_optb.rs lane 5) hard-fails if
+      # the pinned, lockfile-frozen TypeScript is missing. Without these two
+      # steps the whole Coverage job dies on that one panic.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Provision pinned TypeScript (TS-.d.ts-run interop lane)
+        run: npm ci --prefix crates/pyths_cli/tests/ts-toolchain
       - name: Coverage report
         run: |
           cargo llvm-cov --workspace --html --output-dir coverage-report

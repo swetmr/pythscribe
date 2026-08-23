@@ -369,7 +369,9 @@ fn comprehension_matrix_matches_cpython() {
                 // asyncio.run keeps the source runnable under real python.
                 let indented = body.replace('\n', "\n    ");
                 (
-                    format!("{ASYNC_PRELUDE}async def main():\n    {indented}\nasyncio.run(main())"),
+                    format!(
+                        "{ASYNC_PRELUDE}async def main():\n    {indented}\nasyncio.run(main())"
+                    ),
                     "aiter",
                 )
             } else {

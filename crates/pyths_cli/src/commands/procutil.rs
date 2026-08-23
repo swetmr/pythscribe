@@ -185,7 +185,11 @@ mod tests {
     fn private_temp_dirs_are_unique_and_raii_cleaned() {
         let a = make_private_temp_dir("unit").expect("dir a");
         let b = make_private_temp_dir("unit").expect("dir b");
-        assert_ne!(a.path(), b.path(), "two invocations must not share a temp dir");
+        assert_ne!(
+            a.path(),
+            b.path(),
+            "two invocations must not share a temp dir"
+        );
         assert!(a.path().is_dir());
         assert!(b.path().is_dir());
         // Round-5: cleanup is RAII-bound — dropping the handle removes the
@@ -217,8 +221,12 @@ mod tests {
             "pyths_fake_prog"
         };
         let planted = dir.path().join(planted_name);
-        std::fs::write(&planted, b"#!/bin/sh
-").unwrap();
+        std::fs::write(
+            &planted,
+            b"#!/bin/sh
+",
+        )
+        .unwrap();
 
         // Resolve a program name that should not exist anywhere on PATH.
         let resolved = resolve_program("pyths_fake_prog", None);
@@ -321,7 +329,12 @@ mod tests {
         // with rooted-but-driveless (`\evil.exe`) and ADS-style (`prog:ads`)
         // values — with no PATH fallback.
         let var = "PYTHS_TEST_DRIVEREL_OVERRIDE";
-        for bad in ["C:evil.exe", "C:sub\\evil.exe", "\\evil.exe", "prog:ads.exe"] {
+        for bad in [
+            "C:evil.exe",
+            "C:sub\\evil.exe",
+            "\\evil.exe",
+            "prog:ads.exe",
+        ] {
             std::env::set_var(var, bad);
             let got = resolve_program("node", Some(var));
             std::env::remove_var(var);

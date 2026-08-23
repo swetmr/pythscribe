@@ -62,7 +62,9 @@ fn node_check(js: &str, name: &str) -> Result<(), String> {
 
 fn assert_valid(js: &str, name: &str) {
     if let Err(e) = node_check(js, name) {
-        panic!("emitted glue `{name}` is not valid JS (injection/breakout):\n{e}\n--- JS ---\n{js}");
+        panic!(
+            "emitted glue `{name}` is not valid JS (injection/breakout):\n{e}\n--- JS ---\n{js}"
+        );
     }
 }
 
@@ -77,7 +79,11 @@ fn sec4_wasm_filename_breakout_all_loaders() {
         return_type: Some(WasmType::F64),
     }]);
     // Browser, WASI, and Deno loaders all use `new URL('<file>', ...)`.
-    for target in [BridgeTarget::Browser, BridgeTarget::Wasi, BridgeTarget::Deno] {
+    for target in [
+        BridgeTarget::Browser,
+        BridgeTarget::Wasi,
+        BridgeTarget::Deno,
+    ] {
         let g = generate_bridge_for_target(target, hostile, &o);
         // Primary oracle: the whole module must remain valid JS. A breakout
         // would make the injected `globalThis.PWNED=1` top-level and the

@@ -120,10 +120,7 @@ big += 1
 print(big)
 "#,
     );
-    assert_eq!(
-        out,
-        "xy\n3\n(1, 2) (1,) False\n1.75\n4611686018427387905\n"
-    );
+    assert_eq!(out, "xy\n3\n(1, 2) (1,) False\n1.75\n4611686018427387905\n");
 }
 
 #[test]

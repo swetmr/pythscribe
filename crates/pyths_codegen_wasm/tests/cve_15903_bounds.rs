@@ -79,7 +79,9 @@ def victim(n: int) -> int:
     let wasm = compile_wasm(src);
     validate_wasm(&wasm);
     let (mut store, instance) = make_instance(&wasm);
-    let f = instance.get_typed_func::<i64, i64>(&store, "victim").unwrap();
+    let f = instance
+        .get_typed_func::<i64, i64>(&store, "victim")
+        .unwrap();
 
     // In-bounds store works: no raise (caught==0), canary untouched.
     assert_eq!(f.call(&mut store, 0).unwrap(), 100_200_300);
@@ -107,7 +109,9 @@ def victim(n: int) -> int:
     let wasm = compile_wasm(src);
     validate_wasm(&wasm);
     let (mut store, instance) = make_instance(&wasm);
-    let f = instance.get_typed_func::<i64, i64>(&store, "victim").unwrap();
+    let f = instance
+        .get_typed_func::<i64, i64>(&store, "victim")
+        .unwrap();
     // In-bounds still fine.
     assert_eq!(f.call(&mut store, 0).unwrap(), 100_200_300);
     // OOB traps (no OOB write).
@@ -159,14 +163,22 @@ def get(i: int) -> int:
 
     // 2**32 (0x1_0000_0000) truncates to 0; must NOT return lst[0].
     let r = f.call(&mut store, 1i64 << 32).unwrap();
-    assert_eq!(read_err_code(&mut store, &instance), IDX_ERR, "2**32 must raise");
+    assert_eq!(
+        read_err_code(&mut store, &instance),
+        IDX_ERR,
+        "2**32 must raise"
+    );
     assert_eq!(r, 0, "sentinel, not lst[0]");
 
     // 2**32 + 1 truncates to 1; must NOT return lst[1].
     let (mut store, instance) = make_instance(&wasm);
     let f = instance.get_typed_func::<i64, i64>(&store, "get").unwrap();
     let r = f.call(&mut store, (1i64 << 32) + 1).unwrap();
-    assert_eq!(read_err_code(&mut store, &instance), IDX_ERR, "2**32+1 must raise");
+    assert_eq!(
+        read_err_code(&mut store, &instance),
+        IDX_ERR,
+        "2**32+1 must raise"
+    );
     assert_eq!(r, 0, "sentinel, not lst[1]");
 }
 
@@ -188,7 +200,9 @@ def victim(n: int) -> int:
     let wasm = compile_wasm(src);
     validate_wasm(&wasm);
     let (mut store, instance) = make_instance(&wasm);
-    let f = instance.get_typed_func::<i64, i64>(&store, "victim").unwrap();
+    let f = instance
+        .get_typed_func::<i64, i64>(&store, "victim")
+        .unwrap();
     let r = f.call(&mut store, 1i64 << 32).unwrap();
     assert_eq!(
         r, 1123,
@@ -218,7 +232,11 @@ def get(i: int) -> int:
     assert_eq!(read_err_code(&mut store, &instance), 0);
     // a[-4] on len 3 is genuinely out of range -> IndexError.
     let r = f.call(&mut store, -4).unwrap();
-    assert_eq!(read_err_code(&mut store, &instance), IDX_ERR, "a[-4] out of range");
+    assert_eq!(
+        read_err_code(&mut store, &instance),
+        IDX_ERR,
+        "a[-4] out of range"
+    );
     assert_eq!(r, 0);
 }
 
@@ -377,9 +395,17 @@ def f(x: int) -> int:
     let f = instance.get_typed_func::<i64, i64>(&store, "f").unwrap();
     // ValueError and KeyError are caught → 99, err_code cleared.
     assert_eq!(f.call(&mut store, 1).unwrap(), 99);
-    assert_eq!(read_err_code(&mut store, &instance), 0, "ValueError must be caught");
+    assert_eq!(
+        read_err_code(&mut store, &instance),
+        0,
+        "ValueError must be caught"
+    );
     assert_eq!(f.call(&mut store, 2).unwrap(), 99);
-    assert_eq!(read_err_code(&mut store, &instance), 0, "KeyError must be caught");
+    assert_eq!(
+        read_err_code(&mut store, &instance),
+        0,
+        "KeyError must be caught"
+    );
     // IndexError is NOT listed → not caught → err_code stays set (propagates).
     let _ = f.call(&mut store, 3).unwrap();
     assert_ne!(

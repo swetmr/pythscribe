@@ -18,6 +18,44 @@ cd pythscribe
 cargo build
 ```
 
+### Install the git hooks (one-time per clone)
+
+```bash
+bash scripts/setup-hooks.sh
+```
+
+This points `core.hooksPath` at the committed `.githooks/` directory, so
+everyone runs the same checks — nothing to copy into `.git/hooks/`, nothing
+that can silently go stale. The `pre-push` hook blocks the two drift classes
+that have actually broken CI on `main`:
+
+| Check | CI job it protects | Cost | When it runs |
+|---|---|---|---|
+| `cargo fmt --all -- --check` | Lint | seconds | every push |
+| `formalization.yaml` in sync (`python comparator/axiom_footprint.py check --no-build`) | Lean proofs | tens of seconds | only when the push touches `verification/` |
+
+Design notes:
+
+- **pre-push, not pre-commit.** The Lean-manifest check shells out to
+  `lake env lean` (`#print axioms` over every headline claim) — too slow for
+  every commit, fine at push time. Formatting is cheap either way; it rides
+  along at push so there is a single hook to reason about.
+- **No full `lake build` in the hook.** The check runs `--no-build` against
+  your existing `verification/.lake` build. If you changed `verification/`
+  and have no build, the hook fails with instructions rather than silently
+  skipping — a skip exactly when the risk exists is how drift reached CI
+  historically.
+- **`check` never rewrites the manifest.** It regenerates to a temp file via
+  the exact same code path as `emit` and diffs, so the hook and CI's in-sync
+  step can never disagree.
+
+If a check fails: `cargo fmt --all` for formatting; for a stale manifest,
+`cd verification && lake build && python comparator/axiom_footprint.py emit`
+— then commit and push again. Never commit a regenerated manifest that adds
+axioms beyond `{propext, Classical.choice, Quot.sound}` or a nonzero sorry
+count: that is a real regression the manifest exists to surface, not drift.
+Emergency bypass: `git push --no-verify` (CI still arbitrates).
+
 ### Running tests
 
 ```bash
@@ -193,6 +231,9 @@ fn test_<feature>_<scenario>() {
    ```bash
    git push origin feature/my-feature
    ```
+
+   (With the hooks installed — `bash scripts/setup-hooks.sh` — the push is
+   automatically blocked on formatting drift or a stale `formalization.yaml`.)
 
 6. **CI checks** — All tests must pass, clippy must be clean, formatting must be correct
 

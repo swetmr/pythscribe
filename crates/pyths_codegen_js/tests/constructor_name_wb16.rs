@@ -48,7 +48,10 @@ fn constructor_name_is_bare_class_name_under_node() {
         "d.constructor.name must be the bare class name, not \"bound Dog\"\n--- JS ---\n{js}"
     );
     // The Python-idiom class-name reads must keep working (regression guard).
-    assert_eq!(lines[1], "Dog", "type(d).__name__ regressed\n--- JS ---\n{js}");
+    assert_eq!(
+        lines[1], "Dog",
+        "type(d).__name__ regressed\n--- JS ---\n{js}"
+    );
     assert_eq!(
         lines[2], "Dog",
         "d.__class__.__name__ regressed\n--- JS ---\n{js}"
@@ -101,15 +104,15 @@ fn def_named_constructor_is_compile_error() {
     // WB-16 (naming soundness): a Python method literally named `constructor`
     // would silently become the JS class constructor → un-instantiable class.
     // It must be a hard compile diagnostic, not a silent miscompile.
-    let module = pyths_parser::parse(
-        "class A:\n    def constructor(self):\n        return 1\n",
-    )
-    .unwrap();
+    let module =
+        pyths_parser::parse("class A:\n    def constructor(self):\n        return 1\n").unwrap();
     let mut gen = pyths_codegen_js::JsCodegen::new();
     gen.emit_module(&module);
     let errors = gen.take_errors();
     assert!(
-        errors.iter().any(|e| e.contains("constructor") && e.contains("un-instantiable")),
+        errors
+            .iter()
+            .any(|e| e.contains("constructor") && e.contains("un-instantiable")),
         "a method named `constructor` must be diagnosed: {errors:?}"
     );
 }

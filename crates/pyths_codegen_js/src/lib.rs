@@ -12,9 +12,9 @@ pub use emit::JsCodegen;
 pub use emit::{take_emit_overflow, MAX_EMIT_DEPTH};
 // delta4: the checked manifest of every compiler-emittable runtime symbol —
 // consumed by the cli_test.rs export-surface drift guard.
-pub use emit::EMITTABLE_RUNTIME_SYMBOLS;
 #[doc(hidden)]
 pub use emit::inline_runtime_for_test;
+pub use emit::EMITTABLE_RUNTIME_SYMBOLS;
 pub use sourcemap::SourceMapBuilder;
 
 /// Result of compilation with optional source map.

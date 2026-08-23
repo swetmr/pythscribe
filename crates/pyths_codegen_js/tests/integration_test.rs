@@ -537,7 +537,11 @@ async def fetch_all(sources):
     );
     assert!(js.contains("for await"), "for-await emitted: {}", js);
     // WB-15 B3: the loop-path IIFE takes the outermost iterable as `__comp_it`.
-    assert!(js.contains("async (__comp_it) =>"), "async IIFE wrapper: {}", js);
+    assert!(
+        js.contains("async (__comp_it) =>"),
+        "async IIFE wrapper: {}",
+        js
+    );
     // Synchronous `for` inside the same comprehension stays plain.
     assert!(
         js.contains("for (const item of pyForIter(source))"),
@@ -1839,7 +1843,11 @@ def Button():
 "#,
     );
     // Option B: dynamic prop values unwrap via __pyJs (handler passthrough).
-    assert!(js.contains("onClick: __pyJs(handler)"), "Event prop: {}", js);
+    assert!(
+        js.contains("onClick: __pyJs(handler)"),
+        "Event prop: {}",
+        js
+    );
     assert!(js.contains("\"Click me\""), "Text child: {}", js);
 }
 
@@ -2021,7 +2029,11 @@ def regular():
         "a bound user div must NOT be diagnosed: {}",
         js2
     );
-    assert!(js2.contains("div(\"hello\")"), "bound div → plain call: {}", js2);
+    assert!(
+        js2.contains("div(\"hello\")"),
+        "bound div → plain call: {}",
+        js2
+    );
 }
 
 #[test]
@@ -2030,7 +2042,9 @@ fn test_nb1_unbound_intrinsic_tag_outside_component_errors() {
     // compile diagnostic (was a silent bare call → runtime ReferenceError).
     let (_js, errors) = compile_with_errors("def make_output(t):\n    return pre(t)\n");
     assert!(
-        errors.iter().any(|e| e.contains("intrinsic HTML/SVG element tag") && e.contains("pre")),
+        errors
+            .iter()
+            .any(|e| e.contains("intrinsic HTML/SVG element tag") && e.contains("pre")),
         "unbound `pre` outside a component must be diagnosed: {:?}",
         errors
     );
@@ -2066,7 +2080,9 @@ fn test_nb2_user_binding_collides_with_intrinsic_inside_component_errors() {
         "from pyths.react import component\ndef div(x):\n    return x\n@component\ndef App():\n    return div(\"hi\")\n",
     );
     assert!(
-        errors.iter().any(|e| e.contains("collides with the HTML intrinsic") && e.contains("div")),
+        errors
+            .iter()
+            .any(|e| e.contains("collides with the HTML intrinsic") && e.contains("div")),
         "a user `div` shadowed by the intrinsic must be diagnosed: {:?}",
         errors
     );
@@ -2082,7 +2098,9 @@ fn test_nb2_user_binding_collides_with_intrinsic_inside_component_errors() {
         "from pyths.react import component\n@component\ndef App():\n    div = 5\n    return div(\"hi\")\n",
     );
     assert!(
-        local_errors.iter().any(|e| e.contains("collides with the HTML intrinsic")),
+        local_errors
+            .iter()
+            .any(|e| e.contains("collides with the HTML intrinsic")),
         "a local `div` shadowed by the intrinsic must be diagnosed: {:?}",
         local_errors
     );
@@ -2091,13 +2109,21 @@ fn test_nb2_user_binding_collides_with_intrinsic_inside_component_errors() {
     let (_js3, cap_errors) = compile_with_errors(
         "from pyths.react import component\ndef Card(x):\n    return x\n@component\ndef App():\n    return Card(\"hi\")\n",
     );
-    assert!(cap_errors.is_empty(), "Capitalized component must be clean: {:?}", cap_errors);
+    assert!(
+        cap_errors.is_empty(),
+        "Capitalized component must be clean: {:?}",
+        cap_errors
+    );
 
     // Control 2: an intrinsic tag used with NO user binding is the normal case.
     let (_js4, plain_errors) = compile_with_errors(
         "from pyths.react import component\n@component\ndef App():\n    return div(\"hi\")\n",
     );
-    assert!(plain_errors.is_empty(), "plain intrinsic use must be clean: {:?}", plain_errors);
+    assert!(
+        plain_errors.is_empty(),
+        "plain intrinsic use must be clean: {:?}",
+        plain_errors
+    );
 }
 
 #[test]
@@ -5489,16 +5515,16 @@ fn wb22_wb23_mixed_pyths_react_import_splits_per_module() {
     );
     // react core: hooks + cloneElement.
     assert!(
-        js.contains("from \"react\";")
-            && js.contains("useState")
-            && js.contains("cloneElement"),
+        js.contains("from \"react\";") && js.contains("useState") && js.contains("cloneElement"),
         "react-core split (useState, cloneElement): {}",
         js
     );
     // react-dom: createPortal + flushSync.
     assert!(
         js.contains("import { createPortal, flushSync } from \"react-dom\";")
-            || (js.contains("createPortal") && js.contains("flushSync") && js.contains("from \"react-dom\";")),
+            || (js.contains("createPortal")
+                && js.contains("flushSync")
+                && js.contains("from \"react-dom\";")),
         "react-dom split (createPortal, flushSync): {}",
         js
     );
@@ -5515,9 +5541,16 @@ fn wb22_wb23_mixed_pyths_react_import_splits_per_module() {
         js
     );
     // No React symbol may leak into the runtime import.
-    for leaked in ["cloneElement", "createPortal", "createRoot", "useState", "flushSync"] {
+    for leaked in [
+        "cloneElement",
+        "createPortal",
+        "createRoot",
+        "useState",
+        "flushSync",
+    ] {
         assert!(
-            !js.lines().any(|l| l.contains("from \"pyths-runtime/react\"") && l.contains(leaked)),
+            !js.lines()
+                .any(|l| l.contains("from \"pyths-runtime/react\"") && l.contains(leaked)),
             "{} leaked into pyths-runtime/react import: {}",
             leaked,
             js
@@ -5874,9 +5907,21 @@ fn test_float_arithmetic_emits_bare_ops() {
     // with an authority unwrap (__reqNum: native no-op / box valueOf /
     // exact BigInt coercion, #38) per operand and a conditional re-box of
     // the result (integer-valued float results carry the PyFloat tag).
-    assert!(js.contains("__pyF(__reqNum(a) + __reqNum(b))"), "float + → bare: {}", js);
-    assert!(js.contains("__pyF(__reqNum(a) * __reqNum(b))"), "float * → bare: {}", js);
-    assert!(js.contains("__pyF(__reqNum(a) - __reqNum(b))"), "float - → bare: {}", js);
+    assert!(
+        js.contains("__pyF(__reqNum(a) + __reqNum(b))"),
+        "float + → bare: {}",
+        js
+    );
+    assert!(
+        js.contains("__pyF(__reqNum(a) * __reqNum(b))"),
+        "float * → bare: {}",
+        js
+    );
+    assert!(
+        js.contains("__pyF(__reqNum(a) - __reqNum(b))"),
+        "float - → bare: {}",
+        js
+    );
     assert!(!js.contains("pyAdd"), "no pyAdd for floats: {}", js);
 }
 
@@ -7457,7 +7502,11 @@ fn test_match_sequence_star_pattern() {
 fn test_dict_iunion_routes_through_py_bit_or() {
     // `d |= {...}` previously emitted raw JS `|=` (numeric coercion → 0).
     let js = compile("d = {\"x\": 1}\nd |= {\"y\": 2}");
-    assert!(js.contains("d = pyIBitOr(d, "), "dict |= updates in place: {}", js);
+    assert!(
+        js.contains("d = pyIBitOr(d, "),
+        "dict |= updates in place: {}",
+        js
+    );
 }
 
 #[test]
@@ -9824,14 +9873,22 @@ fn test_varargs_kwargs_together_signature() {
     // the invalid `(...args, kwargs = {})` — the rest param is last and the
     // keyword channel is recovered in a prologue.
     let js = compile("def f(*args, **kwargs):\n    return (len(args), len(kwargs))\n");
-    assert!(js.contains("function f(...args)"), "rest param last: {}", js);
+    assert!(
+        js.contains("function f(...args)"),
+        "rest param last: {}",
+        js
+    );
     assert!(
         js.contains("const kwargs = __pyTakeKw(args);"),
         "kw prologue: {}",
         js
     );
     assert!(js.contains("f.__pyva__ = true;"), "variadic marker: {}", js);
-    assert!(js.contains("f.__pykw__ = true;"), "kw channel marker: {}", js);
+    assert!(
+        js.contains("f.__pykw__ = true;"),
+        "kw channel marker: {}",
+        js
+    );
 }
 
 #[test]
@@ -9878,7 +9935,11 @@ fn test_lambda_varargs() {
         js
     );
     let js2 = compile("g = lambda *a, **kw: (len(a), len(kw))\n");
-    assert!(js2.contains("__pyFnMeta("), "lambda metadata wrapper: {}", js2);
+    assert!(
+        js2.contains("__pyFnMeta("),
+        "lambda metadata wrapper: {}",
+        js2
+    );
     assert!(js2.contains("__pyTakeKw(a)"), "lambda kw prologue: {}", js2);
 }
 
@@ -9989,9 +10050,7 @@ fn test_cls_param_kept_in_plain_function() {
 fn test_decorated_function_keeps_kw_metadata() {
     // Metadata attaches to the ORIGINAL function (what the decorator
     // receives), so `f(*args, **kwargs)` inside a decorator binds keywords.
-    let js = compile(
-        "def deco(f):\n    return f\n@deco\ndef plain(x, y=1):\n    return x\n",
-    );
+    let js = compile("def deco(f):\n    return f\n@deco\ndef plain(x, y=1):\n    return x\n");
     assert!(
         js.contains("plain.__pyparams__ = [\"x\", \"y\"];"),
         "decorated fn metadata: {}",
@@ -10019,11 +10078,7 @@ fn test_extracted_bound_method_keeps_self() {
         "value-position read binds: {}",
         js
     );
-    assert!(
-        js.contains("a.x = 2;"),
-        "write position stays raw: {}",
-        js
-    );
+    assert!(js.contains("a.x = 2;"), "write position stays raw: {}", js);
     assert!(
         js.contains("let b = a.f();"),
         "direct call stays raw (this flows naturally): {}",
@@ -10036,9 +10091,8 @@ fn test_nested_class_in_class_body() {
     // autotester classes: a nested class miscompiled to a raw `class Inner`
     // inside the class body (invalid JS). It now installs post-class as a
     // class attribute inside a bare block (no module-scope leak).
-    let js = compile(
-        "class Outer:\n    class Inner:\n        def f(self):\n            return 42\n",
-    );
+    let js =
+        compile("class Outer:\n    class Inner:\n        def f(self):\n            return 42\n");
     assert!(
         js.contains("__pyClassAttr(Outer, \"Inner\", Inner);"),
         "nested class installed as class attribute: {}",
@@ -10080,9 +10134,7 @@ fn test_yield_expression_parenthesized_and_generator_detected() {
     // is nested in a BinOp; detection must still mark the function as a
     // generator, and the emitted yield must be parenthesized (a bare
     // `pyAdd(r, yield r)` is a JS SyntaxError).
-    let js = compile(
-        "def gen():\n    r = 0\n    while True:\n        r = r + (yield r)\n",
-    );
+    let js = compile("def gen():\n    r = 0\n    while True:\n        r = r + (yield r)\n");
     assert!(js.contains("function* gen("), "generator detected: {}", js);
     assert!(js.contains("(yield r)"), "yield parenthesized: {}", js);
 }
@@ -10145,7 +10197,11 @@ fn test_public3_unsupported_builtin_call_is_compile_error() {
         errors
     );
     let js = gen.finish();
-    assert!(js.contains("throw new Error("), "loud failure emitted: {}", js);
+    assert!(
+        js.contains("throw new Error("),
+        "loud failure emitted: {}",
+        js
+    );
     assert!(!js.contains("open(\"x.txt\")"), "no bare reference: {}", js);
 }
 
@@ -10232,9 +10288,21 @@ fn test_public3_unsupported_set_is_exactly_the_deferred_list() {
     assert_eq!(
         unsupported,
         vec![
-            "aiter", "anext", "breakpoint", "compile", "eval", "exec",
-            "globals", "hash", "help", "id", "input", "locals", "memoryview",
-            "open", "__import__",
+            "aiter",
+            "anext",
+            "breakpoint",
+            "compile",
+            "eval",
+            "exec",
+            "globals",
+            "hash",
+            "help",
+            "id",
+            "input",
+            "locals",
+            "memoryview",
+            "open",
+            "__import__",
         ],
         "the diagnosed-and-deferred builtin set changed"
     );

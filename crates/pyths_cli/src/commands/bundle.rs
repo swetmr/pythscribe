@@ -221,9 +221,9 @@ fn transform_unit(
     let mut exports: Vec<(String, String)> = Vec::new();
     let mut export_seen: HashSet<String> = HashSet::new();
     let record_export = |exports: &mut Vec<(String, String)>,
-                             export_seen: &mut HashSet<String>,
-                             public: String,
-                             local: String| {
+                         export_seen: &mut HashSet<String>,
+                         public: String,
+                         local: String| {
         if export_seen.insert(public.clone()) {
             exports.push((public, local));
         }
@@ -350,7 +350,12 @@ fn transform_unit(
                 if let Some(default_rest) = rest.strip_prefix("default ") {
                     let var = format!("__pyModDefault{}", default_counter);
                     default_counter += 1;
-                    record_export(&mut exports, &mut export_seen, "default".into(), var.clone());
+                    record_export(
+                        &mut exports,
+                        &mut export_seen,
+                        "default".into(),
+                        var.clone(),
+                    );
                     lines.push(XLine {
                         text: format!("const {} = {}", var, default_rest),
                         orig_line: None,
@@ -401,9 +406,7 @@ fn transform_unit(
                 // class / const / let / var. Record the bound name(s) and
                 // strip the marker WITHOUT shifting columns (7 spaces), so
                 // per-line source-map column shifts stay exact.
-                let decl = rest
-                    .strip_prefix("async ")
-                    .unwrap_or(rest);
+                let decl = rest.strip_prefix("async ").unwrap_or(rest);
                 let names_part = decl
                     .strip_prefix("function* ")
                     .or_else(|| decl.strip_prefix("function "))
@@ -419,9 +422,7 @@ fn transform_unit(
                         } else {
                             let ident: String = np
                                 .chars()
-                                .take_while(|c| {
-                                    c.is_ascii_alphanumeric() || *c == '_' || *c == '$'
-                                })
+                                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
                                 .collect();
                             if !ident.is_empty() {
                                 bound.push(ident);
@@ -595,7 +596,7 @@ pub fn run(
                 })?
             } else {
                 match resolve_bare_local(&dir, &spec) {
-                    Some(t) => t, // absolute-local sibling — bundled (see doc)
+                    Some(t) => t,     // absolute-local sibling — bundled (see doc)
                     None => continue, // npm / runtime — stays external
                 }
             };

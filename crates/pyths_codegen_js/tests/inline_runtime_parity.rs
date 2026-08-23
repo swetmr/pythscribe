@@ -412,8 +412,8 @@ fn numeric_boundary_single_authority() {
     //    boundary must import the operators.js authority. (`__n` in math.js
     //    was the local copy behind the #461 throws; it is now an import
     //    alias of __reqNum.)
-    let stdlib_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../runtime/src/stdlib");
+    let stdlib_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/src/stdlib");
     let mut scanned = 0usize;
     for entry in std::fs::read_dir(&stdlib_dir).expect("stdlib dir") {
         let path = entry.expect("dir entry").path();
@@ -438,7 +438,10 @@ fn numeric_boundary_single_authority() {
             );
         }
     }
-    assert!(scanned >= 10, "stdlib scan looks wrong: only {scanned} files");
+    assert!(
+        scanned >= 10,
+        "stdlib scan looks wrong: only {scanned} files"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

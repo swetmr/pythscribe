@@ -2697,8 +2697,7 @@ impl WasmEmitter {
                                     ctx.sub_depth -= 1;
                                     let idx_ty = self.expr_type(index, ctx);
                                     self.emit_list_index_check(
-                                        list_temp, idx_temp, idx64_temp, len64_temp, &idx_ty,
-                                        func,
+                                        list_temp, idx_temp, idx64_temp, len64_temp, &idx_ty, func,
                                     );
                                     // if cond { raise/trap; skip store } else { store }
                                     func.instruction(&Instruction::If(
@@ -3302,8 +3301,8 @@ impl WasmEmitter {
             } else {
                 // Branch to this handler if err_code matches ANY listed type.
                 for name in &names {
-                    let code = exception_code(name)
-                        .or_else(|| self.custom_exceptions.get(name).copied());
+                    let code =
+                        exception_code(name).or_else(|| self.custom_exceptions.get(name).copied());
                     if let Some(code) = code {
                         func.instruction(&Instruction::GlobalGet(self.err_code_global_idx));
                         func.instruction(&Instruction::I32Const(code));
@@ -3421,7 +3420,7 @@ impl WasmEmitter {
         };
         let top_abs = ctx.push_label();
         func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty)); // $top
-        // if i >= n: normal exit (runs the else body when present)
+                                                                              // if i >= n: normal exit (runs the else body when present)
         func.instruction(&Instruction::LocalGet(i_idx));
         func.instruction(&Instruction::LocalGet(n_idx));
         func.instruction(&Instruction::I32GeS);
@@ -3785,15 +3784,15 @@ impl WasmEmitter {
                         };
                         // The parallel i64 bounds-check pair for this depth
                         // (normalized-index, length). Same pre-sizing guarantee.
-                        let (idx64_temp, len64_temp) =
-                            match ctx.sub_scratch_i64.get(ctx.sub_depth) {
-                                Some(&pair) => pair,
-                                None => {
-                                    debug_assert!(false, "sub_scratch_i64 pool undersized");
-                                    func.instruction(&Instruction::Unreachable);
-                                    return;
-                                }
-                            };
+                        let (idx64_temp, len64_temp) = match ctx.sub_scratch_i64.get(ctx.sub_depth)
+                        {
+                            Some(&pair) => pair,
+                            None => {
+                                debug_assert!(false, "sub_scratch_i64 pool undersized");
+                                func.instruction(&Instruction::Unreachable);
+                                return;
+                            }
+                        };
 
                         // Save lst ptr to temp. Emitting the container and
                         // index sub-expressions may itself contain nested

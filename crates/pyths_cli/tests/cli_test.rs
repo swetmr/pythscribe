@@ -2089,7 +2089,12 @@ fn test_if_else_both_branches_local_hoisted_in_class_method() {
         "method if/else-both-branches must run (no ReferenceError): {}",
         stderr
     );
-    assert_eq!(stdout.trim_end(), "1\n2", "q.m(True)=1, q.m(False)=2: {}", stdout);
+    assert_eq!(
+        stdout.trim_end(),
+        "1\n2",
+        "q.m(True)=1, q.m(False)=2: {}",
+        stdout
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -2786,11 +2791,9 @@ fn test_crossmodule_bare_import_super_grandparent_runs_under_node() {
     }
     // Shared class shapes; only the import form (bare vs `.`-relative) differs.
     let chart_src = "class Chart:\n    def label(self):\n        return \"chart\"\n";
-    let line_body =
-        "class LineChart(Chart):\n    def draw(self):\n        return \"line\"\n";
+    let line_body = "class LineChart(Chart):\n    def draw(self):\n        return \"line\"\n";
     let area_body = "class AreaChart(LineChart):\n    def label(self):\n        return \"area:\" + super().label()\n";
-    let main_src =
-        "from AreaChart import AreaChart\nprint(AreaChart().label())\n";
+    let main_src = "from AreaChart import AreaChart\nprint(AreaChart().label())\n";
 
     for (tag, dot) in [("bare", ""), ("rel", ".")] {
         let dir = mf_setup(&format!("wb8_{}", tag));
@@ -2993,7 +2996,11 @@ fn test_relative_star_import_expands_and_runs_under_node() {
         "underscore names must not be star-imported:\n{js}"
     );
 
-    mf_node_prep(&dir, &["impl.js", "main.js"], &[("\"./impl\"", "\"./impl.js\"")]);
+    mf_node_prep(
+        &dir,
+        &["impl.js", "main.js"],
+        &[("\"./impl\"", "\"./impl.js\"")],
+    );
     let (ok, so, se) = mf_node(&dir.join("main.js"));
     assert!(ok, "expanded star import must link + run: {se}");
     assert_eq!(so.trim_end(), "11\n11");
@@ -3093,8 +3100,9 @@ fn test_bundle_relative_import_runs_under_node() {
         "module IIFE must return its export namespace:\n{bundle}"
     );
     assert!(
-        !bundle.lines().any(|l| l.trim_start().starts_with("export ")
-            && !l.starts_with("export ")),
+        !bundle
+            .lines()
+            .any(|l| l.trim_start().starts_with("export ") && !l.starts_with("export ")),
         "no `export` may remain inside an IIFE (SyntaxError):\n{bundle}"
     );
     let (ok, so, se) = mf_node(&dir.join("out.mjs"));
@@ -3115,7 +3123,11 @@ fn test_bundle_chain_star_namespace_and_stem_collision_runs_under_node() {
     }
     let dir = mf_setup("bundle_deep");
     std::fs::create_dir_all(dir.join("sub")).unwrap();
-    std::fs::write(dir.join("c.ps"), "BASE = 10\ndef base_fn():\n    return BASE\n").unwrap();
+    std::fs::write(
+        dir.join("c.ps"),
+        "BASE = 10\ndef base_fn():\n    return BASE\n",
+    )
+    .unwrap();
     std::fs::write(
         dir.join("b.ps"),
         "from .c import base_fn\ndef mid():\n    return base_fn() + 1\n",
@@ -3224,7 +3236,11 @@ fn test_module_unpack_globals_link_and_run_under_node() {
             "unpack target `{n}` must export:\n{impl_js}"
         );
     }
-    mf_node_prep(&dir, &["impl.js", "main.js"], &[("\"./impl\"", "\"./impl.js\"")]);
+    mf_node_prep(
+        &dir,
+        &["impl.js", "main.js"],
+        &[("\"./impl\"", "\"./impl.js\"")],
+    );
     let (ok, so, se) = mf_node(&dir.join("main.js"));
     assert!(ok, "unpack globals must link per-module: {se}");
     assert_eq!(so.trim_end(), "1 2 9\n7");
@@ -3328,12 +3344,18 @@ fn run_ps(src: &str) -> (bool, String, String) {
 
 // `pyths run` needs node; skip cleanly if absent so CI without node is green.
 fn node_present() -> bool {
-    Command::new("node").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("node")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[test]
 fn round3_optimized_range_true_prints_zero() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     let (ok, so, se) = run_ps("for i in range(True):\n    print(i)\n");
     assert!(ok, "run failed: {se}");
     assert_eq!(so.trim(), "0", "range(True) must yield [0]; got {so:?}");
@@ -3341,7 +3363,9 @@ fn round3_optimized_range_true_prints_zero() {
 
 #[test]
 fn round3_optimized_range_near_2p53_terminates() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     // The old hand-rolled `i += 1` counter hung here (2**53+1 == 2**53 in Number).
     let (ok, so, se) = run_ps(
         "a = int(float(\"9007199254740992\"))\nb = int(float(\"9007199254740994\"))\nc = 0\nfor i in range(a, b):\n    c += 1\nprint(c)\n",
@@ -3352,7 +3376,9 @@ fn round3_optimized_range_near_2p53_terminates() {
 
 #[test]
 fn round3_optimized_range_bigint_iterates() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     // The old counter crashed with "Cannot mix BigInt and other types".
     let (ok, so, se) = run_ps(
         "c = 0\nfor i in range(9007199254740992, 9007199254740994):\n    c += 1\nprint(c)\n",
@@ -3363,7 +3389,9 @@ fn round3_optimized_range_bigint_iterates() {
 
 #[test]
 fn round3_optimized_range_zero_step_and_float_raise() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     let (ok, so, _) = run_ps(
         "step = 0\ntry:\n    for i in range(1, 0, step):\n        pass\n    print(\"NO\")\nexcept ValueError:\n    print(\"VE\")\n",
     );
@@ -3373,18 +3401,21 @@ fn round3_optimized_range_zero_step_and_float_raise() {
 
 #[test]
 fn round3_proto_dict_write_is_data_key() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     // `d["__proto__"] = v` must create a real data key (CPython `"__proto__" in d`).
-    let (ok, so, se) = run_ps(
-        "d = {}\nd[\"__proto__\"] = 7\nprint(\"__proto__\" in d, d[\"__proto__\"])\n",
-    );
+    let (ok, so, se) =
+        run_ps("d = {}\nd[\"__proto__\"] = 7\nprint(\"__proto__\" in d, d[\"__proto__\"])\n");
     assert!(ok, "run failed: {se}");
     assert_eq!(so.trim(), "True 7");
 }
 
 #[test]
 fn round3_range_float_arg_typeerror() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     let (ok, so, _) = run_ps(
         "try:\n    x = list(range(0, 2, 1))\n    y = 0\n    for j in [0.5]:\n        y = j\n    z = list(range(0, 2, y))\n    print(\"NO\")\nexcept TypeError:\n    print(\"TE\")\n",
     );
@@ -3406,7 +3437,9 @@ fn file_url(p: &std::path::Path) -> String {
 
 #[test]
 fn round4_package_esm_load_resolves_all_exports() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     let dir = psc_test_scratch("pkgesm");
     let ps = dir.join("prog.ps");
     // range(...) makes the optimized lowering import __pyRangeIter from the pkg.
@@ -3420,7 +3453,11 @@ fn round4_package_esm_load_resolves_all_exports() {
         .env("PYTHS_NO_CACHE", "1")
         .output()
         .unwrap();
-    assert!(r.status.success(), "compile failed: {}", String::from_utf8_lossy(&r.stderr));
+    assert!(
+        r.status.success(),
+        "compile failed: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
 
     // Rewrite the bare "pyths-runtime" specifier(s) to the local PACKAGE entry
     // points so node resolves the real package exports.
@@ -3434,7 +3471,10 @@ fn round4_package_esm_load_resolves_all_exports() {
     let rewritten = emitted
         .replace("\"pyths-runtime/core\"", &format!("\"{core_url}\""))
         .replace("\"pyths-runtime\"", &format!("\"{idx_url}\""));
-    assert!(rewritten.contains("__pyRangeIter"), "expected the optimized lowering to import __pyRangeIter:\n{emitted}");
+    assert!(
+        rewritten.contains("__pyRangeIter"),
+        "expected the optimized lowering to import __pyRangeIter:\n{emitted}"
+    );
     let mjs = dir.join("prog.mjs");
     std::fs::write(&mjs, rewritten).unwrap();
 
@@ -3459,7 +3499,9 @@ fn round4_package_esm_load_resolves_all_exports() {
 // entry point doesn't export.
 #[test]
 fn runtime_export_surface_covers_all_emittable_symbols() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../runtime/src")
         .canonicalize()
@@ -3514,7 +3556,9 @@ console.log("ok " + names.length);
 // fails ESM instantiation and thus this test.
 #[test]
 fn round5_broad_package_esm_load_both_targets() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     let fixture = r#"def gen():
     yield 1
     yield 2
@@ -3610,9 +3654,16 @@ main()
 
     for (target_args, label) in [
         (&[][..], "default (pyths-runtime → index.js)"),
-        (&["--target", "worker"][..], "worker (pyths-runtime/core → core.js)"),
+        (
+            &["--target", "worker"][..],
+            "worker (pyths-runtime/core → core.js)",
+        ),
     ] {
-        let dir = psc_test_scratch(if target_args.is_empty() { "broadesm_js" } else { "broadesm_worker" });
+        let dir = psc_test_scratch(if target_args.is_empty() {
+            "broadesm_js"
+        } else {
+            "broadesm_worker"
+        });
         let ps = dir.join("prog.ps");
         std::fs::write(&ps, fixture).unwrap();
         let js = dir.join("prog.js");
@@ -3652,7 +3703,11 @@ main()
             String::from_utf8_lossy(&run.stderr)
         );
         let got = String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n");
-        assert_eq!(got.trim(), expected, "[{label}] output diverged from CPython");
+        assert_eq!(
+            got.trim(),
+            expected,
+            "[{label}] output diverged from CPython"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -3667,11 +3722,21 @@ fn round3_sourcemap_rebuild_without_force_succeeds() {
     let js = dir.join("app.js");
     for i in 0..2 {
         let r = pyths_bin()
-            .args(["compile", ps.to_str().unwrap(), "--sourcemap", "-o", js.to_str().unwrap()])
+            .args([
+                "compile",
+                ps.to_str().unwrap(),
+                "--sourcemap",
+                "-o",
+                js.to_str().unwrap(),
+            ])
             .env("PYTHS_NO_CACHE", "1")
             .output()
             .unwrap();
-        assert!(r.status.success(), "sourcemap rebuild #{i} failed: {}", String::from_utf8_lossy(&r.stderr));
+        assert!(
+            r.status.success(),
+            "sourcemap rebuild #{i} failed: {}",
+            String::from_utf8_lossy(&r.stderr)
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3686,13 +3751,25 @@ fn round3_dts_refusal_is_atomic_no_partial_js() {
     let dts = dir.join("app.d.ts");
     std::fs::write(&dts, b"export const mine = 1; // hand-written").unwrap();
     let r = pyths_bin()
-        .args(["compile", ps.to_str().unwrap(), "--dts", "-o", js.to_str().unwrap()])
+        .args([
+            "compile",
+            ps.to_str().unwrap(),
+            "--dts",
+            "-o",
+            js.to_str().unwrap(),
+        ])
         .env("PYTHS_NO_CACHE", "1")
         .output()
         .unwrap();
     assert!(!r.status.success(), "must refuse the unowned .d.ts");
-    assert!(!js.exists(), "app.js must NOT be written when the .d.ts is refused (atomic)");
-    assert_eq!(std::fs::read(&dts).unwrap(), b"export const mine = 1; // hand-written");
+    assert!(
+        !js.exists(),
+        "app.js must NOT be written when the .d.ts is refused (atomic)"
+    );
+    assert_eq!(
+        std::fs::read(&dts).unwrap(),
+        b"export const mine = 1; // hand-written"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3700,7 +3777,9 @@ fn round3_dts_refusal_is_atomic_no_partial_js() {
 
 #[test]
 fn public3_issue_repro_hasattr_still_true() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     let (ok, so, se) = run_ps(
         "class C:\n    x = 1\n\nc = C()\nprint(hasattr(c, \"x\"))\nprint(getattr(c, \"x\"))\n",
     );
@@ -3710,7 +3789,9 @@ fn public3_issue_repro_hasattr_still_true() {
 
 #[test]
 fn public3_format_slice_ascii_vars_differential() {
-    if !node_present() { return; }
+    if !node_present() {
+        return;
+    }
     // Expected values verified against CPython 3.12:
     //   format(3.14159, '.2f') == '3.14'; format(255, '#06x') == '0x00ff'
     //   format(42) == '42'; [1,2,3,4][slice(1,3)] == [2,3]
@@ -3845,7 +3926,8 @@ fn test_run_wasm_reserved_word_export_coordination() {
     // glue's `export function default$` — never the bare reserved word.
     let main_js = std::fs::read_to_string(&js).unwrap();
     assert!(
-        main_js.contains("import { default$, new$ }") || main_js.contains("import { new$, default$ }"),
+        main_js.contains("import { default$, new$ }")
+            || main_js.contains("import { new$, default$ }"),
         "main module must import the sanitized glue exports:\n{main_js}"
     );
     assert!(

@@ -412,11 +412,7 @@ mod tests {
         );
         assert_eq!(
             token_types("\"\"\"x\r\ny\r\nz\"\"\""),
-            vec![
-                Token::String_("x\ny\nz".into()),
-                Token::Newline,
-                Token::Eof
-            ],
+            vec![Token::String_("x\ny\nz".into()), Token::Newline, Token::Eof],
         );
         // Raw triple strings: raw-ness suppresses escape processing, not
         // source newline decoding — CPython gives `\n` here too.

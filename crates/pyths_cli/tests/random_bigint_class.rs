@@ -145,8 +145,7 @@ print("shuffle", len(items) == 5, sorted(items) == [1, 2, 3, 4, 5])
 "#,
     );
     assert_eq!(
-        out,
-        "choice True\nsample True\nshuffle True True\n",
+        out, "choice True\nsample True\nshuffle True True\n",
         "choice/sample/shuffle over a normal list must keep working"
     );
 }

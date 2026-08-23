@@ -62,9 +62,8 @@ fn regex_first_arg_emits_verbatim_replace() {
 fn function_second_arg_lambda_emits_verbatim_replace() {
     // `s.replace(RegExp(...), lambda m: ...)` — a function replacer proves JS
     // replace even structurally; must be verbatim.
-    let js = compile_inline(
-        "def f(s):\n    return s.replace(RegExp(r\"(\\d)\", \"g\"), lambda m: m)\n",
-    );
+    let js =
+        compile_inline("def f(s):\n    return s.replace(RegExp(r\"(\\d)\", \"g\"), lambda m: m)\n");
     assert!(
         js.contains(".replace(new RegExp("),
         "function-replacer .replace must be verbatim:\n{js}"

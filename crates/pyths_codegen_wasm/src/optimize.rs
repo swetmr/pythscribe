@@ -370,8 +370,10 @@ mod tests {
     fn marker_check_fails_closed_on_garbage() {
         assert!(!has_generated_marker(b""));
         assert!(!has_generated_marker(b"not wasm at all"));
-        assert!(!has_generated_marker(b"\0asm\x01\0\0\0\x00\xff\xff\xff\xff\xff")); // truncated/oversized section
-        // A DIFFERENT custom section name is not ours.
+        assert!(!has_generated_marker(
+            b"\0asm\x01\0\0\0\x00\xff\xff\xff\xff\xff"
+        )); // truncated/oversized section
+            // A DIFFERENT custom section name is not ours.
         let mut m = empty_module();
         let mut sec = vec![0u8];
         let name = b"someone.elses";
@@ -391,7 +393,11 @@ mod tests {
         let base = std::env::temp_dir();
         let d = private_dir_in(&base).expect("private dir");
         let mode = std::fs::metadata(d.path()).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "private wasm-opt dir must be 0700, got {:o}", mode);
+        assert_eq!(
+            mode, 0o700,
+            "private wasm-opt dir must be 0700, got {:o}",
+            mode
+        );
         let p = d.path().to_path_buf();
         drop(d); // RAII cleanup bound to the handle
         assert!(!p.exists(), "TempDir drop must remove the directory");
@@ -416,6 +422,9 @@ mod tests {
             assert_eq!(decoded, v);
             assert_eq!(n, buf.len());
         }
-        assert!(read_leb128_u32(&[0x80, 0x80], 0).is_none(), "truncated LEB fails closed");
+        assert!(
+            read_leb128_u32(&[0x80, 0x80], 0).is_none(),
+            "truncated LEB fails closed"
+        );
     }
 }

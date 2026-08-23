@@ -331,7 +331,11 @@ pub fn container_method_arity(name: &str) -> Option<ContainerArity> {
         max: Option<usize>,
         containers: &'static [ReceiverKind],
     ) -> ContainerArity {
-        ContainerArity { min, max, containers }
+        ContainerArity {
+            min,
+            max,
+            containers,
+        }
     }
     Some(match name {
         // --- list mutators (fixed arity; the F2 arg-drop class) ---

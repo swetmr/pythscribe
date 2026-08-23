@@ -926,10 +926,7 @@ console.log(s, b);
         dir.join("tsconfig.bad.json"),
         format!(
             "{}  \"include\": [\"consumer_bad.ts\"]\n}}\n",
-            ts_opts.replace(
-                "\"types\": []",
-                "\"types\": [],\n    \"noEmit\": true"
-            )
+            ts_opts.replace("\"types\": []", "\"types\": [],\n    \"noEmit\": true")
         ),
     )
     .unwrap();

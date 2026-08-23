@@ -53,9 +53,8 @@ fn from_importlib_unaliased_lowers_to_native_import() {
 
 #[test]
 fn from_importlib_aliased_lowers_to_native_import() {
-    let js = compile_inline(
-        "from importlib import import_module as im\nm = await im(\"./x.js\")\n",
-    );
+    let js =
+        compile_inline("from importlib import import_module as im\nm = await im(\"./x.js\")\n");
     assert!(
         js.contains("await import(\"./x.js\")"),
         "aliased import_module must lower to native import:\n{js}"
@@ -64,9 +63,7 @@ fn from_importlib_aliased_lowers_to_native_import() {
 
 #[test]
 fn fstring_spec_lowers_to_template_import() {
-    let js = compile_inline(
-        "name = \"widget\"\nm = await import_module(f\"./{name}.js\")\n",
-    );
+    let js = compile_inline("name = \"widget\"\nm = await import_module(f\"./{name}.js\")\n");
     // f-string → template literal argument inside import(...).
     assert!(
         js.contains("import(`./${") && js.contains(".js`)"),
@@ -102,7 +99,8 @@ fn import_module_value_position_is_compile_error() {
     // `f = import_module` — the native `import(...)` form is not a JS value.
     let errs = compile_errors("from importlib import import_module\nf = import_module\n");
     assert!(
-        errs.iter().any(|e| e.contains("import_module") && e.contains("cannot be used as a value")),
+        errs.iter()
+            .any(|e| e.contains("import_module") && e.contains("cannot be used as a value")),
         "value-position import_module must be diagnosed: {errs:?}"
     );
 }
@@ -112,7 +110,8 @@ fn import_module_package_kwarg_is_compile_error() {
     // `import_module("mod", package="pkg")` — no native relative-import anchor.
     let errs = compile_errors("m = import_module(\"mod\", package=\"pkg\")\n");
     assert!(
-        errs.iter().any(|e| e.contains("import_module") && e.contains("keyword")),
+        errs.iter()
+            .any(|e| e.contains("import_module") && e.contains("keyword")),
         "package= kwarg must be diagnosed: {errs:?}"
     );
 }
@@ -123,7 +122,8 @@ fn importlib_member_call_is_compile_error() {
     // no valid lowering (importlib is not a real module in the output).
     let errs = compile_errors("import importlib\nm = importlib.import_module(\"mod\")\n");
     assert!(
-        errs.iter().any(|e| e.contains("import_module") && e.contains("member form")),
+        errs.iter()
+            .any(|e| e.contains("import_module") && e.contains("member form")),
         "importlib.import_module member call must be diagnosed: {errs:?}"
     );
 }
@@ -160,7 +160,8 @@ fn importlib_reference_forms_matrix_all_diagnosed() {
     for src in cases {
         let errs = compile_errors(src);
         assert!(
-            errs.iter().any(|e| e.contains("importlib") || e.contains("import_module")),
+            errs.iter()
+                .any(|e| e.contains("importlib") || e.contains("import_module")),
             "every importlib-namespace reference must be diagnosed ({src:?}): {errs:?}"
         );
     }
@@ -188,9 +189,7 @@ fn importlib_submodule_from_imports_are_diagnosed() {
 fn importlib_shadowing_local_wins_over_diagnostic() {
     // A user binding that shadows the tracked name is a plain local — the
     // class rule must not misfire on it.
-    let errs = compile_errors(
-        "import importlib\nimportlib = 5\nprint(importlib + 1)\n",
-    );
+    let errs = compile_errors("import importlib\nimportlib = 5\nprint(importlib + 1)\n");
     assert!(
         errs.is_empty(),
         "a shadowing local must win over the importlib diagnostic: {errs:?}"
@@ -206,7 +205,10 @@ fn supported_import_module_forms_still_have_no_errors() {
         "from importlib import import_module as im\nm = await im(\"./x.js\")\n",
     ] {
         let errs = compile_errors(src);
-        assert!(errs.is_empty(), "supported form wrongly diagnosed ({src:?}): {errs:?}");
+        assert!(
+            errs.is_empty(),
+            "supported form wrongly diagnosed ({src:?}): {errs:?}"
+        );
     }
 }
 

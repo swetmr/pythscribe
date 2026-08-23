@@ -122,11 +122,7 @@ fn global_rebind_from_def() {
 fn module_namespace_import_rebind() {
     // `import math` binds the module namespace; a rebind of the head name
     // is the same class (issue text: `from .conf import CONF; CONF={...}`).
-    assert_behaves(
-        "import math\nmath = 5\nprint(math)\n",
-        "5",
-        "modns",
-    );
+    assert_behaves("import math\nmath = 5\nprint(math)\n", "5", "modns");
 }
 
 #[test]

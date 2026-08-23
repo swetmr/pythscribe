@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# pre-push — the last LOCAL gate before anything reaches the remote.
+#
+# Blocks exactly the two drift classes that have actually broken CI on main:
+#   1. rustfmt drift        -> the Lint job's `cargo fmt --all -- --check`
+#   2. stale formalization.yaml -> the Lean-proofs job's in-sync check
+#
+# Design (why pre-push, why this split):
+#   * `cargo fmt --check` is a few seconds — run it on EVERY push.
+#   * The Lean-manifest check shells out to `lake env lean` (#print axioms over
+#     every headline claim): tens of seconds. Too heavy for pre-commit, fine for
+#     pre-push — and it only runs when the push range actually touches
+#     verification/, the only place manifest drift can originate.
+#   * If verification/ changed but the Lean toolchain/build is missing, the hook
+#     FAILS (with instructions) instead of silently skipping: a skip exactly when
+#     the risk exists is how drift reached CI in the first place.
+#
+# Installed via: bash scripts/setup-hooks.sh   (sets core.hooksPath = .githooks)
+# Bypass in an emergency with `git push --no-verify` — CI will still catch you.
+set -u
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT" || exit 1
+
+ZERO=0000000000000000000000000000000000000000
+fail() { echo "pre-push: BLOCKED — $1" >&2; exit 1; }
+
+# ---- 1. rustfmt (always; fast) --------------------------------------------
+if command -v cargo >/dev/null 2>&1; then
+  echo "pre-push: cargo fmt --all -- --check"
+  if ! cargo fmt --all -- --check >/dev/null 2>&1; then
+    cargo fmt --all -- --check 2>&1 | head -40 >&2
+    fail "formatting drift. Run 'cargo fmt --all' and re-commit."
+  fi
+else
+  fail "cargo not found on PATH — cannot verify formatting."
+fi
+
+# ---- 2. formalization.yaml in sync (only when verification/ is in the push)
+verification_changed=0
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue   # branch deletion — nothing to check
+  if [ "$remote_sha" = "$ZERO" ]; then
+    # New branch on the remote: no base to diff against — be conservative.
+    verification_changed=1
+    continue
+  fi
+  if ! git diff --quiet "$remote_sha" "$local_sha" -- verification/ 2>/dev/null; then
+    verification_changed=1
+  fi
+done
+
+if [ "$verification_changed" = "1" ]; then
+  # elan installs outside the default PATH on some setups; make `lake` visible
+  # to both this hook and the python script it calls.
+  command -v lake >/dev/null 2>&1 || export PATH="$HOME/.elan/bin:$PATH"
+  if ! command -v lake >/dev/null 2>&1; then
+    fail "this push touches verification/ but 'lake' (elan) is not installed, so the
+  formalization.yaml in-sync check cannot run. Install elan, 'lake build' in
+  verification/, then push — or use --no-verify and let CI arbitrate."
+  fi
+  if [ ! -d "verification/.lake/build" ]; then
+    fail "this push touches verification/ but verification/.lake is not built.
+  Run: (cd verification && lake build) — then push again."
+  fi
+  echo "pre-push: formalization.yaml in-sync check (verification/ changed in this push)"
+  if ! (cd verification && python comparator/axiom_footprint.py check --no-build); then
+    fail "formalization.yaml is stale.
+  Fix: (cd verification && lake build && python comparator/axiom_footprint.py emit)
+  then commit the regenerated manifest."
+  fi
+fi
+
+exit 0

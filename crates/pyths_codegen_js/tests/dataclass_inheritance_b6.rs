@@ -170,9 +170,8 @@ b = B(7)\nprint(b.x, b.y)\n";
 #[test]
 fn plain_dataclass_no_base_unchanged() {
     // No-base dataclass: no super call at all (regression guard).
-    let js = compile_inline(
-        "from dataclasses import dataclass\n@dataclass\nclass P:\n    x: int\n",
-    );
+    let js =
+        compile_inline("from dataclasses import dataclass\n@dataclass\nclass P:\n    x: int\n");
     assert!(
         !js.contains("super("),
         "a base-less dataclass must not emit any super call:\n{js}"

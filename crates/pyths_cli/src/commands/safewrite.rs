@@ -146,19 +146,30 @@ pub struct PlannedOutput {
 
 impl PlannedOutput {
     pub fn marked_text(path: impl Into<PathBuf>) -> Self {
-        PlannedOutput { path: path.into(), kind: OutputKind::MarkedText }
+        PlannedOutput {
+            path: path.into(),
+            kind: OutputKind::MarkedText,
+        }
     }
     pub fn wasm(path: impl Into<PathBuf>) -> Self {
-        PlannedOutput { path: path.into(), kind: OutputKind::WasmModule }
+        PlannedOutput {
+            path: path.into(),
+            kind: OutputKind::WasmModule,
+        }
     }
     pub fn sidecar(path: impl Into<PathBuf>, primary: impl Into<PathBuf>) -> Self {
         PlannedOutput {
             path: path.into(),
-            kind: OutputKind::Sidecar { primary: primary.into() },
+            kind: OutputKind::Sidecar {
+                primary: primary.into(),
+            },
         }
     }
     pub fn scaffold(path: impl Into<PathBuf>) -> Self {
-        PlannedOutput { path: path.into(), kind: OutputKind::ScaffoldIfAbsent }
+        PlannedOutput {
+            path: path.into(),
+            kind: OutputKind::ScaffoldIfAbsent,
+        }
     }
 }
 
@@ -235,7 +246,10 @@ fn file_identity(f: &std::fs::File) -> Result<FileIdentity, BoxError> {
     {
         use std::os::unix::fs::MetadataExt;
         let m = f.metadata()?;
-        Ok(FileIdentity { volume: m.dev(), file: m.ino() })
+        Ok(FileIdentity {
+            volume: m.dev(),
+            file: m.ino(),
+        })
     }
     #[cfg(windows)]
     {
@@ -357,21 +371,21 @@ impl OutputPlan {
             )
             .into()
         })?;
-        let identity = self
-            .written
-            .lock()
-            .unwrap()
-            .get(path)
-            .copied()
-            .ok_or_else(|| -> BoxError {
-                format!(
-                    "internal error: rewrite of an output this invocation has not \
+        let identity =
+            self.written
+                .lock()
+                .unwrap()
+                .get(path)
+                .copied()
+                .ok_or_else(|| -> BoxError {
+                    format!(
+                        "internal error: rewrite of an output this invocation has not \
                      written:\n    {}\n  \
                      rewrite may only replace an artifact this same plan produced.",
-                    path.display()
-                )
-                .into()
-            })?;
+                        path.display()
+                    )
+                    .into()
+                })?;
         let evidence = match kind {
             OutputKind::MarkedText => Evidence::MarkerOnFd,
             OutputKind::WasmModule => Evidence::WasmSectionOnFd,
@@ -399,7 +413,10 @@ pub fn write_single(
     kind: OutputKind,
     force: bool,
 ) -> Result<bool, BoxError> {
-    let planned = [PlannedOutput { path: path.to_path_buf(), kind }];
+    let planned = [PlannedOutput {
+        path: path.to_path_buf(),
+        kind,
+    }];
     let plan = OutputPlan::preflight(&planned, force)?;
     plan.write(path, contents)
 }
@@ -552,8 +569,7 @@ fn decide(o: &PlannedOutput, all: &[PlannedOutput], force: bool) -> Result<Decis
     match &o.kind {
         OutputKind::MarkedText => {
             let mut head = Vec::new();
-            if Read::take(&f, 4096).read_to_end(&mut head).is_ok() && looks_pyths_generated(&head)
-            {
+            if Read::take(&f, 4096).read_to_end(&mut head).is_ok() && looks_pyths_generated(&head) {
                 Ok(Decision::Overwrite(OverwriteProof {
                     identity,
                     evidence: Evidence::MarkerOnFd,
@@ -802,17 +818,15 @@ fn overwrite_on_fd(
         // the no-follow guard silently inert there.
         opts.custom_flags(libc::O_NOFOLLOW);
     }
-    let mut f = opts
-        .open(target)
-        .map_err(|e| -> BoxError {
-            format!(
-                "refusing to write generated output: could not open the destination no-follow \
+    let mut f = opts.open(target).map_err(|e| -> BoxError {
+        format!(
+            "refusing to write generated output: could not open the destination no-follow \
                  (possible symlink swapped in after inspection):\n    {}\n  {}",
-                target.display(),
-                e
-            )
-            .into()
-        })?;
+            target.display(),
+            e
+        )
+        .into()
+    })?;
     let meta = f.metadata()?;
     if !meta.file_type().is_file() {
         return Err(format!(
@@ -992,12 +1006,8 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
         let id = N.fetch_add(1, Ordering::SeqCst);
-        let d = std::env::temp_dir().join(format!(
-            "pyths_sw_{}_{}_{}",
-            tag,
-            std::process::id(),
-            id
-        ));
+        let d =
+            std::env::temp_dir().join(format!("pyths_sw_{}_{}_{}", tag, std::process::id(), id));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -1116,11 +1126,7 @@ mod tests {
         // swapped in after preflight). Open must fail with ELOOP.
         let err =
             overwrite_on_fd(&link, b"PWNED", &proof_for(&link, Evidence::MarkerOnFd)).unwrap_err();
-        assert!(
-            err.to_string().contains("no-follow"),
-            "err: {}",
-            err
-        );
+        assert!(err.to_string().contains("no-follow"), "err: {}", err);
         assert_eq!(
             std::fs::read(&victim).unwrap(),
             marked("victim-with-marker").as_bytes()
@@ -1136,8 +1142,7 @@ mod tests {
         let d = scratch("fdswap");
         let t = d.join("out.js");
         std::fs::write(&t, b"VICTIM CONTENT (no marker)").unwrap();
-        let err =
-            overwrite_on_fd(&t, b"NEW", &proof_for(&t, Evidence::MarkerOnFd)).unwrap_err();
+        let err = overwrite_on_fd(&t, b"NEW", &proof_for(&t, Evidence::MarkerOnFd)).unwrap_err();
         assert!(err.to_string().contains("did not generate"), "err: {}", err);
         assert_eq!(std::fs::read(&t).unwrap(), b"VICTIM CONTENT (no marker)");
         let _ = std::fs::remove_dir_all(&d);
@@ -1199,7 +1204,10 @@ mod tests {
         let plan = OutputPlan::preflight(&planned, false).unwrap();
         plan.write(&js, marked("new build").as_bytes()).unwrap();
         plan.write(&map, b"{\"version\":3,\"new\":true}").unwrap();
-        assert_eq!(std::fs::read(&map).unwrap(), b"{\"version\":3,\"new\":true}");
+        assert_eq!(
+            std::fs::read(&map).unwrap(),
+            b"{\"version\":3,\"new\":true}"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1277,8 +1285,14 @@ mod tests {
         ];
         let err = OutputPlan::preflight(&planned, false).unwrap_err();
         assert!(err.to_string().contains("did not generate"), "err: {}", err);
-        assert!(!wasm.exists(), "wasm must not be written on a refused graph");
-        assert!(!glue.exists(), "glue must not be written on a refused graph");
+        assert!(
+            !wasm.exists(),
+            "wasm must not be written on a refused graph"
+        );
+        assert!(
+            !glue.exists(),
+            "glue must not be written on a refused graph"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1289,10 +1303,7 @@ mod tests {
         let d = scratch("alias");
         // `--target deno -o worker.wasm`: entry and wasm collapse to one path.
         let out = d.join("worker.wasm");
-        let planned = [
-            PlannedOutput::wasm(&out),
-            PlannedOutput::marked_text(&out),
-        ];
+        let planned = [PlannedOutput::wasm(&out), PlannedOutput::marked_text(&out)];
         let err = OutputPlan::preflight(&planned, false).unwrap_err();
         assert!(err.to_string().contains("same"), "err: {}", err);
         assert!(!out.exists());
@@ -1385,16 +1396,14 @@ mod tests {
         let d = scratch("forceswap");
         let t = d.join("out.js");
         std::fs::write(&t, b"the file --force authorized destroying").unwrap();
-        let plan =
-            OutputPlan::preflight(&[PlannedOutput::marked_text(&t)], true).unwrap();
+        let plan = OutputPlan::preflight(&[PlannedOutput::marked_text(&t)], true).unwrap();
         // Swap in a DIFFERENT file after preflight: --force must not carry over.
         std::fs::write(&t, b"a different victim").unwrap();
         let err = plan.write(&t, b"NEW").unwrap_err();
         assert!(err.to_string().contains("changed while"), "err: {}", err);
         assert_eq!(std::fs::read(&t).unwrap(), b"a different victim");
         // Unchanged content still writes fine under --force.
-        let plan2 =
-            OutputPlan::preflight(&[PlannedOutput::marked_text(&t)], true).unwrap();
+        let plan2 = OutputPlan::preflight(&[PlannedOutput::marked_text(&t)], true).unwrap();
         plan2.write(&t, b"NEW").unwrap();
         assert_eq!(std::fs::read(&t).unwrap(), b"NEW");
         let _ = std::fs::remove_dir_all(&d);
@@ -1592,7 +1601,8 @@ mod tests {
     fn p4_marker_must_be_at_start_not_substring() {
         let owned = marked("export const x = 1;\n");
         assert!(looks_pyths_generated(owned.as_bytes()));
-        let doc = b"// Preserve the literal \"@generated by PythScribe\" for docs\nconst mine = 1;\n";
+        let doc =
+            b"// Preserve the literal \"@generated by PythScribe\" for docs\nconst mine = 1;\n";
         assert!(!looks_pyths_generated(doc));
         let indented = b"const x = 1; // @generated by PythScribe\n";
         assert!(!looks_pyths_generated(indented));

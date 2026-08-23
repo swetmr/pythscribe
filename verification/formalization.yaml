@@ -230,7 +230,7 @@ headline_claims:
     declaration: PythExpandVerify.marshal_param_admitted_sound
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18727
+    line: 18818
     sorry_count: 0
     axioms: [propext]
     witness: PythExpandVerify.listInt_i32KindStub_fails
@@ -241,7 +241,7 @@ headline_claims:
     declaration: PythExpandVerify.marshal_ret_admitted_sound
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18747
+    line: 18838
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -252,7 +252,7 @@ headline_claims:
     declaration: PythExpandVerify.i64ArgMarshal_exact
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18606
+    line: 18625
     sorry_count: 0
     axioms: [Quot.sound, propext]
     witness: PythExpandVerify.i64Marshal_unguardedStub_fails
@@ -263,7 +263,7 @@ headline_claims:
     declaration: PythExpandVerify.i64_boundary_roundtrip
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18640
+    line: 18659
     sorry_count: 0
     axioms: [Quot.sound, propext]
     witness: PythExpandVerify.i64Marshal_unguardedStub_fails
@@ -274,7 +274,7 @@ headline_claims:
     declaration: PythExpandVerify.marshal_exhaustive
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18776
+    line: 18867
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -285,7 +285,7 @@ headline_claims:
     declaration: PythExpandVerify.i64Marshal_unguardedStub_fails
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18658
+    line: 18677
     sorry_count: 0
     axioms: []  # axiom-free (tighter than the pinned ceiling)
     witness: none
@@ -898,7 +898,7 @@ headline_claims:
     paper_claim: "Paper C union termination non-vacuity; semantic_preservance 6."
 
 aggregate_integrity:
-  total_theorems_and_lemmas: 458   # `grep -cE '^\s*(theorem|lemma) ' PythExpandVerify.lean`
+  total_theorems_and_lemmas: 460   # `grep -cE '^\s*(theorem|lemma) ' PythExpandVerify.lean`
   global_sorry_count: 0   # sorry/admit/axiom/native_decide across the whole development
   headline_claim_count: 80
   pinned_axiom_footprint: [Classical.choice, Quot.sound, propext]   # the CEILING (ten-proofs pins exactly this trio)

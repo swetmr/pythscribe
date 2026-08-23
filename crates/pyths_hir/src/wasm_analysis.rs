@@ -784,11 +784,7 @@ fn stmt_has_raising_return(stmt: &Stmt) -> bool {
             elif_clauses,
             else_body,
             ..
-        } => {
-            any(body)
-                || elif_clauses.iter().any(|(_, b)| any(b))
-                || any_opt(else_body)
-        }
+        } => any(body) || elif_clauses.iter().any(|(_, b)| any(b)) || any_opt(else_body),
         // Loops: the `else` body also runs (and can hold a raising return).
         StmtKind::While {
             body, else_body, ..
@@ -1016,7 +1012,7 @@ fn check_stmt(
                         }
                         None => {
                             return Err(
-                                "except handler type must reference a built-in exception".into(),
+                                "except handler type must reference a built-in exception".into()
                             );
                         }
                     }
@@ -1213,9 +1209,9 @@ fn check_expr(expr: &Expr, eligible_names: &[String]) -> Result<(), String> {
         ExprKind::StringLiteral(_) => Err(
             "string literals are not supported on the WASM fast path (function stays JS)".into(),
         ),
-        ExprKind::BytesLiteral(_) => Err(
-            "bytes literals are not supported on the WASM fast path (function stays JS)".into(),
-        ),
+        ExprKind::BytesLiteral(_) => {
+            Err("bytes literals are not supported on the WASM fast path (function stays JS)".into())
+        }
         ExprKind::FString { .. } => {
             Err("f-strings are not supported on the WASM fast path (function stays JS)".into())
         }

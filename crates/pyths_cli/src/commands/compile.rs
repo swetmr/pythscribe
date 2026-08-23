@@ -53,7 +53,10 @@ fn build_deno_json(entry_basename: &str) -> String {
 /// character can break out of a single-line `//# sourceMappingURL=` comment
 /// (CR/LF), a TOML string, or another single-line generated context. Reject
 /// such names before any of them reaches a generated syntax context.
-pub(crate) fn reject_control_bearing_name(kind: &str, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn reject_control_bearing_name(
+    kind: &str,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // `char::is_control` covers only the Unicode Cc category (U+0000–001F,
     // U+007F–009F). It MISSES U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH
     // SEPARATOR), which JavaScript treats as line terminators — so a name
@@ -136,7 +139,15 @@ pub(crate) struct ResolvedTarget<'a> {
 }
 
 /// The valid `--target` values (the explicit pinning escape hatches).
-const KNOWN_TARGETS: &[&str] = &["js", "worker", "wasm", "js+wasm", "wasm-edge", "wasi", "deno"];
+const KNOWN_TARGETS: &[&str] = &[
+    "js",
+    "worker",
+    "wasm",
+    "js+wasm",
+    "wasm-edge",
+    "wasi",
+    "deno",
+];
 
 /// ONE consolidated place where "what target are we compiling for?" is
 /// decided (deep-over-local: every consumer below reads the resolved value,
@@ -1293,7 +1304,15 @@ mod tests {
 
     #[test]
     fn resolve_target_explicit_passes_through_and_is_marked_explicit() {
-        for t in ["js", "worker", "wasm", "js+wasm", "wasm-edge", "wasi", "deno"] {
+        for t in [
+            "js",
+            "worker",
+            "wasm",
+            "js+wasm",
+            "wasm-edge",
+            "wasi",
+            "deno",
+        ] {
             let rt = resolve_target(Some(t), false).unwrap();
             assert_eq!(rt.name, t);
             assert!(rt.explicit);
@@ -1305,7 +1324,9 @@ mod tests {
 
     #[test]
     fn resolve_target_rejects_unknown() {
-        let err = resolve_target(Some("cobol"), false).unwrap_err().to_string();
+        let err = resolve_target(Some("cobol"), false)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("unknown --target"), "got: {}", err);
     }
 
@@ -1364,7 +1385,14 @@ mod tests {
     fn reject_control_bearing_name_catches_crlf_nul() {
         // U+2028/U+2029 are JS line terminators — they break out of a generated
         // `// …` comment just like a newline, but are NOT `char::is_control`.
-        for bad in ["a\nb", "a\rb", "a\0b", "x\u{7f}y", "a\u{2028}b", "a\u{2029}b"] {
+        for bad in [
+            "a\nb",
+            "a\rb",
+            "a\0b",
+            "x\u{7f}y",
+            "a\u{2028}b",
+            "a\u{2029}b",
+        ] {
             assert!(
                 reject_control_bearing_name("output stem", bad).is_err(),
                 "{bad:?} should be rejected"

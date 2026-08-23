@@ -26,6 +26,10 @@ Usage (from verification/):
     python comparator/axiom_footprint.py gate      # CI gate (exit nonzero on violation)
     python comparator/axiom_footprint.py emit       # (re)write formalization.yaml
     python comparator/axiom_footprint.py emit --no-build   # skip the fresh lake build
+    python comparator/axiom_footprint.py check --no-build  # in-sync check: regenerate to a
+                                                           # temp file and diff against the
+                                                           # committed manifest (exit 1 on drift;
+                                                           # never touches formalization.yaml)
 """
 from __future__ import annotations
 
@@ -186,7 +190,8 @@ def _yaml_str(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def cmd_emit(do_build=True):
+def cmd_emit(do_build=True, out_path=None):
+    out_path = Path(out_path) if out_path else MANIFEST
     loc = resolve_decls()
     names = all_probe_names()
     axioms, raw = run_print_axioms(names, do_build=do_build)
@@ -276,8 +281,8 @@ def cmd_emit(do_build=True):
     lines.append("    - 'comparator/run_comparator.sh — export (lean4export) + independent re-check (nanoda) when wired; see comparator.md'")
     lines.append("")
 
-    MANIFEST.write_text("\n".join(lines), encoding="utf-8")
-    print(f"wrote {MANIFEST}")
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"wrote {out_path}")
     print(f"  headline claims: {len(HEADLINE)}")
     print(f"  total theorems+lemmas: {total_tl}   global sorry: {global_sorry}")
     print(f"  actual axiom union: {{{', '.join(sorted(union)) or '(empty)'}}}")
@@ -292,18 +297,53 @@ def cmd_emit(do_build=True):
     return 1 if (missing or over_pinned) else 0
 
 
+# ---------------------------------------------------------------- check mode
+def cmd_check(do_build=True):
+    """Regenerate the manifest to a TEMP file via the exact same path as `emit`
+    and diff it against the committed formalization.yaml. Exit 1 on drift.
+    Never modifies formalization.yaml — safe for hooks and read-only CI checks."""
+    import difflib
+
+    if not MANIFEST.exists():
+        print("formalization.yaml missing — run `python comparator/axiom_footprint.py emit`")
+        return 1
+    committed = MANIFEST.read_text(encoding="utf-8")
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False,
+                                     dir=str(VERIF), encoding="utf-8") as f:
+        tmp = f.name
+    try:
+        rc = cmd_emit(do_build=do_build, out_path=tmp)
+        regenerated = Path(tmp).read_text(encoding="utf-8")
+    finally:
+        os.unlink(tmp)
+    if rc != 0:
+        print("check: emit reported integrity problems (missing/over-pinned decls) — failing")
+        return 1
+    if regenerated != committed:
+        print("\ncheck FAILED: formalization.yaml is stale — run "
+              "'python comparator/axiom_footprint.py emit' and commit. Diff:")
+        sys.stdout.writelines(difflib.unified_diff(
+            committed.splitlines(keepends=True), regenerated.splitlines(keepends=True),
+            fromfile="formalization.yaml (committed)", tofile="formalization.yaml (regenerated)"))
+        return 1
+    print("check OK: formalization.yaml matches the source")
+    return 0
+
+
 def read_toolchain():
     tc = VERIF / "lean-toolchain"
     return tc.read_text(encoding="utf-8").strip() if tc.exists() else "unknown"
 
 
 def main(argv):
-    if len(argv) < 2 or argv[1] not in ("gate", "emit"):
+    if len(argv) < 2 or argv[1] not in ("gate", "emit", "check"):
         print(__doc__)
         return 2
     do_build = "--no-build" not in argv
     if argv[1] == "gate":
         return cmd_gate(do_build=do_build)
+    if argv[1] == "check":
+        return cmd_check(do_build=do_build)
     return cmd_emit(do_build=do_build)
 
 

@@ -59,7 +59,10 @@ fn sec3_dataclass_pattern_regex_breakout() {
     assert_valid(&js, "sec3_pattern");
     // Routed through the RegExp constructor (encoded string), not a raw `/.../ `
     // literal — the pre-fix raw form `!/a/) ||` must be gone.
-    assert!(js.contains("new RegExp("), "regex not routed via constructor:\n{js}");
+    assert!(
+        js.contains("new RegExp("),
+        "regex not routed via constructor:\n{js}"
+    );
     // Pre-fix emitted a raw `/.../ ` test literal `!/a/) || ...`; that condition
     // form must be gone (the payload now lives only inside the RegExp string arg
     // and the quoted message, both as data). node --check above proves validity.
@@ -165,10 +168,7 @@ fn sec13_except_alias_reserved_word() {
         !js.contains("let let ="),
         "reserved-word alias emitted raw (SyntaxError):\n{js}"
     );
-    assert!(
-        js.contains("let$"),
-        "alias not sanitized to `let$`:\n{js}"
-    );
+    assert!(js.contains("let$"), "alias not sanitized to `let$`:\n{js}");
 }
 
 #[test]

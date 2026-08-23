@@ -158,12 +158,35 @@ enum TypeCheck {
 fn is_typing_only_name(name: &str) -> bool {
     matches!(
         name,
-        "Any" | "ClassVar" | "Optional" | "Union" | "Callable" | "Tuple"
-            | "Set" | "FrozenSet" | "Iterable" | "Iterator" | "Sequence"
-            | "Mapping" | "MutableMapping" | "MutableSequence" | "Final"
-            | "Literal" | "Type" | "NoReturn" | "Never" | "Hashable"
-            | "Generator" | "Coroutine" | "Awaitable" | "AnyStr" | "Text"
-            | "TypeVar" | "Protocol" | "TypedDict" | "NamedTuple"
+        "Any"
+            | "ClassVar"
+            | "Optional"
+            | "Union"
+            | "Callable"
+            | "Tuple"
+            | "Set"
+            | "FrozenSet"
+            | "Iterable"
+            | "Iterator"
+            | "Sequence"
+            | "Mapping"
+            | "MutableMapping"
+            | "MutableSequence"
+            | "Final"
+            | "Literal"
+            | "Type"
+            | "NoReturn"
+            | "Never"
+            | "Hashable"
+            | "Generator"
+            | "Coroutine"
+            | "Awaitable"
+            | "AnyStr"
+            | "Text"
+            | "TypeVar"
+            | "Protocol"
+            | "TypedDict"
+            | "NamedTuple"
     )
 }
 
@@ -434,8 +457,7 @@ fn collect_dataclass_fields<'a>(body: &'a [Stmt]) -> Vec<DataclassField<'a>> {
             if is_classvar_annotation(annotation) {
                 continue;
             }
-            let property_default =
-                value.as_ref().is_some_and(|v| is_property_call(v));
+            let property_default = value.as_ref().is_some_and(|v| is_property_call(v));
             if let ExprKind::Name(field_name) = &target.kind {
                 // Check if value is Field(...) or field(...)
                 if let Some(val) = value {
@@ -1464,13 +1486,13 @@ impl JsCodegen {
             runtime_imports: HashSet::new(),
             inline_runtime: false,
             declared_scopes: vec![HashSet::new()], // module scope
-            scope_bindings: vec![HashSet::new()], // module scope (filled in emit_module)
+            scope_bindings: vec![HashSet::new()],  // module scope (filled in emit_module)
             module_bound_names: HashSet::new(),
             module_idents: HashSet::new(),
             scope_globals: vec![HashSet::new()],
             dotted_import_scopes: vec![DottedImportScope::default()], // module scope
-            hoisted_scopes: vec![HashSet::new()],  // module scope
-            sentinel_scopes: vec![HashSet::new()], // module scope
+            hoisted_scopes: vec![HashSet::new()],                     // module scope
+            sentinel_scopes: vec![HashSet::new()],                    // module scope
             imported_bindings: HashSet::new(),
             imported_binding_modules: HashMap::new(),
             import_ref_renames: HashMap::new(),
@@ -1542,13 +1564,13 @@ impl JsCodegen {
             runtime_imports: HashSet::new(),
             inline_runtime: true,
             declared_scopes: vec![HashSet::new()], // module scope
-            scope_bindings: vec![HashSet::new()], // module scope (filled in emit_module)
+            scope_bindings: vec![HashSet::new()],  // module scope (filled in emit_module)
             module_bound_names: HashSet::new(),
             module_idents: HashSet::new(),
             scope_globals: vec![HashSet::new()],
             dotted_import_scopes: vec![DottedImportScope::default()], // module scope
-            hoisted_scopes: vec![HashSet::new()],  // module scope
-            sentinel_scopes: vec![HashSet::new()], // module scope
+            hoisted_scopes: vec![HashSet::new()],                     // module scope
+            sentinel_scopes: vec![HashSet::new()],                    // module scope
             imported_bindings: HashSet::new(),
             imported_binding_modules: HashMap::new(),
             import_ref_renames: HashMap::new(),
@@ -2440,7 +2462,8 @@ class PyDict extends Map {
         // receiver's method return value and share one __isPlainObj rule.
         if needed.contains("pyDictMerge") {
             // Mirrors runtime/src/runtime.js pyDictMerge (#83).
-            rt.push_str(r#"function pyDictMerge(...parts) {
+            rt.push_str(
+                r#"function pyDictMerge(...parts) {
     if (parts.some((p) => p instanceof Map)) {
         const out = new PyDict();
         for (const p of parts) {
@@ -2457,7 +2480,8 @@ class PyDict extends Map {
     }
     return out;
 }
-"#);
+"#,
+            );
         }
         if needed.contains("pyFormatFloat") {
             // Mirrors runtime/src/operators.js's pyFormatFloat exactly —
@@ -3865,8 +3889,12 @@ function pyFormatDynamic(value, specStr) {
                             walk(b, out);
                         }
                     }
-                    StmtKind::While { body, else_body, .. }
-                    | StmtKind::For { body, else_body, .. } => {
+                    StmtKind::While {
+                        body, else_body, ..
+                    }
+                    | StmtKind::For {
+                        body, else_body, ..
+                    } => {
                         walk(body, out);
                         if let Some(b) = else_body {
                             walk(b, out);
@@ -4401,10 +4429,7 @@ function pyFormatDynamic(value, specStr) {
         // intervening function frame (an enclosing local `name` must not
         // capture it). So `def outer(): len=…; def inner(): global len;
         // return len(…)` lowers `len` by the MODULE binding, not outer's.
-        let is_global = self
-            .scope_globals
-            .last()
-            .is_some_and(|g| g.contains(name));
+        let is_global = self.scope_globals.last().is_some_and(|g| g.contains(name));
         let module_has = self
             .declared_scopes
             .first()
@@ -4694,10 +4719,9 @@ function pyFormatDynamic(value, specStr) {
             match action {
                 Action::None => {}
                 Action::FreshObj => self.writeln(&format!("{} = {{}};", path_js)),
-                Action::CopyNsToObj => self.writeln(&format!(
-                    "{} = Object.assign({{}}, {});",
-                    path_js, path_js
-                )),
+                Action::CopyNsToObj => {
+                    self.writeln(&format!("{} = Object.assign({{}}, {});", path_js, path_js))
+                }
                 Action::GraftLeaf => self.writeln(&format!("{} = {};", path_js, unique)),
                 Action::MergeLeafUnderChildren => self.writeln(&format!(
                     "{} = Object.assign({{}}, {}, {});",
@@ -5097,13 +5121,17 @@ function pyFormatDynamic(value, specStr) {
                         Self::collect_class_names(b, out);
                     }
                 }
-                StmtKind::While { body, else_body, .. } => {
+                StmtKind::While {
+                    body, else_body, ..
+                } => {
                     Self::collect_class_names(body, out);
                     if let Some(b) = else_body {
                         Self::collect_class_names(b, out);
                     }
                 }
-                StmtKind::For { body, else_body, .. } => {
+                StmtKind::For {
+                    body, else_body, ..
+                } => {
                     Self::collect_class_names(body, out);
                     if let Some(b) = else_body {
                         Self::collect_class_names(b, out);
@@ -5160,22 +5188,48 @@ function pyFormatDynamic(value, specStr) {
     fn contains_nested_scope(body: &[Stmt]) -> bool {
         body.iter().any(|stmt| match &stmt.kind {
             StmtKind::FuncDef { .. } | StmtKind::ClassDef { .. } => true,
-            StmtKind::If { body, elif_clauses, else_body, .. } => {
+            StmtKind::If {
+                body,
+                elif_clauses,
+                else_body,
+                ..
+            } => {
                 Self::contains_nested_scope(body)
-                    || elif_clauses.iter().any(|(_, b)| Self::contains_nested_scope(b))
-                    || else_body.as_deref().is_some_and(Self::contains_nested_scope)
+                    || elif_clauses
+                        .iter()
+                        .any(|(_, b)| Self::contains_nested_scope(b))
+                    || else_body
+                        .as_deref()
+                        .is_some_and(Self::contains_nested_scope)
             }
-            StmtKind::While { body, else_body, .. }
-            | StmtKind::For { body, else_body, .. } => {
+            StmtKind::While {
+                body, else_body, ..
+            }
+            | StmtKind::For {
+                body, else_body, ..
+            } => {
                 Self::contains_nested_scope(body)
-                    || else_body.as_deref().is_some_and(Self::contains_nested_scope)
+                    || else_body
+                        .as_deref()
+                        .is_some_and(Self::contains_nested_scope)
             }
             StmtKind::With { body, .. } => Self::contains_nested_scope(body),
-            StmtKind::Try { body, handlers, else_body, finally_body } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+            } => {
                 Self::contains_nested_scope(body)
-                    || handlers.iter().any(|h| Self::contains_nested_scope(&h.body))
-                    || else_body.as_deref().is_some_and(Self::contains_nested_scope)
-                    || finally_body.as_deref().is_some_and(Self::contains_nested_scope)
+                    || handlers
+                        .iter()
+                        .any(|h| Self::contains_nested_scope(&h.body))
+                    || else_body
+                        .as_deref()
+                        .is_some_and(Self::contains_nested_scope)
+                    || finally_body
+                        .as_deref()
+                        .is_some_and(Self::contains_nested_scope)
             }
             StmtKind::Match { cases, .. } => {
                 cases.iter().any(|c| Self::contains_nested_scope(&c.body))
@@ -5245,28 +5299,46 @@ function pyFormatDynamic(value, specStr) {
     fn defines_dunder_call(body: &[Stmt]) -> bool {
         body.iter().any(|stmt| match &stmt.kind {
             StmtKind::ClassDef { body, .. } => {
-                body.iter().any(|s| {
-                    matches!(&s.kind, StmtKind::FuncDef { name, .. } if name == "__call__")
-                }) || Self::defines_dunder_call(body)
+                body.iter().any(
+                    |s| matches!(&s.kind, StmtKind::FuncDef { name, .. } if name == "__call__"),
+                ) || Self::defines_dunder_call(body)
             }
             StmtKind::FuncDef { body, .. } | StmtKind::With { body, .. } => {
                 Self::defines_dunder_call(body)
             }
-            StmtKind::If { body, elif_clauses, else_body, .. } => {
+            StmtKind::If {
+                body,
+                elif_clauses,
+                else_body,
+                ..
+            } => {
                 Self::defines_dunder_call(body)
-                    || elif_clauses.iter().any(|(_, b)| Self::defines_dunder_call(b))
+                    || elif_clauses
+                        .iter()
+                        .any(|(_, b)| Self::defines_dunder_call(b))
                     || else_body.as_deref().is_some_and(Self::defines_dunder_call)
             }
-            StmtKind::While { body, else_body, .. }
-            | StmtKind::For { body, else_body, .. } => {
+            StmtKind::While {
+                body, else_body, ..
+            }
+            | StmtKind::For {
+                body, else_body, ..
+            } => {
                 Self::defines_dunder_call(body)
                     || else_body.as_deref().is_some_and(Self::defines_dunder_call)
             }
-            StmtKind::Try { body, handlers, else_body, finally_body } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+            } => {
                 Self::defines_dunder_call(body)
                     || handlers.iter().any(|h| Self::defines_dunder_call(&h.body))
                     || else_body.as_deref().is_some_and(Self::defines_dunder_call)
-                    || finally_body.as_deref().is_some_and(Self::defines_dunder_call)
+                    || finally_body
+                        .as_deref()
+                        .is_some_and(Self::defines_dunder_call)
             }
             StmtKind::Match { cases, .. } => {
                 cases.iter().any(|c| Self::defines_dunder_call(&c.body))
@@ -5729,8 +5801,7 @@ function pyFormatDynamic(value, specStr) {
                             AugAssignOp::ShiftRight => "pyShiftRight",
                             AugAssignOp::MatMul => "pyIMatMul",
                         };
-                        let strict_dict =
-                            matches!(self.infer_type(recv), JsInferredType::Dict);
+                        let strict_dict = matches!(self.infer_type(recv), JsInferredType::Dict);
                         let n = self.default_hoist_counter;
                         self.default_hoist_counter += 1;
                         let o = format!("__aug_o{}", n);
@@ -6137,8 +6208,7 @@ function pyFormatDynamic(value, specStr) {
                     // exploded as bare ReferenceErrors at runtime with no
                     // hint of the cause (silent miscompile).
                     if *level > 0 {
-                        let py_module =
-                            format!("{}{}", ".".repeat(*level as usize), module);
+                        let py_module = format!("{}{}", ".".repeat(*level as usize), module);
                         let diag = format!(
                             "wildcard relative import `from {} import *` was not \
                              expanded — this compilation context has no source-file \
@@ -6173,8 +6243,7 @@ function pyFormatDynamic(value, specStr) {
                                 js_string_literal(&module_path)
                             ));
                             for (n, is_class) in exports {
-                                self.star_import_bindings
-                                    .insert(n, (ns.clone(), is_class));
+                                self.star_import_bindings.insert(n, (ns.clone(), is_class));
                             }
                             return;
                         }
@@ -6249,11 +6318,9 @@ function pyFormatDynamic(value, specStr) {
                         for a in names {
                             let local = a.alias.as_deref().unwrap_or(&a.name);
                             let sub_path = format!("./{}{}", prefix, a.name);
-                            let py_module =
-                                format!("{}{}", ".".repeat(*level as usize), a.name);
-                            match self.plan_import_binding(
-                                local, local, &py_module, "", &sub_path,
-                            ) {
+                            let py_module = format!("{}{}", ".".repeat(*level as usize), a.name);
+                            match self.plan_import_binding(local, local, &py_module, "", &sub_path)
+                            {
                                 ImportBindingPlan::Error => return,
                                 ImportBindingPlan::Dedup => {
                                     self.declare(local);
@@ -6287,15 +6354,9 @@ function pyFormatDynamic(value, specStr) {
                                         js_string_literal(&sub_path)
                                     ));
                                     if reassign {
-                                        self.writeln(&format!(
-                                            "{} = {};",
-                                            js_binding, unique
-                                        ));
+                                        self.writeln(&format!("{} = {};", js_binding, unique));
                                     } else {
-                                        self.writeln(&format!(
-                                            "let {} = {};",
-                                            js_binding, unique
-                                        ));
+                                        self.writeln(&format!("let {} = {};", js_binding, unique));
                                     }
                                     self.declare(local);
                                 }
@@ -6457,8 +6518,7 @@ function pyFormatDynamic(value, specStr) {
                             // two immutable `import * as m` = a SyntaxError),
                             // idempotent dedup, and the param-shadow/fix-J
                             // rebinds. Planned BEFORE `declare`.
-                            let stdlib_mod =
-                                format!("pyths-runtime/stdlib/{}", a.name);
+                            let stdlib_mod = format!("pyths-runtime/stdlib/{}", a.name);
                             match self.plan_import_binding(
                                 local,
                                 local,
@@ -6491,10 +6551,7 @@ function pyFormatDynamic(value, specStr) {
                                     if reassign {
                                         self.writeln(&format!("{} = {};", js_binding, unique));
                                     } else {
-                                        self.writeln(&format!(
-                                            "let {} = {};",
-                                            js_binding, unique
-                                        ));
+                                        self.writeln(&format!("let {} = {};", js_binding, unique));
                                     }
                                     self.declare(local);
                                 }
@@ -6588,7 +6645,8 @@ function pyFormatDynamic(value, specStr) {
                             .find(|(s, _, _)| *s == src)
                             .expect("every ReactHelperSource has a bucket");
                         let eff_mod = bucket.1.clone();
-                        match self.plan_import_binding(py_local, &binding, &eff_mod, &js_name, &eff_mod)
+                        match self
+                            .plan_import_binding(py_local, &binding, &eff_mod, &js_name, &eff_mod)
                         {
                             ImportBindingPlan::Error => return,
                             ImportBindingPlan::Dedup => {}
@@ -6714,8 +6772,13 @@ function pyFormatDynamic(value, specStr) {
                     // `createStore`), which is what makes the DX-B2
                     // alias-and-rewrite class detectable.
                     let py_local = a.alias.as_deref().unwrap_or(&a.name);
-                    match self.plan_import_binding(py_local, &binding, module, &js_name, &module_path)
-                    {
+                    match self.plan_import_binding(
+                        py_local,
+                        &binding,
+                        module,
+                        &js_name,
+                        &module_path,
+                    ) {
                         ImportBindingPlan::Error => return,
                         ImportBindingPlan::Dedup => {}
                         ImportBindingPlan::Fresh => {
@@ -7801,7 +7864,11 @@ function pyFormatDynamic(value, specStr) {
                 }
                 Self::collect_idents_expr(value, out);
             }
-            StmtKind::AugAssign { target, op: _, value } => {
+            StmtKind::AugAssign {
+                target,
+                op: _,
+                value,
+            } => {
                 Self::collect_idents_expr(target, out);
                 Self::collect_idents_expr(value, out);
             }
@@ -8361,9 +8428,7 @@ function pyFormatDynamic(value, specStr) {
                         Self::collect_bound_names(&c.body, out);
                     }
                 }
-                StmtKind::Return(Some(e))
-                | StmtKind::Expr(e)
-                | StmtKind::Raise(Some(e), _) => {
+                StmtKind::Return(Some(e)) | StmtKind::Expr(e) | StmtKind::Raise(Some(e), _) => {
                     Self::collect_walrus_targets(e, out);
                 }
                 StmtKind::Assert { test, msg } => {
@@ -10361,10 +10426,7 @@ function pyFormatDynamic(value, specStr) {
                 .filter(|(i, p)| {
                     // `self` stays: in a PLAIN function it is a real,
                     // keyword-bindable first parameter (decorator wrappers).
-                    !p.is_kwargs
-                        && !p.is_args
-                        && p.name != "cls"
-                        && star.is_none_or(|s| *i < s)
+                    !p.is_kwargs && !p.is_args && p.name != "cls" && star.is_none_or(|s| *i < s)
                 })
                 .map(|(_, p)| format!("\"{}\"", p.name))
                 .collect();
@@ -10471,10 +10533,7 @@ function pyFormatDynamic(value, specStr) {
     /// what remains is the `**kwargs` dict.
     fn varargs_kw_split(params: &[Param]) -> Option<(usize, Vec<&Param>, Option<&Param>)> {
         let star = params.iter().position(|p| p.is_args)?;
-        let kwonly: Vec<&Param> = params[star + 1..]
-            .iter()
-            .filter(|p| !p.is_kwargs)
-            .collect();
+        let kwonly: Vec<&Param> = params[star + 1..].iter().filter(|p| !p.is_kwargs).collect();
         let kwargs = params.iter().find(|p| p.is_kwargs);
         if kwonly.is_empty() && kwargs.is_none() {
             return None;
@@ -10522,10 +10581,7 @@ function pyFormatDynamic(value, specStr) {
             // of a missing keyword-only one, so validate the key set first
             // (the kw-only names are the allowed remainder).
             self.need_runtime("__pyNoExtraKw");
-            let allowed: Vec<String> = kwonly
-                .iter()
-                .map(|p| format!("\"{}\"", p.name))
-                .collect();
+            let allowed: Vec<String> = kwonly.iter().map(|p| format!("\"{}\"", p.name)).collect();
             self.write_indent();
             self.write(&format!(
                 "__pyNoExtraKw({}, \"{}\", [{}]);\n",
@@ -10993,19 +11049,14 @@ function pyFormatDynamic(value, specStr) {
             // here instead. Matching-arity literal RHS assigns element-wise;
             // any other RHS is materialized once and indexed.
             if let ExprKind::Tuple(elts) | ExprKind::List(elts) = &target.kind {
-                if !elts
-                    .iter()
-                    .all(|e| matches!(&e.kind, ExprKind::Name(_)))
-                {
+                if !elts.iter().all(|e| matches!(&e.kind, ExprKind::Name(_))) {
                     continue; // non-Name elements in a class body: unsupported
                 }
                 self.need_runtime("__pyClassAttr");
                 let literal_vals: Option<&Vec<Expr>> = match &value.kind {
                     ExprKind::Tuple(vals) | ExprKind::List(vals)
                         if vals.len() == elts.len()
-                            && !vals
-                                .iter()
-                                .any(|v| matches!(v.kind, ExprKind::Starred(_))) =>
+                            && !vals.iter().any(|v| matches!(v.kind, ExprKind::Starred(_))) =>
                     {
                         Some(vals)
                     }
@@ -12045,19 +12096,13 @@ function pyFormatDynamic(value, specStr) {
                     "!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test({f})",
                     f = field_name
                 ),
-                &format!(
-                    "\"{c}.{label}: must be a valid email\"",
-                    c = class_name
-                ),
+                &format!("\"{c}.{label}: must be a valid email\"", c = class_name),
             );
         }
         if constraints.url {
             self.emit_validation_error(
                 &format!("!/^https?:\\/\\/.+/.test({f})", f = field_name),
-                &format!(
-                    "\"{c}.{label}: must be a valid URL\"",
-                    c = class_name
-                ),
+                &format!("\"{c}.{label}: must be a valid URL\"", c = class_name),
             );
         }
         if constraints.uuid {
@@ -12116,28 +12161,19 @@ function pyFormatDynamic(value, specStr) {
         if constraints.positive {
             self.emit_validation_error(
                 &format!("{f} <= 0", f = field_name),
-                &format!(
-                    "\"{c}.{label}: must be positive\"",
-                    c = class_name
-                ),
+                &format!("\"{c}.{label}: must be positive\"", c = class_name),
             );
         }
         if constraints.negative {
             self.emit_validation_error(
                 &format!("{f} >= 0", f = field_name),
-                &format!(
-                    "\"{c}.{label}: must be negative\"",
-                    c = class_name
-                ),
+                &format!("\"{c}.{label}: must be negative\"", c = class_name),
             );
         }
         if constraints.nonnegative {
             self.emit_validation_error(
                 &format!("{f} < 0", f = field_name),
-                &format!(
-                    "\"{c}.{label}: must be nonnegative\"",
-                    c = class_name
-                ),
+                &format!("\"{c}.{label}: must be nonnegative\"", c = class_name),
             );
         }
         if let Some(divisor) = constraints.multiple_of {
@@ -12153,10 +12189,7 @@ function pyFormatDynamic(value, specStr) {
         if constraints.finite {
             self.emit_validation_error(
                 &format!("!Number.isFinite({f})", f = field_name),
-                &format!(
-                    "\"{c}.{label}: must be finite\"",
-                    c = class_name
-                ),
+                &format!("\"{c}.{label}: must be finite\"", c = class_name),
             );
         }
         // Choices
@@ -12361,8 +12394,7 @@ function pyFormatDynamic(value, specStr) {
         //    every param is ordinary and KEPT (a static's `self`/`cls` param is
         //    a real argument, not `this`); the body's free `self` stays ordinary.
         let first_param_name = params.first().map(|p| p.name.as_str());
-        let has_self_receiver =
-            !is_static && !is_classmethod && first_param_name == Some("self");
+        let has_self_receiver = !is_static && !is_classmethod && first_param_name == Some("self");
         let class_receiver_name: Option<String> = if is_classmethod {
             first_param_name.map(str::to_string)
         } else {
@@ -12760,7 +12792,11 @@ function pyFormatDynamic(value, specStr) {
             self.emit_expr(&args[2]);
             self.write(";\n");
         }
-        let step_ref = if args.len() == 3 { step_t.as_str() } else { "1" };
+        let step_ref = if args.len() == 3 {
+            step_t.as_str()
+        } else {
+            "1"
+        };
 
         // ROOT FIX: iterate the shared LAZY `__pyRangeIter` instead of a
         // hand-rolled value-controlled `i += step` counter. That counter
@@ -13443,8 +13479,16 @@ function pyFormatDynamic(value, specStr) {
                 // __pyIsInstance string sentinels isinstance() uses.
                 let is_builtin_ty = matches!(
                     cls.as_str(),
-                    "list" | "tuple" | "str" | "int" | "float" | "bool" | "dict" | "set"
-                        | "bytes" | "bytearray"
+                    "list"
+                        | "tuple"
+                        | "str"
+                        | "int"
+                        | "float"
+                        | "bool"
+                        | "dict"
+                        | "set"
+                        | "bytes"
+                        | "bytearray"
                 );
                 if is_builtin_ty {
                     self.need_runtime("__pyIsInstance");
@@ -13497,7 +13541,11 @@ function pyFormatDynamic(value, specStr) {
                     // SECURITY (#13): sanitize the capture binding — reserved
                     // words emitted `let let = ...` (SyntaxError). Matches the
                     // hoisted branch above and general Name references.
-                    self.writeln(&format!("let {} = {};", Self::sanitize_ident(name), subject));
+                    self.writeln(&format!(
+                        "let {} = {};",
+                        Self::sanitize_ident(name),
+                        subject
+                    ));
                     self.declare(name);
                 }
             }
@@ -13582,7 +13630,11 @@ function pyFormatDynamic(value, specStr) {
                     self.writeln(&format!("{} = {};", Self::sanitize_ident(name), subject));
                 } else {
                     // SECURITY (#13): sanitize the as-pattern binding.
-                    self.writeln(&format!("let {} = {};", Self::sanitize_ident(name), subject));
+                    self.writeln(&format!(
+                        "let {} = {};",
+                        Self::sanitize_ident(name),
+                        subject
+                    ));
                     self.declare(name);
                 }
                 self.emit_pattern_bindings(pattern, subject);
@@ -13972,9 +14024,7 @@ function pyFormatDynamic(value, specStr) {
                             // scope or from a nested function) resolves to
                             // the BUILTIN value, it does not raise. Other
                             // names raise NameError.
-                            if let Some((js, deps)) =
-                                crate::builtins::builtin_value_mapping(name)
-                            {
+                            if let Some((js, deps)) = crate::builtins::builtin_value_mapping(name) {
                                 for d in deps {
                                     self.need_runtime(d);
                                 }
@@ -16185,10 +16235,7 @@ function pyFormatDynamic(value, specStr) {
                     // argument: `useEffect(...__pyEffectArgs(...args))`.
                     // Applies whenever ANY positional arg is a spread (the
                     // first slot's identity is unknowable at compile time).
-                    if args
-                        .iter()
-                        .any(|a| matches!(a.kind, ExprKind::Starred(_)))
-                    {
+                    if args.iter().any(|a| matches!(a.kind, ExprKind::Starred(_))) {
                         self.need_runtime("__pyEffectArgs");
                         self.write(js_name);
                         self.write(open_paren);
@@ -16343,10 +16390,7 @@ function pyFormatDynamic(value, specStr) {
                         self.need_runtime("__pyClassCall");
                         let js_cls = Self::sanitize_ident(cls_name).into_owned();
                         if kwargs.is_empty() {
-                            self.write(&format!(
-                                "__pyClassCall({}, \"{}\", [",
-                                js_cls, attr
-                            ));
+                            self.write(&format!("__pyClassCall({}, \"{}\", [", js_cls, attr));
                             self.emit_call_args(args, kwargs);
                             self.write("])");
                         } else {
@@ -16357,10 +16401,7 @@ function pyFormatDynamic(value, specStr) {
                             // prototype methods (autotester arguments:
                             // A.__init__(self, y, x, *args, m=n, ...)).
                             self.need_runtime("__pyClassCallKw");
-                            self.write(&format!(
-                                "__pyClassCallKw({}, \"{}\", [",
-                                js_cls, attr
-                            ));
+                            self.write(&format!("__pyClassCallKw({}, \"{}\", [", js_cls, attr));
                             for (i, a) in args.iter().enumerate() {
                                 if i > 0 {
                                     self.write(", ");
@@ -16441,8 +16482,7 @@ function pyFormatDynamic(value, specStr) {
                     // corrupt arguments — and fall through to verbatim emission
                     // that preserves every argument.
                     if !self.container_dispatch_prefers_verbatim(value, attr, args)
-                        && self
-                            .try_emit_method_lowering(value, attr, args, kwargs, lowering, opt)
+                        && self.try_emit_method_lowering(value, attr, args, kwargs, lowering, opt)
                     {
                         return;
                     }
@@ -16988,10 +17028,12 @@ function pyFormatDynamic(value, specStr) {
     /// not make the *receiver* short-circuit, since `foo` runs regardless.
     fn receiver_may_short_circuit(expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::Attribute { value, optional, .. }
-            | ExprKind::Subscript { value, optional, .. } => {
-                *optional || Self::receiver_may_short_circuit(value)
+            ExprKind::Attribute {
+                value, optional, ..
             }
+            | ExprKind::Subscript {
+                value, optional, ..
+            } => *optional || Self::receiver_may_short_circuit(value),
             ExprKind::Call { func, optional, .. } => {
                 *optional || Self::receiver_may_short_circuit(func)
             }
@@ -17538,8 +17580,7 @@ function pyFormatDynamic(value, specStr) {
     fn emit_react_style_value(&mut self, value: &Expr) {
         match &value.kind {
             ExprKind::Dict { items } => self.emit_style_dict(items),
-            ExprKind::Call { func, .. }
-                if matches!(&func.kind, ExprKind::Name(n) if n == "pyNormalizeStyle") =>
+            ExprKind::Call { func, .. } if matches!(&func.kind, ExprKind::Name(n) if n == "pyNormalizeStyle") =>
             {
                 self.emit_expr(value);
             }
@@ -18332,9 +18373,9 @@ function pyFormatDynamic(value, specStr) {
     /// (the genuine TB-1 dynamic boundary).
     fn emit_react_props_arg(&mut self, arg: &Expr) {
         if let ExprKind::Dict { items } = &arg.kind {
-            let has_static_key = items.iter().any(|i| {
-                matches!(i, DictItem::KeyValue { key, .. } if Self::key_provably_string(key))
-            });
+            let has_static_key = items.iter().any(
+                |i| matches!(i, DictItem::KeyValue { key, .. } if Self::key_provably_string(key)),
+            );
             let all_props_shaped = items.iter().all(|i| match i {
                 DictItem::Spread(_) => true,
                 DictItem::KeyValue { key, .. } => Self::key_provably_string(key),
@@ -19071,9 +19112,7 @@ fn expr_contains_yield(expr: &Expr) -> bool {
             body,
             else_body,
         } => {
-            expr_contains_yield(test)
-                || expr_contains_yield(body)
-                || expr_contains_yield(else_body)
+            expr_contains_yield(test) || expr_contains_yield(body) || expr_contains_yield(else_body)
         }
         ExprKind::Tuple(elts) | ExprKind::List(elts) | ExprKind::Set(elts) => {
             elts.iter().any(expr_contains_yield)
@@ -19133,22 +19172,61 @@ const STDLIB_MODULES: &[&str] = &[
 const STDLIB_JS_SOURCES: &[(&str, &str)] = &[
     ("math", include_str!("../../../runtime/src/stdlib/math.js")),
     ("json", include_str!("../../../runtime/src/stdlib/json.js")),
-    ("itertools", include_str!("../../../runtime/src/stdlib/itertools.js")),
-    ("functools", include_str!("../../../runtime/src/stdlib/functools.js")),
-    ("collections", include_str!("../../../runtime/src/stdlib/collections.js")),
-    ("random", include_str!("../../../runtime/src/stdlib/random.js")),
-    ("datetime", include_str!("../../../runtime/src/stdlib/datetime.js")),
+    (
+        "itertools",
+        include_str!("../../../runtime/src/stdlib/itertools.js"),
+    ),
+    (
+        "functools",
+        include_str!("../../../runtime/src/stdlib/functools.js"),
+    ),
+    (
+        "collections",
+        include_str!("../../../runtime/src/stdlib/collections.js"),
+    ),
+    (
+        "random",
+        include_str!("../../../runtime/src/stdlib/random.js"),
+    ),
+    (
+        "datetime",
+        include_str!("../../../runtime/src/stdlib/datetime.js"),
+    ),
     ("re", include_str!("../../../runtime/src/stdlib/re.js")),
-    ("decimal", include_str!("../../../runtime/src/stdlib/decimal.js")),
-    ("fractions", include_str!("../../../runtime/src/stdlib/fractions.js")),
-    ("operator", include_str!("../../../runtime/src/stdlib/operator.js")),
+    (
+        "decimal",
+        include_str!("../../../runtime/src/stdlib/decimal.js"),
+    ),
+    (
+        "fractions",
+        include_str!("../../../runtime/src/stdlib/fractions.js"),
+    ),
+    (
+        "operator",
+        include_str!("../../../runtime/src/stdlib/operator.js"),
+    ),
     ("copy", include_str!("../../../runtime/src/stdlib/copy.js")),
-    ("string", include_str!("../../../runtime/src/stdlib/string.js")),
-    ("heapq", include_str!("../../../runtime/src/stdlib/heapq.js")),
-    ("bisect", include_str!("../../../runtime/src/stdlib/bisect.js")),
+    (
+        "string",
+        include_str!("../../../runtime/src/stdlib/string.js"),
+    ),
+    (
+        "heapq",
+        include_str!("../../../runtime/src/stdlib/heapq.js"),
+    ),
+    (
+        "bisect",
+        include_str!("../../../runtime/src/stdlib/bisect.js"),
+    ),
     ("sys", include_str!("../../../runtime/src/stdlib/sys.js")),
-    ("cmath", include_str!("../../../runtime/src/stdlib/cmath.js")),
-    ("unicodedata", include_str!("../../../runtime/src/stdlib/unicodedata.js")),
+    (
+        "cmath",
+        include_str!("../../../runtime/src/stdlib/cmath.js"),
+    ),
+    (
+        "unicodedata",
+        include_str!("../../../runtime/src/stdlib/unicodedata.js"),
+    ),
 ];
 
 /// Export names of a stdlib shim: `(name, is_class)` for every column-0
@@ -19832,7 +19910,11 @@ mod tests {
         let mut sorted = EMITTABLE_RUNTIME_SYMBOLS.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(EMITTABLE_RUNTIME_SYMBOLS, &sorted[..], "manifest must be sorted + deduped");
+        assert_eq!(
+            EMITTABLE_RUNTIME_SYMBOLS,
+            &sorted[..],
+            "manifest must be sorted + deduped"
+        );
     }
 
     fn compile(source: &str) -> String {
@@ -20242,7 +20324,9 @@ mod tests {
             "hoisted unique import missing:\n{}",
             js,
         );
-        let import_at = js.find("import * as __pyimp_random_0").expect("no random import");
+        let import_at = js
+            .find("import * as __pyimp_random_0")
+            .expect("no random import");
         let fn_at = js.find("function f(").expect("no function f");
         assert!(
             import_at < fn_at,
@@ -20926,13 +21010,24 @@ mod tests {
         // __pyRangeIter (same guards as pyRange, BigInt/2**53-safe), NOT a
         // hand-rolled value-controlled `i += step` counter.
         let js = compile("step = 0\nfor i in range(1, 0, step):\n    print(i)");
-        assert!(js.contains("of __pyRangeIter("), "range-for must iterate __pyRangeIter:\n{js}");
-        assert!(!js.contains("+= step") && !js.contains("__pyRangeArgs"),
-            "no hand-rolled counter / old guard:\n{js}");
+        assert!(
+            js.contains("of __pyRangeIter("),
+            "range-for must iterate __pyRangeIter:\n{js}"
+        );
+        assert!(
+            !js.contains("+= step") && !js.contains("__pyRangeArgs"),
+            "no hand-rolled counter / old guard:\n{js}"
+        );
         // inline mode must also inline the shared iterator + normalizer.
         let ji = compile_inline("for i in range(3):\n    print(i)");
-        assert!(ji.contains("function* __pyRangeIter("), "inlined iterator missing:\n{ji}");
-        assert!(ji.contains("function __pyRangeNorm("), "shared normalizer missing:\n{ji}");
+        assert!(
+            ji.contains("function* __pyRangeIter("),
+            "inlined iterator missing:\n{ji}"
+        );
+        assert!(
+            ji.contains("function __pyRangeNorm("),
+            "shared normalizer missing:\n{ji}"
+        );
     }
 
     #[test]
@@ -20940,7 +21035,10 @@ mod tests {
         // R6: a `__proto__` kwarg must emit a COMPUTED key, never the literal
         // `__proto__:` / `"__proto__":` (both invoke the prototype setter).
         let js = compile("def f(**kw):\n    return kw\nf(__proto__=1)");
-        assert!(js.contains("[\"__proto__\"]:"), "computed proto key missing:\n{js}");
+        assert!(
+            js.contains("[\"__proto__\"]:"),
+            "computed proto key missing:\n{js}"
+        );
         assert!(
             !js.contains("{__proto__:") && !js.contains(" __proto__: "),
             "unsafe literal proto key emitted:\n{js}"

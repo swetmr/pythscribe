@@ -318,7 +318,11 @@ fn bundle_sourcemap_sources_are_relative_and_no_sources_content_honored() {
         ])
         .output()
         .expect("run bundle");
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let map: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("a.bundle.js.map")).unwrap())
             .unwrap();
@@ -333,7 +337,10 @@ fn bundle_sourcemap_sources_are_relative_and_no_sources_content_honored() {
         map["sources"],
         serde_json::json!(["helper.ps", "app.ps", "pyths:bundle-glue"])
     );
-    assert!(map["sourcesContent"][1].as_str().unwrap().contains("double"));
+    assert!(map["sourcesContent"][1]
+        .as_str()
+        .unwrap()
+        .contains("double"));
 
     // (2) --no-sources-content: every sourcesContent entry null, glue still ignored.
     let out = pyths_bin()
@@ -347,12 +354,19 @@ fn bundle_sourcemap_sources_are_relative_and_no_sources_content_honored() {
         ])
         .output()
         .expect("run bundle --no-sources-content");
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let map: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("b.bundle.js.map")).unwrap())
             .unwrap();
     for c in map["sourcesContent"].as_array().unwrap() {
-        assert!(c.is_null(), "--no-sources-content must null every entry: {c:?}");
+        assert!(
+            c.is_null(),
+            "--no-sources-content must null every entry: {c:?}"
+        );
     }
     let glue_idx = (map["sources"].as_array().unwrap().len() - 1) as u64;
     assert_eq!(map["ignoreList"], serde_json::json!([glue_idx]));

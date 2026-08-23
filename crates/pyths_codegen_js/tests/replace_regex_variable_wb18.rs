@@ -36,9 +36,8 @@ fn node_run(js: &str, name: &str) -> Option<String> {
 
 #[test]
 fn variable_regex_routes_through_smart_dispatcher() {
-    let js = compile_inline(
-        "gp = RegExp(r\"^(a|b):\")\ndef f(s):\n    return s.replace(gp, \"\")\n",
-    );
+    let js =
+        compile_inline("gp = RegExp(r\"^(a|b):\")\ndef f(s):\n    return s.replace(gp, \"\")\n");
     assert!(
         js.contains("pyStrReplaceSmart("),
         "variable-regex .replace must route through pyStrReplaceSmart:\n{js}"

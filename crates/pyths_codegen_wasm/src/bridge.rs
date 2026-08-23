@@ -941,7 +941,9 @@ fn emit_list_helpers(out: &mut String) {
     // re-runs the call on the exact JS twin (js+wasm), and edge targets
     // fail loud — never a wrapped element.
     out.push_str("    else if (kind === 'i64') {\n");
-    out.push_str("      const b = typeof arr[i] === 'bigint' ? arr[i] : BigInt(Math.trunc(arr[i]));\n");
+    out.push_str(
+        "      const b = typeof arr[i] === 'bigint' ? arr[i] : BigInt(Math.trunc(arr[i]));\n",
+    );
     out.push_str("      if (b > 9223372036854775807n || b < -9223372036854775808n) throw new RangeError('OverflowError: list element exceeds the i64 range of the WASM fast path');\n");
     out.push_str("      view.setBigInt64(off, b, true);\n");
     out.push_str("    }\n");
@@ -1025,10 +1027,7 @@ fn marshalling_alphabet() -> Vec<(String, pyths_types::types::Type)> {
         Type::List(Box::new(Type::List(Box::new(Type::Int)))),
     ));
     shapes.push(("set<int>".to_string(), Type::Set(Box::new(Type::Int))));
-    shapes.push((
-        "opt<int>".to_string(),
-        Type::Optional(Box::new(Type::Int)),
-    ));
+    shapes.push(("opt<int>".to_string(), Type::Optional(Box::new(Type::Int))));
     shapes.push((
         "dict<str,int>".to_string(),
         Type::Dict(Box::new(Type::Str), Box::new(Type::Int)),
@@ -1120,14 +1119,24 @@ pub fn marshalling_table() -> String {
             return_type: Some(WasmType::I64),
         },
     ];
-    let twins_src = "export function probe(x) { return x; }\nexport function plist(xs) { return xs[0]; }";
+    let twins_src =
+        "export function probe(x) { return x; }\nexport function plist(xs) { return xs[0]; }";
     let empty_exc = BTreeMap::new();
     let math = BTreeSet::new();
     let twins = generate_bridge(
-        "m.wasm", &exports, &math, false, true, &empty_exc, false, true, Some(twins_src),
+        "m.wasm",
+        &exports,
+        &math,
+        false,
+        true,
+        &empty_exc,
+        false,
+        true,
+        Some(twins_src),
     );
-    let notwins =
-        generate_bridge("m.wasm", &exports, &math, false, true, &empty_exc, false, true, None);
+    let notwins = generate_bridge(
+        "m.wasm", &exports, &math, false, true, &empty_exc, false, true, None,
+    );
 
     // The shipped fault predicate — asserted VERBATIM so the `py-exception ->
     // propagate` row (derived from what the predicate does NOT match) cannot
@@ -1143,12 +1152,22 @@ pub fn marshalling_table() -> String {
     fr(
         "i64-arg-oob",
         "twins",
-        derived(&twins, "if (__i64Oob(x)) return __jsfb.probe(x);", "i64-arg-oob twins", "reroute-twin"),
+        derived(
+            &twins,
+            "if (__i64Oob(x)) return __jsfb.probe(x);",
+            "i64-arg-oob twins",
+            "reroute-twin",
+        ),
     );
     fr(
         "i64-arg-oob",
         "notwins",
-        derived(&notwins, "if (__i64Oob(x)) throw new RangeError(", "i64-arg-oob notwins", "throw-range"),
+        derived(
+            &notwins,
+            "if (__i64Oob(x)) throw new RangeError(",
+            "i64-arg-oob notwins",
+            "throw-range",
+        ),
     );
     // list-elem-i64-oob: element guard throws RangeError; the ladder (twins)
     // classifies RangeError a fault and re-runs on the twin; no ladder (edge)
@@ -1158,7 +1177,12 @@ pub fn marshalling_table() -> String {
         "marshalling_table: no-twins bridge must guard i64 elements and have no fault ladder"
     );
     fr("list-elem-i64-oob", "twins", {
-        derived(&twins, elem_guard, "list-elem-i64-oob twins (guard)", "reroute-twin");
+        derived(
+            &twins,
+            elem_guard,
+            "list-elem-i64-oob twins (guard)",
+            "reroute-twin",
+        );
         derived(
             &twins,
             "if (__isWasmFault(__e)) return __jsfb.plist(xs);",
@@ -1192,7 +1216,12 @@ pub fn marshalling_table() -> String {
     // div-by-zero, ...). Twins: the ladder re-runs on the twin. No twins: no
     // ladder, the trap propagates loud.
     fr("wasm-trap", "twins", {
-        derived(&twins, fault_pred, "wasm-trap twins (predicate)", "reroute-twin");
+        derived(
+            &twins,
+            fault_pred,
+            "wasm-trap twins (predicate)",
+            "reroute-twin",
+        );
         derived(
             &twins,
             "if (__isWasmFault(__e)) return __jsfb.probe(x);",
@@ -1205,13 +1234,28 @@ pub fn marshalling_table() -> String {
     // a plain Error with a .name — NOT matched by the (verbatim-asserted)
     // fault predicate, so the catch rethrows it unchanged in both modes.
     fr("py-exception", "twins", {
-        derived(&twins, fault_pred, "py-exception twins (predicate)", "propagate-py");
-        derived(&twins, "throw __e;", "py-exception twins (rethrow)", "propagate-py")
+        derived(
+            &twins,
+            fault_pred,
+            "py-exception twins (predicate)",
+            "propagate-py",
+        );
+        derived(
+            &twins,
+            "throw __e;",
+            "py-exception twins (rethrow)",
+            "propagate-py",
+        )
     });
     fr(
         "py-exception",
         "notwins",
-        derived(&notwins, "function __check_err()", "py-exception notwins", "propagate-py"),
+        derived(
+            &notwins,
+            "function __check_err()",
+            "py-exception notwins",
+            "propagate-py",
+        ),
     );
 
     out

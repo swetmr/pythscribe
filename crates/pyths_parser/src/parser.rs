@@ -2521,14 +2521,12 @@ impl<'a> Parser<'a> {
         self.expect(&Token::Colon)?;
 
         // Comma also terminates a slice bound (tuple-of-slices subscripts).
-        let upper = if !self.at(&Token::Colon)
-            && !self.at(&Token::RBracket)
-            && !self.at(&Token::Comma)
-        {
-            Some(Box::new(self.parse_expr()?))
-        } else {
-            None
-        };
+        let upper =
+            if !self.at(&Token::Colon) && !self.at(&Token::RBracket) && !self.at(&Token::Comma) {
+                Some(Box::new(self.parse_expr()?))
+            } else {
+                None
+            };
 
         let step = if self.eat(&Token::Colon) {
             if !self.at(&Token::RBracket) && !self.at(&Token::Comma) {

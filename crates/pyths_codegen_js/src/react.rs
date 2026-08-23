@@ -213,40 +213,35 @@ pub const REACT_19_REMOVED: &[React19Removed] = &[
     React19Removed {
         py_name: "find_dom_node",
         js_name: "findDOMNode",
-        message:
-            "`findDOMNode` was removed in React 19 (react-dom no longer exports it) — \
+        message: "`findDOMNode` was removed in React 19 (react-dom no longer exports it) — \
              importing it is a load-time \"no such export\" error. Use a ref (`useRef`/\
              `createRef` on the element) instead of `findDOMNode`.",
     },
     React19Removed {
         py_name: "render",
         js_name: "render",
-        message:
-            "`render` was removed from react-dom in React 19 — importing it is a \
+        message: "`render` was removed from react-dom in React 19 — importing it is a \
              load-time \"no such export\" error. Use `create_root` (createRoot from \
              react-dom/client): `root = create_root(el)` then `root.render(app)`.",
     },
     React19Removed {
         py_name: "hydrate",
         js_name: "hydrate",
-        message:
-            "`hydrate` was removed from react-dom in React 19 — importing it is a \
+        message: "`hydrate` was removed from react-dom in React 19 — importing it is a \
              load-time \"no such export\" error. Use `hydrate_root` (hydrateRoot from \
              react-dom/client) instead.",
     },
     React19Removed {
         py_name: "unmount_component_at_node",
         js_name: "unmountComponentAtNode",
-        message:
-            "`unmountComponentAtNode` was removed from react-dom in React 19 — \
+        message: "`unmountComponentAtNode` was removed from react-dom in React 19 — \
              importing it is a load-time \"no such export\" error. Call `.unmount()` \
              on the root returned by `create_root` instead.",
     },
     React19Removed {
         py_name: "create_factory",
         js_name: "createFactory",
-        message:
-            "`createFactory` was removed from react in React 19 — importing it is a \
+        message: "`createFactory` was removed from react in React 19 — importing it is a \
              load-time \"no such export\" error. Call `create_element(type, ...)` \
              directly instead of a factory.",
     },
@@ -966,8 +961,14 @@ mod tests {
     fn test_react_helper_source_module_strings() {
         assert_eq!(ReactHelperSource::ReactCore.module(), "react");
         assert_eq!(ReactHelperSource::ReactDom.module(), "react-dom");
-        assert_eq!(ReactHelperSource::ReactDomClient.module(), "react-dom/client");
-        assert_eq!(ReactHelperSource::PythsRuntime.module(), "pyths-runtime/react");
+        assert_eq!(
+            ReactHelperSource::ReactDomClient.module(),
+            "react-dom/client"
+        );
+        assert_eq!(
+            ReactHelperSource::PythsRuntime.module(),
+            "pyths-runtime/react"
+        );
     }
 
     #[test]
@@ -1071,8 +1072,8 @@ mod tests {
         );
         for (py, js) in expected {
             for n in [py, js] {
-                let msg = react_19_removed(n)
-                    .unwrap_or_else(|| panic!("{n} must be flagged as removed"));
+                let msg =
+                    react_19_removed(n).unwrap_or_else(|| panic!("{n} must be flagged as removed"));
                 assert!(msg.contains(js), "message names the symbol {js}: {msg}");
                 assert!(msg.contains("React 19"), "message dates the removal: {msg}");
             }
@@ -1178,7 +1179,10 @@ mod tests {
         ] {
             for base in [ReactCore, ReactDom, ReactDomClient] {
                 assert!(
-                    matches!(route_namespace_member(base, member), MemberRoute::Removed(_)),
+                    matches!(
+                        route_namespace_member(base, member),
+                        MemberRoute::Removed(_)
+                    ),
                     "{member} on {base:?} must be Removed"
                 );
             }

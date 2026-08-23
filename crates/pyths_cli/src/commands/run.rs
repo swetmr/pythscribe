@@ -88,9 +88,8 @@ pub fn run(
     // the current directory, so a hostile `node.exe` planted in the project
     // root is never preferred (Windows `CreateProcess` otherwise searches cwd).
     // `PYTHS_NODE` may override the interpreter explicitly.
-    let node = super::procutil::resolve_program("node", Some("PYTHS_NODE")).ok_or(
-        "could not find `node` on PATH — install Node.js or set PYTHS_NODE to its path",
-    )?; // TempDir RAII cleans up on this early return
+    let node = super::procutil::resolve_program("node", Some("PYTHS_NODE"))
+        .ok_or("could not find `node` on PATH — install Node.js or set PYTHS_NODE to its path")?; // TempDir RAII cleans up on this early return
 
     let status = if explain {
         // Capture stderr so we can prepend a Python-flavored explanation

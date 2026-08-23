@@ -436,9 +436,8 @@ fn classmethod_self_param_aliases_class() {
 // S1: a @staticmethod's `self` param is KEPT in the JS signature (not dropped).
 #[test]
 fn static_method_self_param_is_kept() {
-    let full = compile_inline(
-        "class C:\n    @staticmethod\n    def m(self):\n        return self\n",
-    );
+    let full =
+        compile_inline("class C:\n    @staticmethod\n    def m(self):\n        return self\n");
     let js = user_code(&full);
     assert!(
         js.contains("static m(self)"),
@@ -455,7 +454,9 @@ fn exc_ctor_nested_fn_captures_self_after_super() {
     );
     let js = user_code(&full);
     let super_pos = js.find("super(").expect("super() emitted");
-    let alias_pos = js.find("const __self = this").expect("__self alias emitted");
+    let alias_pos = js
+        .find("const __self = this")
+        .expect("__self alias emitted");
     assert!(
         alias_pos > super_pos,
         "the `__self` alias must be captured AFTER super() in a derived constructor:\n{js}"
@@ -483,9 +484,7 @@ fn class_in_method_inner_static_uses_outer_alias() {
 // S4: a lambda param `self` in a method emits `(self) => … self …`, NEVER `this`.
 #[test]
 fn lambda_param_self_shadows_receiver() {
-    let full = compile_inline(
-        "class C:\n    def m(self):\n        return lambda self: self * 2\n",
-    );
+    let full = compile_inline("class C:\n    def m(self):\n        return lambda self: self * 2\n");
     let js = user_code(&full);
     assert!(
         js.contains("(self) =>") && !js.contains("(this)") && !js.contains("=> pyMul(this"),
@@ -497,9 +496,8 @@ fn lambda_param_self_shadows_receiver() {
 // arrow param is a JS SyntaxError), and the element `self` reads it — never `this`.
 #[test]
 fn comprehension_target_self_is_ordinary() {
-    let full = compile_inline(
-        "class C:\n    def m(self):\n        return [self for self in [1, 2, 3]]\n",
-    );
+    let full =
+        compile_inline("class C:\n    def m(self):\n        return [self for self in [1, 2, 3]]\n");
     let js = user_code(&full);
     assert!(
         js.contains("(self) => self") && !js.contains("(this) =>"),
@@ -511,9 +509,8 @@ fn comprehension_target_self_is_ordinary() {
 // and reassigns it — never `let this = 5` (a SyntaxError).
 #[test]
 fn method_local_rebind_self_captures_receiver() {
-    let full = compile_inline(
-        "class C:\n    def m(self):\n        self = 5\n        return self\n",
-    );
+    let full =
+        compile_inline("class C:\n    def m(self):\n        self = 5\n        return self\n");
     let js = user_code(&full);
     assert!(
         js.contains("let self = this;") && js.contains("self = 5;") && !js.contains("let this"),

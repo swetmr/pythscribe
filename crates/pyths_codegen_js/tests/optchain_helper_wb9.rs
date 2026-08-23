@@ -50,9 +50,7 @@ fn optchain_remove_helper_is_guarded() {
     // `el?.classList.remove("x")` — receiver chain short-circuits; `.remove`
     // lowers to pyRemove. The helper call must be guarded, not invoked on
     // the short-circuited `undefined`.
-    let js = compile_inline(
-        "el = document.querySelector(\".x\")\nel?.classList.remove(\"foo\")\n",
-    );
+    let js = compile_inline("el = document.querySelector(\".x\")\nel?.classList.remove(\"foo\")\n");
     assert!(
         js.contains("pyRemove"),
         ".remove must still lower to the pyRemove shim:\n{js}"
@@ -160,11 +158,7 @@ fn assert_behaves2(src: &str, expected: &str, name: &str) {
     let Some(got) = node_run(&js, name) else {
         return; // node unavailable → skip
     };
-    assert_eq!(
-        got.trim(),
-        expected,
-        "{name}\n--- JS ---\n{js}"
-    );
+    assert_eq!(got.trim(), expected, "{name}\n--- JS ---\n{js}");
 }
 
 #[test]

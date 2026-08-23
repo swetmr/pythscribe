@@ -70,7 +70,10 @@ fn b3_aliased_from_react_still_works() {
         js.contains("import { createElement as h } from \"react\""),
         "alias binds `h`:\n{js}"
     );
-    assert!(js.contains("h(\"button\""), "call uses the alias `h`:\n{js}");
+    assert!(
+        js.contains("h(\"button\""),
+        "call uses the alias `h`:\n{js}"
+    );
     assert!(
         js.contains("\"onClick\":"),
         "aliased factory still transforms props:\n{js}"
@@ -146,8 +149,8 @@ fn b4_import_pyths_react_namespace_is_diagnosed() {
          x = R.create_element(\"button\", {\"on_click\": 1}, \"go\")\n",
     );
     assert!(
-        errs.iter().any(|e| e.contains("import pyths.react")
-            && e.contains("not supported")),
+        errs.iter()
+            .any(|e| e.contains("import pyths.react") && e.contains("not supported")),
         "namespace import of pyths.react must be diagnosed: {errs:?}"
     );
 }
@@ -183,14 +186,20 @@ fn kwargs_props_transform_on_every_factory_surface() {
     ];
     for (src, callee) in cases {
         let js = compile(src);
-        assert!(js.contains(callee), "kwargs form must reach the factory:\n{js}");
+        assert!(
+            js.contains(callee),
+            "kwargs form must reach the factory:\n{js}"
+        );
         assert!(
             js.contains("\"onClick\": 1"),
             "static kwarg key must transform (dead-handler class):\n{js}"
         );
         assert!(!js.contains("on_click"), "no snake prop may survive:\n{js}");
         let errs = compile_errors(src);
-        assert!(errs.is_empty(), "well-formed kwargs must not diagnose: {errs:?}");
+        assert!(
+            errs.is_empty(),
+            "well-formed kwargs must not diagnose: {errs:?}"
+        );
     }
 }
 
@@ -199,9 +208,7 @@ fn kwargs_children_follow_props_in_createelement_order() {
     // PSX-flat semantics: kwargs are the props, positionals after the tag are
     // children — emitted in React's createElement(type, props, ...children)
     // order.
-    let js = compile(
-        "from react import create_element as h\nx = h(\"div\", \"hi\", on_click=1)\n",
-    );
+    let js = compile("from react import create_element as h\nx = h(\"div\", \"hi\", on_click=1)\n");
     assert!(
         js.contains("h(\"div\", {\"onClick\": 1}, \"hi\")"),
         "children must follow the kwargs-props object:\n{js}"
@@ -263,9 +270,7 @@ fn fully_dynamic_props_stay_verbatim_tb1_boundary() {
 fn kwargs_proto_key_is_proto_safe() {
     // A `__proto__=...` kwarg must emit a COMPUTED key — a quoted
     // `"__proto__":` in an object literal still triggers the prototype setter.
-    let js = compile(
-        "from react import create_element as h\nx = h(\"div\", __proto__=1)\n",
-    );
+    let js = compile("from react import create_element as h\nx = h(\"div\", __proto__=1)\n");
     assert!(
         js.contains("[\"__proto__\"]: 1"),
         "__proto__ kwarg must be a computed key:\n{js}"
@@ -281,7 +286,8 @@ fn ambiguous_props_dict_plus_kwargs_is_diagnosed() {
     ] {
         let errs = compile_errors(src);
         assert!(
-            errs.iter().any(|e| e.contains("ambiguous") && e.contains("createElement")),
+            errs.iter()
+                .any(|e| e.contains("ambiguous") && e.contains("createElement")),
             "positional props dict + kwargs must be diagnosed: {errs:?}"
         );
     }
@@ -289,11 +295,10 @@ fn ambiguous_props_dict_plus_kwargs_is_diagnosed() {
 
 #[test]
 fn kwargs_without_tag_is_diagnosed() {
-    let errs = compile_errors(
-        "from react import create_element as h\nx = h(on_click=1)\n",
-    );
+    let errs = compile_errors("from react import create_element as h\nx = h(on_click=1)\n");
     assert!(
-        errs.iter().any(|e| e.contains("createElement") && e.contains("first")),
+        errs.iter()
+            .any(|e| e.contains("createElement") && e.contains("first")),
         "keyword props with no tag must be diagnosed: {errs:?}"
     );
 }
@@ -325,7 +330,8 @@ fn b9_hybrid_module_specifier_is_escaped() {
     );
     // Specifically: no bare top-level `globalThis.PWNED` statement outside a string.
     assert!(
-        !js.lines().any(|l| l.trim_start().starts_with("globalThis.PWNED")),
+        !js.lines()
+            .any(|l| l.trim_start().starts_with("globalThis.PWNED")),
         "the override must not escape into a top-level statement:\n{js}"
     );
 }
