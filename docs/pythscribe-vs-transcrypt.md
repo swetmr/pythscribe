@@ -298,7 +298,7 @@ canonicalize(x)`). Transcrypt has no compression or model-facing layer.
 
 Transcrypt's assurance is its autotester (back-to-back CPython/JS tests) — solid
 engineering, but no formal component. PythScribe adds a **per-compilation routing
-certificate**, an 18,627-line **Lean** development (routing safety, selected preservation
+certificate**, a 26,296-line **Lean** development (routing safety, selected preservation
 fragments, runtime-helper specs, `i64` semantics, naming soundness), a differential corpus
 (cross-checked on a second JS engine), and a **trust manifest** enumerating what is proved
 vs tested vs trusted.
