@@ -513,3 +513,5 @@ export function namedtuple(name, fields) {
     NT._name = name;
     return NT;
 }
+
+//# sourceMappingURL=collections.js.map

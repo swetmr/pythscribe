@@ -129,10 +129,12 @@ fn run_test_file(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let filename = path.file_name().unwrap().to_string_lossy();
 
     // Parse
-    let module = pyths_parser::parse(&source).map_err(|errors| {
+    let mut module = pyths_parser::parse(&source).map_err(|errors| {
         let messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
         format!("Parse error in {}: {}", filename, messages.join(", "))
     })?;
+    // Expand relative star imports (commands::relstar) before codegen.
+    super::relstar::normalize_relative_imports(&mut module, path)?;
 
     // Codegen
     let js = pyths_codegen_js::codegen_inline(&module);
@@ -140,9 +142,11 @@ fn run_test_file(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     // A9: write into a fresh, private, per-invocation temp DIRECTORY instead
     // of a predictable `pyths_test_<stem>.mjs` in the shared OS temp dir (a
     // fixed name is a symlink/TOCTOU target that node then executes).
+    // Round-5: hold the TempDir HANDLE — cleanup is RAII-bound, so every exit
+    // path below (including a failed `node` spawn `?`-return) removes the dir.
     let temp_dir = super::procutil::make_private_temp_dir("test")?;
     let stem = path.file_stem().unwrap().to_string_lossy();
-    let temp_file = temp_dir.join(format!("pyths_test_{}.mjs", stem));
+    let temp_file = temp_dir.path().join(format!("pyths_test_{}.mjs", stem));
     std::fs::write(&temp_file, &js)?;
 
     // A13: resolve `node` to an absolute path off PATH (never cwd); a hostile
@@ -151,7 +155,7 @@ fn run_test_file(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let node = match super::procutil::resolve_program("node", Some("PYTHS_NODE")) {
         Some(n) => n,
         None => {
-            let _ = std::fs::remove_dir_all(&temp_dir);
+            // TempDir RAII cleans up on this early return.
             return Err(
                 "could not find `node` on PATH — install Node.js or set PYTHS_NODE to its path"
                     .into(),
@@ -159,11 +163,12 @@ fn run_test_file(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
         }
     };
 
-    // Run with Node.js
+    // Run with Node.js. A spawn error `?`-returns here and the TempDir drop
+    // still removes the directory (round-5 fix: no leak on failed spawns).
     let output = std::process::Command::new(&node).arg(&temp_file).output()?;
 
     // Clean up the whole private temp directory.
-    let _ = std::fs::remove_dir_all(&temp_dir);
+    drop(temp_dir);
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();

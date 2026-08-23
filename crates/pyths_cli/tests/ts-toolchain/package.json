@@ -1,0 +1,9 @@
+{
+  "name": "pyths-ts-lane-toolchain",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Pinned TypeScript checker for the TS-.d.ts-run interop lane (crates/pyths_cli/tests/int_float_optb.rs::lane5). Provisioned in CI via `npm ci --prefix crates/pyths_cli/tests/ts-toolchain` before the workspace test job.",
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

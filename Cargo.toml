@@ -19,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license-file = "LICENSE.md"
 repository = "https://github.com/swetmr/pythscribe"
@@ -53,6 +53,13 @@ owo-colors = "4"
 
 # WASM
 wasm-encoder = "0.225"
+
+# Security hardening (safe generated-output writes)
+# libc: the per-arch-correct O_NOFOLLOW (a hardcoded constant was wrong on
+# aarch64-linux, a released npm target). tempfile: unpredictable-name, 0700,
+# RAII-cleanup private dirs for external tools (wasm-opt).
+libc = "0.2"
+tempfile = "3"
 
 # Internal crates
 pyths_lexer = { path = "crates/pyths_lexer" }

@@ -8,5 +8,7 @@ pub mod init;
 pub mod lint;
 pub mod output;
 pub mod procutil;
+pub mod relstar;
 pub mod run;
+pub mod safewrite;
 pub mod test;

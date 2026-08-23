@@ -103,3 +103,57 @@ test("B6: format handles !r conversion and index/attr access", () => {
     assert.equal(pyStrFormat("{!r}", "a"), "'a'");
     assert.equal(pyStrFormat("{0[1]}", ["a", "b", "c"]), "b");
 });
+
+// ---- Bound-method review fixes (B1/S1/S2/S3) ----
+import { pyBoundMethod, pyGetattr, __pyMarkTuple } from "./runtime.js";
+import { pyEq } from "./operators.js";
+
+test("B1: pyBoundMethod fires a property getter exactly ONCE", () => {
+    let count = 0;
+    class P extends PyObject {
+        get val() { count += 1; return 42; }
+    }
+    __pyClass(P, []);
+    const p = new P();
+    assert.equal(pyBoundMethod(p, "val"), 42);
+    assert.equal(count, 1);
+});
+
+test("S1: a.f == a.f is True, a.f in [a.f] is True, a.f is a.f is False", () => {
+    class A extends PyObject {
+        f() { return 1; }
+    }
+    __pyClass(A, []);
+    const a = new A();
+    const m1 = pyBoundMethod(a, "f");
+    const m2 = pyBoundMethod(a, "f");
+    assert.notEqual(m1, m2);          // `is` → distinct wrapper objects
+    assert.equal(pyEq(m1, m2), true); // `==` → same func + same receiver
+    assert.equal([m1].some((x) => pyEq(x, m2)), true); // `in`
+    const b = new A();
+    assert.equal(pyEq(pyBoundMethod(a, "f"), pyBoundMethod(b, "f")), false);
+    assert.equal(pyEq(m1, A.prototype.f), false); // method != plain function
+    // getattr() path carries the same identity stamps
+    assert.equal(pyEq(pyGetattr(a, "f"), m1), true);
+});
+
+test("S2: __pyMarkTuple marks a rest array as a tuple (idempotent)", () => {
+    const args = [1, 2];
+    assert.equal(__pyMarkTuple(args), args);
+    assert.equal(args.__pytuple__, true);
+    assert.equal(Object.keys(args).length, 2); // marker non-enumerable
+    __pyMarkTuple(args); // second call is a no-op, not a redefine error
+});
+
+test("S3: a function stored as instance DATA is returned unbound (identity kept)", () => {
+    const freefn = () => "free";
+    class A extends PyObject {
+        __init__() { this.cb = freefn; }
+        m() { return this; }
+    }
+    __pyClass(A, []);
+    const a = new A();
+    assert.equal(pyBoundMethod(a, "cb"), freefn); // own property → not bound
+    const g = pyBoundMethod(a, "m");              // prototype method → bound
+    assert.equal(g(), a);
+});

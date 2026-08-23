@@ -118,17 +118,29 @@ fn test_bridge_float_function() {
         false,
     );
     let glue = generate_bridge_js(&output, "./test.wasm", None);
-    // Float params passed directly â€” no BigInt or Math.trunc
-    assert!(!glue.contains("BigInt"), "No BigInt for float: {}", glue);
+    // Value-boundary authority (#38/#461/#465): an f64 param accepts the
+    // hybrid int's BigInt form via the glue-local __f64Arg (ToNumber at the
+    // WASM JS-API boundary THROWS on BigInt) — the SAME rule as the runtime's
+    // __reqNum, including the overflow branch: a BigInt beyond double range
+    // raises OverflowError, never a silent Infinity. A native Number still
+    // passes through untouched, and there is no Math.trunc truncation.
     assert!(
         !glue.contains("Math.trunc"),
         "No Math.trunc for float: {}",
         glue
     );
-    // Return is direct â€” no Number() wrapping
+    // The helper itself must be emitted (mirror of __reqNum's BigInt branch).
     assert!(
-        glue.contains("return __wasm.square(x)"),
-        "Float return direct: {}",
+        glue.contains("const __f64Arg = (v) => { if (typeof v !== \"bigint\") return v; const n = Number(v); if (Number.isFinite(n)) return n; const e = new Error(\"int too large to convert to float\"); e.name = \"OverflowError\"; throw e; };"),
+        "f64 arg authority helper present: {}",
+        glue
+    );
+    // Option B: an f64 result re-enters JS through __f64Box (boxes iff
+    // integer-valued, so square(2.0) -> 4.0 keeps float identity; 2.25
+    // stays a native Number). Still no Number() truncation wrapping.
+    assert!(
+        glue.contains("return __f64Box(__wasm.square(__f64Arg(x)))"),
+        "Float return boxed-iff-integer-valued, arg coerced-on-bigint: {}",
         glue
     );
 }
@@ -627,6 +639,48 @@ fn test_bridge_defines_list_from_wasm_for_list_return() {
     assert!(
         glue.contains("__list_from_wasm(") && glue.contains("\"i64\""),
         "list-return call site must pass element kind: {}",
+        glue
+    );
+}
+
+// ============================================================================
+// Marshalling-table finding: i64 LIST ELEMENTS must be oob-guarded. DataView
+// setBigInt64 silently wraps mod 2**64 (ES ToBigInt64), so before the guard
+// `pick([2**63+7])` crossed the boundary as -9223372036854775801 (PoC,
+// 2026-08-16) while the SCALAR i64 arg path was already `__i64Oob`-guarded.
+// The guard throws RangeError — a boundary marshalling fault, which the #364
+// fallback ladder re-runs on the exact JS twin (js+wasm) or fails loud (edge).
+// The disposition is pinned as the `list-elem-i64-oob` rows of
+// verification/marshalling-table.txt.
+// ============================================================================
+
+#[test]
+fn list_i64_elements_are_oob_guarded() {
+    let output = make_output(
+        vec![WasmExportInfo {
+            name: "pick".to_string(),
+            params: vec![("xs".to_string(), WasmType::PtrList(Box::new(WasmType::I64)))],
+            return_type: Some(WasmType::I64),
+        }],
+        false,
+    );
+    let glue = generate_bridge_js(&output, "./test.wasm", None);
+    // The i64 element write must be range-guarded before setBigInt64...
+    assert!(
+        glue.contains("if (b > 9223372036854775807n || b < -9223372036854775808n) throw new RangeError('OverflowError: list element exceeds the i64 range of the WASM fast path');"),
+        "i64 list elements must be oob-guarded: {}",
+        glue
+    );
+    // ...and the store must go through the guarded local, never an unguarded
+    // inline coercion (the pre-fix silent-wrap shape).
+    assert!(
+        glue.contains("view.setBigInt64(off, b, true);"),
+        "i64 element store must use the guarded value: {}",
+        glue
+    );
+    assert!(
+        !glue.contains("view.setBigInt64(off, typeof arr[i]"),
+        "unguarded inline i64 element coercion must be gone: {}",
         glue
     );
 }

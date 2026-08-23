@@ -94,3 +94,5 @@ export function total_ordering(cls) {
     }
     return cls;
 }
+
+//# sourceMappingURL=functools.js.map

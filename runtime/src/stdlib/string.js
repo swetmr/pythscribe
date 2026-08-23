@@ -10,3 +10,5 @@ export const octdigits = "01234567";
 export const punctuation = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 export const whitespace = " \t\n\r\x0b\x0c";
 export const printable = digits + ascii_letters + punctuation + whitespace;
+
+//# sourceMappingURL=string.js.map

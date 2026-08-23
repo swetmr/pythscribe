@@ -54,7 +54,7 @@ pub fn run(
         raw_source
     };
 
-    let module = match pyths_parser::parse(&source) {
+    let mut module = match pyths_parser::parse(&source) {
         Ok(module) => module,
         Err(errors) => {
             let diags: Vec<_> = errors
@@ -83,10 +83,30 @@ pub fn run(
         return Ok(());
     }
 
+    // Expand relative star imports (commands::relstar) so `check` analyzes
+    // the same rewritten module `compile` will emit.
+    super::relstar::normalize_relative_imports(&mut module, path)?;
+    let module = module;
+
     // Run type checker. Project-local stubs (if any) override bundled.
     let type_errors = pyths_types::check_with_stub_paths(&module, &config.stubs.paths);
 
     if type_errors.is_empty() {
+        // public #3 GATE: `check` must also fail on CODEGEN diagnostics —
+        // unimplemented builtins (`open`/`input`/`hash`/...), rejected
+        // imports, unsupported methods. Previously `pyths check` PASSED
+        // files that `pyths compile` rejects (or worse, that crashed at
+        // runtime with a bare ReferenceError). Same gate as compile.rs: a
+        // certified codegen pass whose collected errors fail the check; the
+        // emitter prints each "error: ..." as it records it.
+        let gate_opts = pyths_codegen_js::CodegenOptions {
+            npm_imports: Some(&config.npm.imports),
+            ..Default::default()
+        };
+        let gate = pyths_codegen_js::codegen_certified(&module, &gate_opts);
+        if !gate.errors.is_empty() {
+            return Err(format!("{} compile error(s) found", gate.errors.len()).into());
+        }
         if verbosity != Verbosity::Quiet {
             output::success(&format!("✓ {} — no errors", file));
         }

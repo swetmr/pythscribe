@@ -5,6 +5,7 @@
 // array string-coercion.
 
 import { pyLt } from "../operators.js";
+import { IndexError } from "../runtime.js";
 
 function _siftdown(heap, startpos, pos) {
     const newitem = heap[pos];
@@ -45,6 +46,9 @@ export function heappush(heap, item) {
 }
 
 export function heappop(heap) {
+    // CPython list.pop() on an empty heap raises IndexError; the old
+    // unchecked JS Array.pop() returned undefined (silent None).
+    if (heap.length === 0) throw new IndexError("index out of range");
     const lastelt = heap.pop();
     if (heap.length === 0) return lastelt;
     const returnitem = heap[0];
@@ -119,3 +123,5 @@ export function* merge(...iterables) {
     if (reverse) all.reverse();
     yield* all;
 }
+
+//# sourceMappingURL=heapq.js.map

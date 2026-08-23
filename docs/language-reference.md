@@ -861,8 +861,21 @@ y` and comma-separated string imports are parse errors, and normal
 | `filter(f, x)` | `[...x].filter(f)` | — |
 | `any(x)` | `x.some(Boolean)` | — |
 | `all(x)` | `x.every(Boolean)` | — |
-| `input(prompt)` | `prompt(msg)` | — |
 | `repr(x)` | `pyRepr(x)` — CPython-style repr | runtime |
+| `format(v[, spec])` | `pyFormat(v, spec)` — the f-string/`str.format` engine, `__format__` protocol | runtime |
+| `slice(...)` | `pySliceOf(...)` — a real slice object; `xs[slice(1, 3)]` ≡ `xs[1:3]` | runtime |
+| `ascii(x)` | `pyAscii(x)` — repr with `\xNN`/`\uNNNN`/`\UNNNNNNNN` escapes | runtime |
+| `vars(obj)` | `pyVars(obj)` — the instance `__dict__` (zero-arg `vars()` is `locals()` → compile error) | runtime |
+
+**Unimplemented builtins are a compile error, not a runtime surprise.** A bare
+reference to a known CPython builtin that has no lowering — `open`, `input`,
+`eval`, `exec`, `compile`, `hash`, `id`, `globals`, `locals`, `memoryview`,
+`help`, `breakpoint`, `aiter`, `anext`, `__import__` — fails `pyths compile`
+**and** `pyths check` with a named diagnostic
+(`builtin 'open' is not supported yet (pythscribe-v3.x) …`) instead of
+compiling to a bare JS identifier that crashes with `ReferenceError` at
+runtime. User bindings, imports, and star-import rebinds of these names
+shadow the builtin and compile normally.
 
 ## Type Annotations
 

@@ -75,7 +75,7 @@ PythScribe (`.ps`) uses Python syntax but compiles to JavaScript. It is **not** 
 | `zip(a, b)` | `pyZip(a, b)` | Runtime helper |
 | `map(f, x)` | `x.map(f)` | |
 | `filter(f, x)` | `x.filter(f)` | |
-| `input(prompt)` | `prompt(msg)` | Browser: `window.prompt` |
+| `input(prompt)` | *compile error* — not supported yet; call `window.prompt` via JS interop | |
 | `sum(x)` | `x.reduce((a, b) => a + b, 0)` | |
 | `any(x)` | `x.some(Boolean)` | |
 | `all(x)` | `x.every(Boolean)` | |

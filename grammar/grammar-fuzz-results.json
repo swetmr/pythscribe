@@ -2,7 +2,7 @@
   "seed": 20260714,
   "jobs": 16,
   "extra_corpus": [
-    "C:\\Users\\DELL\\reference-app"
+    "<held-out-corpus>"
   ],
   "false_accept": {
     "generated": 10000,

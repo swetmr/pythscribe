@@ -403,6 +403,53 @@ mod tests {
     }
 
     #[test]
+    fn test_triple_quoted_crlf_universal_newlines() {
+        // A Windows (CRLF) checkout: CPython reads source in universal-newlines
+        // mode, so the VALUE of a triple-quoted literal never contains `\r`.
+        assert_eq!(
+            token_types("'''a\r\nb'''"),
+            vec![Token::String_("a\nb".into()), Token::Newline, Token::Eof],
+        );
+        assert_eq!(
+            token_types("\"\"\"x\r\ny\r\nz\"\"\""),
+            vec![
+                Token::String_("x\ny\nz".into()),
+                Token::Newline,
+                Token::Eof
+            ],
+        );
+        // Raw triple strings: raw-ness suppresses escape processing, not
+        // source newline decoding — CPython gives `\n` here too.
+        assert_eq!(
+            token_types("r'''a\r\nb'''"),
+            vec![Token::String_("a\nb".into()), Token::Newline, Token::Eof],
+        );
+        // An ESCAPED `\r` (backslash-r in source) must survive as a real CR.
+        assert_eq!(
+            token_types("'''a\\r\\nb'''"),
+            vec![Token::String_("a\r\nb".into()), Token::Newline, Token::Eof],
+        );
+    }
+
+    #[test]
+    fn test_base_prefix_underscore_literals() {
+        // CPython grammar: `"0" ("x"|"X") (["_"] hexdigit)+` — an underscore
+        // directly after the base prefix is legal (autotester dashed_numbers).
+        assert_eq!(
+            token_types("0x_ff_ff_ff"),
+            vec![Token::Integer(0xff_ff_ff), Token::Newline, Token::Eof],
+        );
+        assert_eq!(
+            token_types("0b_1010"),
+            vec![Token::Integer(0b1010), Token::Newline, Token::Eof],
+        );
+        assert_eq!(
+            token_types("0o_17"),
+            vec![Token::Integer(0o17), Token::Newline, Token::Eof],
+        );
+    }
+
+    #[test]
     fn test_pep701_same_quote_fstring() {
         // PBT-3 (PEP 701 subset): the outer quote may be reused inside
         // {...} expression parts (CPython >= 3.12; ast.unparse emits this).

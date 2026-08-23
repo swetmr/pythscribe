@@ -6,6 +6,7 @@ use pyths_syntax::operators::*;
 
 use crate::builtins::{builtin_func_mapping, BuiltinMapping};
 use crate::method_lowering::{is_simple_receiver, method_lowering, InlineSpec, MethodLowering};
+use crate::method_table::{container_method_arity, ReceiverKind};
 use crate::react;
 use crate::sourcemap::{self, SourceMapBuilder};
 
@@ -83,6 +84,10 @@ struct DataclassField<'a> {
     annotation: Option<&'a Expr>,
     default: Option<&'a Expr>,
     constraints: FieldConstraints,
+    /// `w: int = property(getW, setW)` — a descriptor field: installed as a
+    /// class attribute (not an __init__ param), but CPython's generated
+    /// __repr__/__eq__ still read it (through the getter).
+    property_default: bool,
 }
 
 /// Numeric/string constraints from Field(...).
@@ -123,6 +128,9 @@ struct DataclassOptions {
     frozen: bool,
     coerce: bool,
     collect_errors: bool,
+    /// @dataclass(order=True): emit __lt__/__le__/__gt__/__ge__ comparing
+    /// the field tuple (CPython's generated ordering).
+    order: bool,
 }
 
 /// Resolved type check for a field annotation.
@@ -143,6 +151,35 @@ enum TypeCheck {
     None,
 }
 
+/// autotester data_classes: typing-module constructs that can appear as
+/// (bare) annotations but are NOT runtime classes — they must never become
+/// an `instanceof <Name>` check (`x: ClassVar = 10` emitted `instanceof
+/// ClassVar` → ReferenceError). `List`/`Dict` are handled structurally below.
+fn is_typing_only_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Any" | "ClassVar" | "Optional" | "Union" | "Callable" | "Tuple"
+            | "Set" | "FrozenSet" | "Iterable" | "Iterator" | "Sequence"
+            | "Mapping" | "MutableMapping" | "MutableSequence" | "Final"
+            | "Literal" | "Type" | "NoReturn" | "Never" | "Hashable"
+            | "Generator" | "Coroutine" | "Awaitable" | "AnyStr" | "Text"
+            | "TypeVar" | "Protocol" | "TypedDict" | "NamedTuple"
+    )
+}
+
+/// autotester data_classes: is this annotation `ClassVar` / `ClassVar[...]`?
+/// CPython dataclasses EXCLUDE such pseudo-fields from __init__ — they are
+/// plain class attributes.
+fn is_classvar_annotation(annotation: &Expr) -> bool {
+    match &annotation.kind {
+        ExprKind::Name(n) => n == "ClassVar",
+        ExprKind::Subscript { value, .. } => {
+            matches!(&value.kind, ExprKind::Name(n) if n == "ClassVar")
+        }
+        _ => false,
+    }
+}
+
 /// Resolve a Python type annotation AST node to a TypeCheck.
 fn resolve_type_check(annotation: &Expr) -> TypeCheck {
     match &annotation.kind {
@@ -151,10 +188,12 @@ fn resolve_type_check(annotation: &Expr) -> TypeCheck {
             "float" => TypeCheck::Float,
             "str" => TypeCheck::Str,
             "bool" => TypeCheck::Bool,
-            "list" => TypeCheck::List(None),
-            "dict" => TypeCheck::Dict(None, None),
+            "list" | "List" => TypeCheck::List(None),
+            "dict" | "Dict" => TypeCheck::Dict(None, None),
             other => {
-                if other.chars().next().is_some_and(|c| c.is_uppercase()) {
+                if !is_typing_only_name(other)
+                    && other.chars().next().is_some_and(|c| c.is_uppercase())
+                {
                     TypeCheck::Instance(other.to_string())
                 } else {
                     TypeCheck::None
@@ -216,6 +255,11 @@ fn parse_dataclass_decorator(decorator: &Expr) -> (bool, DataclassOptions) {
                                 "collect_errors" => {
                                     if let ExprKind::BoolLiteral(v) = &kw.value.kind {
                                         opts.collect_errors = *v;
+                                    }
+                                }
+                                "order" => {
+                                    if let ExprKind::BoolLiteral(v) = &kw.value.kind {
+                                        opts.order = *v;
                                     }
                                 }
                                 _ => {}
@@ -345,6 +389,32 @@ fn expr_to_bool(expr: &Expr) -> bool {
 }
 
 /// Collect dataclass fields from the class body.
+/// `property(...)` call detection: a dataclass field whose DEFAULT is a
+/// property stays a class-attribute descriptor (reads hit the getter), not
+/// an __init__ field — matching CPython's observable behavior.
+fn is_property_call(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Call { func, .. }
+        if matches!(&func.kind, ExprKind::Name(n) if n == "property"))
+}
+
+/// WB-14: is `e` an immutable constant literal — one whose value is identical
+/// whether evaluated at def-time or call-time (so a lambda/function default of
+/// this shape needs NO def-time hoist; a bare JS default param is equivalent)?
+/// Excludes mutable literals (`[]`, `{}`, sets, tuples of exprs) and any
+/// expression that can observe surrounding state (Names, calls, f-strings).
+fn is_const_literal(e: &Expr) -> bool {
+    matches!(
+        &e.kind,
+        ExprKind::NoneLiteral
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::ImagLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BytesLiteral(_)
+    )
+}
+
 fn collect_dataclass_fields<'a>(body: &'a [Stmt]) -> Vec<DataclassField<'a>> {
     let cap = body
         .iter()
@@ -358,6 +428,14 @@ fn collect_dataclass_fields<'a>(body: &'a [Stmt]) -> Vec<DataclassField<'a>> {
             value,
         } = &stmt.kind
         {
+            // autotester data_classes: ClassVar pseudo-fields are NOT
+            // dataclass fields (CPython excludes them from __init__); they
+            // are installed as class attributes by emit_class_def instead.
+            if is_classvar_annotation(annotation) {
+                continue;
+            }
+            let property_default =
+                value.as_ref().is_some_and(|v| is_property_call(v));
             if let ExprKind::Name(field_name) = &target.kind {
                 // Check if value is Field(...) or field(...)
                 if let Some(val) = value {
@@ -375,6 +453,7 @@ fn collect_dataclass_fields<'a>(body: &'a [Stmt]) -> Vec<DataclassField<'a>> {
                                     annotation: Some(annotation),
                                     default,
                                     constraints,
+                                    property_default: false,
                                 });
                                 continue;
                             }
@@ -386,6 +465,7 @@ fn collect_dataclass_fields<'a>(body: &'a [Stmt]) -> Vec<DataclassField<'a>> {
                     annotation: Some(annotation),
                     default: value.as_ref(),
                     constraints: FieldConstraints::default(),
+                    property_default,
                 });
             }
         }
@@ -402,17 +482,80 @@ fn collect_dataclass_fields<'a>(body: &'a [Stmt]) -> Vec<DataclassField<'a>> {
 /// JS-quirk-fixing call sites (`==` deep compare, `if []` truthiness,
 /// `[] + []` spread concat). Full type inference lives in
 /// `pyths_types`; we mirror just enough here for emit-time decisions.
+/// Round-3 unification: the decision `plan_import_binding` hands back to an
+/// import emitter. Every import form (plain/aliased `import`, generic
+/// `from ... import`, the recognized-lib hybrid from-import, relative
+/// from-imports) maps its names through the SAME planner; only the ESM
+/// SYNTAX it then emits (named specifier vs `import * as`) is per-form.
+#[derive(Debug)]
+enum ImportBindingPlan {
+    /// This binding already IS this exact import (same module + export) —
+    /// idempotent Python re-import; emit nothing.
+    Dedup,
+    /// First binder of this name — hoist under the sanitized binding name.
+    Fresh,
+    /// Hoist under `unique` and emit a body-local rebind: `binding = unique`
+    /// when the name is already a param/earlier local (`reassign`), else
+    /// `const binding = unique` (a fresh shadow of an outer-scope alias).
+    Rebind {
+        js_binding: String,
+        unique: String,
+        reassign: bool,
+    },
+    /// DX-B2 module-scope cross-module collision — diagnostic already
+    /// emitted; the caller aborts the statement.
+    Error,
+    /// DX-B2 root fix (alias-and-rewrite): a module-scope cross-module
+    /// collision where the PYTHON source names DIFFER — the JS-name
+    /// convergence was manufactured by our own snake→camel import
+    /// conversion (`from zustand import create_store` → `createStore`
+    /// beside `from redux import createStore`). Both bindings are valid,
+    /// distinct Python names, so a hard error would reject a correct
+    /// program. Instead this import is hoisted under `unique` and every
+    /// reference to its Python name is rewritten via `import_ref_renames`;
+    /// the earlier claimant keeps the plain JS binding. A same-Python-name
+    /// collision between the JS binding's two *original* claimants
+    /// (`import a as z` + `import b as z`) is a genuine double-bind and
+    /// still hard-errors; but once a different-Python-name import already
+    /// holds the binding via alias, a later same-Python-name import resolves
+    /// by Python last-wins (another alias), never a wrong runtime either way.
+    Alias { unique: String },
+}
+
+/// FULL_SURFACE #1: per-scope bookkeeping for dotted NO-ALIAS imports
+/// (`import pkg.sub`). One entry per Python scope, in lockstep with
+/// `declared_scopes` (see `push_scope`/`pop_scope`).
+#[derive(Debug, Default)]
+struct DottedImportScope {
+    /// Head names (`pkg` of `import pkg.sub`) bound in this scope to a
+    /// MUTABLE package object (`let pkg = {};`) that dotted paths are
+    /// grafted onto.
+    heads: HashSet<String>,
+    /// Dotted paths currently holding a plain mutable intermediate object
+    /// (`pkg.sub = {};` — created so a deeper level could be grafted).
+    obj_paths: HashSet<String>,
+    /// Dotted paths currently holding a grafted frozen ESM namespace
+    /// (the leaf of a previous dotted import). If a later import needs a
+    /// CHILD under such a path, the namespace is copied into a mutable
+    /// object first (`pkg.sub = Object.assign({}, pkg.sub);`).
+    ns_paths: HashSet<String>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum JsInferredType {
     /// `int`, `bool`, `str`, `None` — JS truthiness and `===` match
     /// Python semantics, so these skip the helper wrap.
     Primitive,
     /// Provably `float` (float literal, `float`-annotated, true-division
-    /// result, or arithmetic among floats). A float is always a JS
-    /// `Number` — never promoted to BigInt — so arithmetic on two Floats
-    /// can skip the arbitrary-precision helper and emit a bare JS op
-    /// (P2 native fast path). Treated exactly like `Primitive` everywhere
-    /// else (non-collection, `===` equality, no truthiness wrap).
+    /// result, or arithmetic among floats). Option B value model: a float is
+    /// a native JS `Number` when non-integer-valued and a boxed `PyFloat`
+    /// when integer-valued (8.0) — never a BigInt — so arithmetic on two
+    /// Floats can skip the arbitrary-precision helper and emit the bare-op
+    /// unwrap/re-box fast path (`__pyF(__reqNum(a) op __reqNum(b))`,
+    /// unwrapping through the value-boundary authority). Because the value
+    /// MAY be a box (a JS object), Float does NOT share Primitive's bare
+    /// truthiness or `===` equality: `if x:` routes through pyBool and
+    /// `==` through pyEq (both box-aware).
     Float,
     List,
     Dict,
@@ -450,11 +593,16 @@ impl JsInferredType {
 /// overflow, normalizing back to Number when the result fits). Emitted by
 /// `emit_inline_runtime` when any arithmetic helper is needed.
 const PY_ARITH_JS: &str = r#"const __MAX_SAFE = 9007199254740991n;
-const __isFloat = (x) => typeof x === "number" && !Number.isSafeInteger(x);
+// THE numeric value-boundary authority (mirror of runtime/src/operators.js —
+// see the block comment there; #460/#461/#464): float ⇔ __pyfloat__ brand or
+// non-integer Number; an integer-valued Number of ANY magnitude is an int
+// (exactness past 2**53 restored by __intBin's BigInt promotion).
+const __isFloat = (x) => (typeof x === "number" && !Number.isInteger(x)) || (x != null && x.__pyfloat__ === true);
 const __toBig = (x) => (typeof x === "bigint" ? x : BigInt(x));
 const __norm = (big) => (big >= -__MAX_SAFE && big <= __MAX_SAFE ? Number(big) : big);
 function __intBin(a, b, numOp, bigOp) {
-    if (typeof a === "number" && typeof b === "number") {
+    if (typeof a === "number" && typeof b === "number"
+        && Number.isSafeInteger(a) && Number.isSafeInteger(b)) {
         const r = numOp(a, b);
         if (Number.isSafeInteger(r)) return r;
         return __norm(bigOp(BigInt(a), BigInt(b)));
@@ -469,48 +617,91 @@ const __reqNum = (x) => {
         if (!isFinite(n)) throw __ofe("int too large to convert to float");
         return n;
     }
+    if (x != null && x.__pyfloat__ === true) return x.valueOf();
     return Number(x);
 };
-const __numeric = (x) => typeof x === "number" || typeof x === "bigint";
-function __opTypeName(v) {
-    if (v === null || v === undefined) return "NoneType";
-    switch (typeof v) {
-        case "boolean": return "bool";
-        case "number": return Number.isInteger(v) ? "int" : "float";
-        case "bigint": return "int";
-        case "string": return "str";
-    }
-    if (Array.isArray(v)) return v.__pytuple__ ? "tuple" : "list";
-    if (v instanceof Set) return "set";
-    if (v instanceof Map) return "dict";
-    const c = v && v.constructor;
-    return (c && (c.__name__ || c.name)) || "object";
-}
-function __arithNoneGuard(op, a, b) {
-    if (a == null || b == null) {
-        const e = new Error(`unsupported operand type(s) for ${op}: '${__opTypeName(a)}' and '${__opTypeName(b)}'`);
-        e.name = "TypeError"; throw e;
-    }
-}
+const __numeric = (x) => typeof x === "number" || typeof x === "bigint" || (x != null && x.__pyfloat__ === true);
+// #469: operand-type names come from __pyTypeName — THE ONE type-name source,
+// extracted ON USE from the canonical runtime.js (same emit-on-reference
+// discipline as __pyBytesKind; see emit_inline_runtime). The old inline
+// __opTypeName copy lacked the function/class/plain-object arms and leaked
+// JS class names ('Function'/'Object') where CPython says
+// 'function'/'type'/'dict'.
 function __arithTypeErr(msg) { const e = new Error(msg); e.name = "TypeError"; return e; }
-const __arithNumOk = (x) => typeof x === "number" || typeof x === "bigint" || typeof x === "boolean";
-function __reqArithNum(op, a, b) {
-    if (!__arithNumOk(a) || !__arithNumOk(b)) {
-        throw __arithTypeErr(`unsupported operand type(s) for ${op}: '${__opTypeName(a)}' and '${__opTypeName(b)}'`);
+// E2 (#466): THE binary-op operand-type authority — mirror of
+// runtime/src/operators.js __binOpTypeError (parity battery covers it).
+// Always throws the CPython TypeError for an operand pair no valid
+// combination matched; subsumes the old __arithNoneGuard (#322).
+function __binOpTypeError(op, a, b) {
+    if (op === "+") {
+        const ak = __pyBytesKind(a);
+        if (ak !== null) throw __arithTypeErr(`can't concat ${__pyTypeName(b)} to ${ak}`);
+        if (typeof a === "string") throw __arithTypeErr(`can only concatenate str (not "${__pyTypeName(b)}") to str`);
+        if (Array.isArray(a)) {
+            const an = a.__pytuple__ ? "tuple" : "list";
+            throw __arithTypeErr(`can only concatenate ${an} (not "${__pyTypeName(b)}") to ${an}`);
+        }
+    } else if (op === "*") {
+        const seq = (v) => typeof v === "string" || Array.isArray(v) || __pyBytesKind(v) !== null;
+        if (seq(a)) throw __arithTypeErr(`can't multiply sequence by non-int of type '${__pyTypeName(b)}'`);
+        if (seq(b)) throw __arithTypeErr(`can't multiply sequence by non-int of type '${__pyTypeName(a)}'`);
     }
+    throw __arithTypeErr(`unsupported operand type(s) for ${op}: '${__pyTypeName(a)}' and '${__pyTypeName(b)}'`);
+}
+// E2 (#466): sequence-replication count rule — int/bool only (bool ⊂ int),
+// null = invalid. Mirror of runtime/src/operators.js __mulRepCount.
+const __mulRepCount = (v) => {
+    if (typeof v === "boolean") return v ? 1 : 0;
+    // #471: CPython bounds the count to an index-sized (Py_ssize_t) integer —
+    // `[1] * (10**30)` raises OverflowError, never a JS RangeError.
+    if (typeof v === "bigint") {
+        if (v > 9223372036854775807n || v < -9223372036854775808n) throw __ofe("cannot fit 'int' into an index-sized integer");
+        return Number(v);
+    }
+    if (typeof v === "number" && Number.isInteger(v)) {
+        if (v >= 9223372036854775808 || v < -9223372036854775808) throw __ofe("cannot fit 'int' into an index-sized integer");
+        return v;
+    }
+    return null;
+};
+const __arithNumOk = (x) => typeof x === "number" || typeof x === "bigint" || typeof x === "boolean" || (x != null && x.__pyfloat__ === true);
+function __reqArithNum(op, a, b) {
+    if (!__arithNumOk(a) || !__arithNumOk(b)) __binOpTypeError(op, a, b);
 }
 // Wave-15 F4: bool ⊂ int — coerce bool operands (when the other side is
 // numeric/bool) before arithmetic so bool+BigInt stays exact.
 const __boolNum = (x) => (x ? 1 : 0);
+function __pyBytesRep(src, n) {
+    // item 5: bytearray * n -> bytearray (type follows the bytes-like operand),
+    // duck-typed via the mutator surface. Mirrors runtime/src/operators.js
+    // __bytesRepeat (distinct name so the parity freeze stays accurate).
+    const count = n < 0 ? 0 : n;
+    if (typeof src.copy === "function" && typeof src.clear === "function" && typeof src.extend === "function") {
+        const out = src.copy();
+        out.clear();
+        for (let i = 0; i < count; i++) out.extend(src);
+        return out;
+    }
+    const out = new PyBytes(src.length * count);
+    for (let i = 0; i < count; i++) out.set(src, i * src.length);
+    return out;
+}
 function pyAdd(a, b, fctx) {
     if (typeof a === "boolean" && __arithNumOk(b)) a = __boolNum(a);
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if (__numeric(a) && __numeric(b)) {
-        if (fctx || __isFloat(a) || __isFloat(b)) return __reqNum(a) + __reqNum(b);
+        if (fctx || __isFloat(a) || __isFloat(b)) return __pyF(__reqNum(a) + __reqNum(b));
         return __intBin(a, b, (x, y) => x + y, (x, y) => x + y);
     }
     if (a != null && typeof a.__add__ === "function") return a.__add__(b);
     if (b != null && typeof b.__radd__ === "function") return b.__radd__(a);
+    if (a instanceof Uint8Array && b instanceof Uint8Array) {
+        // item 5: result type follows the LEFT operand (bytearray + bytes-like
+        // -> bytearray), duck-typed via the mutator surface. Mirrors
+        // runtime/src/operators.js pyAdd (parity battery covers it).
+        if (typeof a.copy === "function" && typeof a.extend === "function") { const out = a.copy(); out.extend(b); return out; }
+        const out = new PyBytes(a.length + b.length); out.set(a, 0); out.set(b, a.length); return out;
+    }
     if (Array.isArray(a) && Array.isArray(b)) {
         const at = !!a.__pytuple__, bt = !!b.__pytuple__;
         if (at !== bt) throw new TypeError(`can only concatenate ${at ? "tuple" : "list"} (not "${bt ? "tuple" : "list"}") to ${at ? "tuple" : "list"}`);
@@ -518,15 +709,16 @@ function pyAdd(a, b, fctx) {
         if (at) Object.defineProperty(r, "__pytuple__", { value: true, enumerable: false });
         return r;
     }
-    __arithNoneGuard("+", a, b);
-    if ((typeof a === "string") !== (typeof b === "string")) throw new TypeError('can only concatenate str to str');
-    return a + b;
+    if (typeof a === "string" && typeof b === "string") return a + b;
+    // E2 (#466): no valid combination matched — the operand-type authority
+    // decides the CPython TypeError (was: raw `a + b` string coercion).
+    __binOpTypeError("+", a, b);
 }
 function pySub(a, b) {
     if (typeof a === "boolean" && __arithNumOk(b)) a = __boolNum(a);
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if (__numeric(a) && __numeric(b)) {
-        if (__isFloat(a) || __isFloat(b)) return Number(a) - Number(b);
+        if (__isFloat(a) || __isFloat(b)) return __pyF(__reqNum(a) - __reqNum(b));
         return __intBin(a, b, (x, y) => x - y, (x, y) => x - y);
     }
     if (a instanceof Set && b instanceof Set) { const out = new (a.constructor)(a); for (const v of b) out.delete(v); return out; }
@@ -536,35 +728,50 @@ function pySub(a, b) {
     return Number(a) - Number(b);
 }
 function pyMul(a, b, fctx) {
+    if (typeof a === "boolean" && __arithNumOk(b)) a = __boolNum(a);
+    if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if (__numeric(a) && __numeric(b)) {
-        if (fctx || __isFloat(a) || __isFloat(b)) return __reqNum(a) * __reqNum(b);
+        if (fctx || __isFloat(a) || __isFloat(b)) return __pyF(__reqNum(a) * __reqNum(b));
         return __intBin(a, b, (x, y) => x * y, (x, y) => x * y);
     }
     if (a != null && typeof a.__mul__ === "function") return a.__mul__(b);
     if (b != null && typeof b.__rmul__ === "function") return b.__rmul__(a);
-    if (typeof a === "string" && (typeof b === "number" || typeof b === "bigint")) return a.repeat(Number(b));
-    if ((typeof a === "number" || typeof a === "bigint") && typeof b === "string") return b.repeat(Number(a));
-    if (Array.isArray(a) && (typeof b === "number" || typeof b === "bigint")) {
-        const result = []; const n = Number(b);
-        for (let i = 0; i < n; i++) result.push(...a);
-        return result;
+    // E2 (#466): sequence replication — INT/bool counts only, validated by
+    // __mulRepCount; anything else falls to the operand-type authority.
+    // Mirrors runtime/src/operators.js pyMul (parity battery covers it).
+    {
+        const aSeq = typeof a === "string" || Array.isArray(a) || a instanceof Uint8Array;
+        const bSeq = typeof b === "string" || Array.isArray(b) || b instanceof Uint8Array;
+        if (aSeq !== bSeq) {
+            const n = __mulRepCount(aSeq ? b : a);
+            if (n !== null) {
+                const s = aSeq ? a : b;
+                if (s instanceof Uint8Array) return __pyBytesRep(s, n);
+                if (typeof s === "string") return s.repeat(Math.max(0, n));
+                const result = [];
+                for (let i = 0; i < n; i++) result.push(...s);
+                if (s.__pytuple__) Object.defineProperty(result, "__pytuple__", { value: true, enumerable: false });
+                return result;
+            }
+        }
     }
-    __arithNoneGuard("*", a, b);
-    return a * b;
+    __binOpTypeError("*", a, b);
 }
 function pyDiv(a, b, floatDiv) {
     if (typeof a === "boolean" && __arithNumOk(b)) a = __boolNum(a);
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if ((!__numeric(a) || !__numeric(b)) && a != null && typeof a.__truediv__ === "function") return a.__truediv__(b);
+    if ((!__numeric(a) || !__numeric(b)) && b != null && typeof b.__rtruediv__ === "function") return b.__rtruediv__(a);
     __reqArithNum("/", a, b);
     const bn = __reqNum(b);
     if (bn === 0) throw __zde((floatDiv || __isFloat(a) || __isFloat(b)) ? "float division by zero" : "division by zero");
-    return __reqNum(a) / bn;
+    return __pyF(__reqNum(a) / bn);
 }
 function pyFloorDiv(a, b) {
     if (typeof a === "boolean" && __arithNumOk(b)) a = __boolNum(a);
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if ((!__numeric(a) || !__numeric(b)) && a != null && typeof a.__floordiv__ === "function") return a.__floordiv__(b);
+    if ((!__numeric(a) || !__numeric(b)) && b != null && typeof b.__rfloordiv__ === "function") return b.__rfloordiv__(a);
     __reqArithNum("//", a, b);
     if (__isFloat(a) || __isFloat(b)) {
         const x = Number(a), y = Number(b);
@@ -574,7 +781,7 @@ function pyFloorDiv(a, b) {
         if (mod !== 0 && (y < 0) !== (mod < 0)) div -= 1;
         let fd = Math.floor(div);
         if (div - fd > 0.5) fd += 1;
-        return fd;
+        return __pyF(fd);
     }
     if (Number(b) === 0) throw __zde("integer division or modulo by zero");
     return __intBin(a, b, (x, y) => Math.floor(x / y), (x, y) => { let q = x / y; if (x % y !== 0n && (x < 0n) !== (y < 0n)) q -= 1n; return q; });
@@ -583,6 +790,7 @@ function pyMod(a, b) {
     if (typeof a === "boolean" && __arithNumOk(b)) a = __boolNum(a);
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if ((!__numeric(a) || !__numeric(b)) && a != null && typeof a.__mod__ === "function") return a.__mod__(b);
+    if ((!__numeric(a) || !__numeric(b)) && b != null && typeof b.__rmod__ === "function") return b.__rmod__(a);
     // Honest unsupported-feature error: printf-style %-formatting is a
     // surface PythScribe does not implement (known limitation; use f-strings).
     if (typeof a === "string") {
@@ -591,25 +799,34 @@ function pyMod(a, b) {
     }
     __reqArithNum("%", a, b);
     if (__isFloat(a) || __isFloat(b)) {
-        const bf = Number(b);
+        const bf = __reqNum(b);
         if (bf === 0) throw __zde("float modulo by zero");
-        return ((Number(a) % bf) + bf) % bf;
+        // Sign-of-divisor correction without the `(+y)%y` re-mod (rounds at
+        // huge divisors) — mirrors runtime/src/operators.js pyMod.
+        let m = __reqNum(a) % bf;
+        if (m !== 0 && (m < 0) !== (bf < 0)) m += bf;
+        return __pyF(m);
     }
-    if (Number(b) === 0) throw __zde("integer division or modulo by zero");
-    return __intBin(a, b, (x, y) => ((x % y) + y) % y, (x, y) => ((x % y) + y) % y);
+    if (Number(b) === 0) throw __zde("integer modulo by zero"); // CPython 3.12: `%` says "modulo", `//` keeps "division or modulo"
+    return __intBin(a, b, (x, y) => { let m = x % y; if (m !== 0 && (m < 0) !== (y < 0)) m += y; return m; }, (x, y) => { let m = x % y; if (m !== 0n && (m < 0n) !== (y < 0n)) m += y; return m; });
 }
 function pyPow(a, b, fctx) {
     if (typeof a === "boolean" && __arithNumOk(b)) a = __boolNum(a);
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if (__numeric(a) && __numeric(b)) {
         if (fctx || __isFloat(a) || __isFloat(b) || (typeof b === "bigint" ? b < 0n : b < 0)) {
-            const r = __reqNum(a) ** __reqNum(b);
-            if (!isFinite(r) && isFinite(__reqNum(a)) && isFinite(__reqNum(b))) throw __ofe("(34, 'Result too large')");
-            return r;
+            const an = __reqNum(a), bn = __reqNum(b);
+            // Mirrors runtime/src/operators.js pyPow: zero to a negative
+            // power is CPython's ZeroDivisionError, not OverflowError.
+            if (an === 0 && bn < 0) throw __zde("0.0 cannot be raised to a negative power");
+            const r = an ** bn;
+            if (!isFinite(r) && isFinite(an) && isFinite(bn)) throw __ofe("(34, 'Result too large')");
+            return __pyF(r);
         }
         return __intBin(a, b, (x, y) => x ** y, (x, y) => x ** y);
     }
     if (a != null && typeof a.__pow__ === "function") return a.__pow__(b);
+    if (b != null && typeof b.__rpow__ === "function") return b.__rpow__(a);
     __reqArithNum("** or pow()", a, b);
     return Number(a) ** Number(b);
 }
@@ -624,6 +841,7 @@ function pyPow(a, b, fctx) {
 /// diamonds chain L→R→Base, matching Python.
 const PY_OBJECT_MODEL_JS: &str = r#"const __PY_MIXIN = Symbol("pyMixin");
 class PyObject {
+    static __name__ = "object";
     constructor(...args) {
         const cls = new.target;
         const mro = cls && cls.__mro__ ? cls.__mro__ : [cls];
@@ -746,12 +964,22 @@ function __pyIsInstance(obj, cls) {
             case "bool": return typeof obj === "boolean";
             // bool is a subclass of int in Python, so a boolean is an int.
             case "int": return typeof obj === "boolean" || typeof obj === "bigint" || (typeof obj === "number" && Number.isInteger(obj));
-            case "float": return typeof obj === "number" && !Number.isInteger(obj);
+            case "float": return (typeof obj === "number" && !Number.isInteger(obj)) || (obj != null && obj.__pyfloat__ === true);
             case "dict": return obj !== null && typeof obj === "object" && (Object.getPrototypeOf(obj) === Object.prototype || obj instanceof Map);
-            case "set": return obj instanceof Set;
+            case "set": case "frozenset": return obj instanceof Set;
+            // Bytes authority: bytearray is NOT a bytes subclass in CPython,
+            // so each name matches exactly its own kind.
+            case "bytes": return __pyBytesKind(obj) === "bytes";
+            case "bytearray": return __pyBytesKind(obj) === "bytearray";
             case "NoneType": return obj === null || obj === undefined;
+            case "object": return true;
         }
         return false;
+    }
+    // Interned CALLABLE type objects (int/list/dict/object/… as VALUES —
+    // runtime.js __pyType* singletons) dispatch through the string path.
+    if (typeof cls === "function" && cls.__pytype__ === true) {
+        return __pyIsInstance(obj, cls.__name__);
     }
     // `type(x)` for a builtin returns an interned type OBJECT (__PyTypeObj)
     // whose __name__ is the CPython type name, not a JS constructor. Route
@@ -769,8 +997,19 @@ function __pyIsInstance(obj, cls) {
     const mro = ctor && ctor.__mro__ ? ctor.__mro__ : null;
     return mro ? mro.indexOf(cls) >= 0 : false;
 }
+function pyProperty(fget, fset, fdel, doc) {
+    return { __pyproperty__: true, fget, fset, fdel, doc };
+}
 function __pyClassAttr(cls, name, value) {
     cls[name] = value;
+    if (value !== null && typeof value === "object" && value.__pyproperty__) { // autotester properties (mirrors runtime/src/classes.js)
+        Object.defineProperty(cls.prototype, name, {
+            get() { return value.fget ? value.fget.call(this) : undefined; },
+            set(v) { if (!value.fset) { const e = new Error("can't set attribute"); e.name = "AttributeError"; throw e; } value.fset.call(this, v); },
+            configurable: true,
+        });
+        return;
+    }
     Object.defineProperty(cls.prototype, name, {
         get() { return cls[name]; },
         set(v) { Object.defineProperty(this, name, { value: v, writable: true, enumerable: true, configurable: true }); },
@@ -779,6 +1018,7 @@ function __pyClassAttr(cls, name, value) {
 }
 function __pyClassCall(cls, name, args) {
     const s = cls[name];
+    if (typeof s === "function" && /^class[\s{(]/.test(Function.prototype.toString.call(s))) return new s(...args); // autotester classes: nested class attr constructs with new (mirrors runtime/src/classes.js)
     if (typeof s === "function") return cls[name](...args);
     const m = cls.prototype ? cls.prototype[name] : undefined;
     if (typeof m === "function") return m.call(args[0], ...args.slice(1));
@@ -805,6 +1045,64 @@ struct ClassCtx {
     has_bases: bool,
 }
 
+/// WB-15 (naming soundness, NB-1 family): how a bare identifier `self` lowers
+/// at the CURRENT emission point. This is the SINGLE, order-independent notion
+/// that replaced the former quartet of interacting flags (`self_receiver_depth`
+/// / `in_nested_fn_of_method` / `self_param_fn_depth` / `method_self_alias`),
+/// whose per-context interaction leaked (a free `self` in a nested fn of a
+/// `@staticmethod` still aliased the receiver; a `@classmethod def m(self)`
+/// threw). It is computed once from the real binding structure — the enclosing
+/// method's receiver — and saved/restored at every scope that can rebind `self`:
+/// method bodies, nested `function`/`class` defs, `@static`/`@classmethod`,
+/// lambda params, comprehension for-targets, and a method-local rebind of
+/// `self` (assignment/for/with target).
+///
+/// The rule: `self` lowers to the receiver IFF, in the current scope, it names
+/// an actual instance-method receiver — the first param `self` of an enclosing
+/// non-static, non-classmethod method (incl. `__init__`/constructors) — AND is
+/// NOT shadowed by a closer binding of `self`. A closer binding is honored
+/// uniformly: a lambda param `self` (S4), a comprehension target `self` (S5),
+/// and a method's own local rebind `self = …` / `for self in …` (S6) all make
+/// `self` an ordinary identifier in their scope — both in reference AND binder
+/// position (a `self` binder must NEVER emit `this`, which is un-assignable and
+/// illegal as a JS param). A method that locally rebinds its receiver `self`
+/// captures it once as `let self = this;` (JS `this` is not assignable) so a
+/// pre-rebind `self.attr` read still sees the instance. Everywhere else — module
+/// scope, a plain function, a `@staticmethod`/`@classmethod` body, a shadowing
+/// scope — `self` is the ordinary identifier.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SelfLowering {
+    /// `self` is an ordinary identifier → emit `self`. Module scope, a plain
+    /// function, a `@staticmethod`/`@classmethod` body whose receiver param is
+    /// not literally `self`, a `self` PARAM of a nearer non-method scope, or a
+    /// classmethod's `const self = this` local (which the identifier reads).
+    /// Emitting `this` here produced `export let this = …` (a hard syntax error
+    /// that silently aborted the module — pull-loading's `var self = {}` bag).
+    Ordinary,
+    /// `self` is the enclosing instance-method receiver, referenced directly in
+    /// the method's own `this` frame → emit `this`.
+    Receiver,
+    /// `self` is the enclosing instance-method receiver, but we are inside a
+    /// nested `function`/`class`/static-method whose own `this` is rebound →
+    /// emit the `__self` alias captured at the top of that instance method.
+    ReceiverAlias,
+}
+
+/// #452 (review blocker 2): which scope OWNS a sentinel-hoisted name at a
+/// read site — decides the unbound-read guard (see `sentinel_read`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SentinelRead {
+    /// The innermost function scope owns it → UnboundLocalError
+    /// (`__pyChkLocal`).
+    Local,
+    /// An enclosing function scope owns it → free-variable NameError
+    /// (`__pyChkFree`).
+    Free,
+    /// Module scope owns it → CPython's dynamic globals → builtins chain
+    /// (`__pyChkGlobal`, or the builtin value fallback for builtin names).
+    Global,
+}
+
 /// JavaScript code generator.
 /// Walks the AST and emits JavaScript source code.
 pub struct JsCodegen {
@@ -820,6 +1118,33 @@ pub struct JsCodegen {
     /// Stack of scopes tracking declared variable names.
     /// Used to decide `let x = ...` (first) vs `x = ...` (reassignment).
     declared_scopes: Vec<HashSet<String>>,
+    /// Issue #438: the PRE-COMPUTED complete local-binding set per Python scope
+    /// (module / function / method / comprehension), pushed/popped in lockstep
+    /// with the scope stack. Unlike `declared_scopes` (built incrementally in
+    /// source order for `let`-emission), this holds ALL names a scope binds
+    /// up front, so shadow resolution (`is_declared_in_any_scope`) is
+    /// ORDER-INDEPENDENT — a builtin shadowed by a local anywhere in the scope
+    /// resolves to the local. Populated by `collect_local_bindings`.
+    scope_bindings: Vec<HashSet<String>>,
+    /// B8(b): every name bound by MODULE-level user code (assignments,
+    /// def/class, for/with/except targets — order-independent pre-scan via
+    /// `collect_bound_names`). Consulted by `plan_import_binding_impl` so a
+    /// snake→camel import whose manufactured JS name collides with a USER
+    /// binding hoists under a unique name (alias-and-rewrite) instead of
+    /// clashing ("Identifier already declared" / a silently killed import).
+    module_bound_names: HashSet<String>,
+    /// #452/#453 (naming soundness): EVERY identifier the module uses anywhere
+    /// — bare-name references AND binding names, at any nesting depth
+    /// (order-independent whole-module pre-pass via `collect_all_idents`).
+    /// Seed set for `fresh_temp`, which guarantees internal codegen
+    /// temporaries (`__result`, `__comp_it`, `__gen_it`) can never collide
+    /// with a user-visible name.
+    module_idents: HashSet<String>,
+    /// Review finding 2: per function-like scope, the names declared `global`
+    /// in it. A `global X` reference must resolve ONLY at module/builtin scope,
+    /// skipping intervening enclosing-function frames (an enclosing local `X`
+    /// must not capture it). Pushed/popped in lockstep with `scope_bindings`.
+    scope_globals: Vec<HashSet<String>>,
     /// #274: JS binding names already emitted by a module-scope `import` (the
     /// name after `as`, or the plain imported name). Python tolerates importing
     /// the same name twice (idempotent rebind); ES modules do not — a second
@@ -827,6 +1152,56 @@ pub struct JsCodegen {
     /// binding so re-imports (common when a file re-imports a name its preamble
     /// / another line already brought in) are dropped.
     imported_bindings: HashSet<String>,
+    /// DX-B2: JS binding name → (import identity `module\0export`, PYTHON
+    /// source name that claimed it). Re-importing the SAME binding from the
+    /// SAME module is idempotent (dedup); importing it from a DIFFERENT
+    /// module is a cross-module collision — the old flat `imported_bindings`
+    /// set silently dropped the second import (or, on the other order,
+    /// emitted an unconverted call → ReferenceError). When the two PYTHON
+    /// names also match, we hard-error (genuine double-bind). When they
+    /// DIFFER, the collision is an artifact of our snake→camel conversion
+    /// (`create_store` vs `createStore`) — both are valid distinct Python
+    /// bindings, so the later import is ALIASED under a unique JS name and
+    /// its references rewritten (see `import_ref_renames`).
+    imported_binding_modules: HashMap<String, (String, String)>,
+    /// DX-B2 alias-and-rewrite: module-scope Python name → the unique JS
+    /// name its colliding import was hoisted under. Consulted at every
+    /// bare-Name reference (before the react_imports snake→camel match) so
+    /// call/value sites bind the right import. A function-scope binding of
+    /// the same name shadows the import and skips the rewrite.
+    import_ref_renames: HashMap<String, String>,
+    /// DX-B2 alias-and-rewrite: Python name → import identity for the
+    /// aliased side, so an idempotent re-import of the SAME aliased import
+    /// dedups instead of minting a second unique hoist.
+    aliased_import_identities: HashMap<String, String>,
+    /// Fix J (scope-aware hoisted-import dedup): the JS namespace binding name
+    /// → the resolved module it was FIRST hoisted for. ES modules put every
+    /// import at the top of the file, so a function-local `import pandas as m`
+    /// cannot share the top-level `m` that a `import numpy as m` in another
+    /// function already claimed. When a function-local alias collides with a
+    /// DIFFERENT module here, the import is hoisted under a UNIQUE name and an
+    /// in-body `const <alias> = <unique>;` shadows the outer binding within that
+    /// function (JS block scoping resolves references — no rewrite needed).
+    /// Same alias + same module dedups; module-scope collisions hard-error (DX-B2).
+    hoisted_alias_module: HashMap<String, String>,
+    /// Monotonic suffix for the unique names minted by the fix-J rename above.
+    import_rename_counter: u32,
+    /// Round-3 unification: per-scope map of binding name → (import IDENTITY
+    /// `module\0export`, assignable) for the import that last bound it IN
+    /// THAT SCOPE, pushed/popped in lockstep with `declared_scopes`.
+    /// `assignable` records whether the JS binding the name resolves to in
+    /// that scope is a mutable body-local (`let` shadow / reassigned param)
+    /// vs an immutable module-top import hoist. This is what lets
+    /// `plan_import_binding` tell "this binding is already THIS import"
+    /// (idempotent re-import → dedup) apart from "this binding is a param /
+    /// earlier local that happens to share the name" (→ reassign rebind):
+    /// `is_declared` alone cannot distinguish the two once the first import
+    /// has declared the name.
+    scope_import_decls: Vec<HashMap<String, (String, bool)>>,
+    /// FULL_SURFACE #1 (`import pkg.sub` without `as`): per-scope state for
+    /// dotted no-alias imports, pushed/popped in lockstep with
+    /// `declared_scopes`. See [`Self::emit_dotted_no_alias_import`].
+    dotted_import_scopes: Vec<DottedImportScope>,
     /// #269: names genuinely HOISTED to this scope as a function/module `let`
     /// (via `collect_hoisted_names`), as opposed to merely block-scoped in a
     /// nested for-loop/if. Mirrors `declared_scopes` push/pop. Only a hoisted
@@ -891,6 +1266,13 @@ pub struct JsCodegen {
     /// functions: a known class name → `new Alert(...)` (instantiation),
     /// otherwise → `createElement(Alert, ...)` (React component).
     known_classes: HashSet<String>,
+    /// #443: class names whose `class` statement has already been EMITTED
+    /// (source order). `known_classes` is pre-scanned and order-independent,
+    /// so when an import later REBINDS a name whose class definition already
+    /// executed (`class sqrt: …` then `from math import sqrt`), the name is
+    /// dropped from `known_classes` — Python is last-wins, and calls after
+    /// the rebind must not `new`-construct the (now shadowed) class.
+    emitted_class_names: HashSet<String>,
     /// #300: names imported via a RELATIVE import (`from .shape import
     /// Shape`) — i.e. from another module of the same PythScribe project,
     /// which the same compiler lowers with the same object model. Used by
@@ -942,10 +1324,27 @@ pub struct JsCodegen {
     /// tags rooted at one of these (`DialogPrimitive.Root`) are library
     /// components for prop-conversion purposes.
     react_lib_module_aliases: HashSet<String>,
+    /// 0.2.2 member-call class fix: local namespace aliases bound to a CORE
+    /// React module (`import react [as R]`, `import react_dom [as D]`,
+    /// `import react_dom.client as C`) → which module. EVERY member access on
+    /// one of these — call position, value position, any member — routes
+    /// through `react::route_namespace_member`: camel-cased + module-checked
+    /// against the audited table, or a compile diagnostic (removed /
+    /// wrong-module). No member may fall through to a silent-dead snake
+    /// identifier or a `pyBoundMethod` wrap.
+    react_namespace_alias_modules: HashMap<String, react::ReactHelperSource>,
     /// Track-B: bindings whose LOWERCASE members are React components
     /// (framer-motion's `motion.div` / `motion.span`). Member calls rooted
     /// here dispatch to createElement even though the attr is lowercase.
     react_member_component_bases: HashSet<String>,
+    /// TB-1: LOCAL bindings (alias-aware) that refer to React's
+    /// `createElement` factory — `from react import createElement`,
+    /// `create_element`, or `create_element as h`. When such a name is CALLED
+    /// directly, its props argument (the 2nd positional, if a dict literal) is
+    /// in PSX-prop position, so its keys get the snake→camel/kebab prop-name
+    /// transform. This is the ONLY dict-literal position that transform reaches
+    /// — general dict literals emit keys verbatim (TB-1 soundness fix).
+    react_create_element_fns: HashSet<String>,
     /// User-supplied `pyths.toml [npm.imports]` overrides. Keys are
     /// Python-source module names (with dots), values are JS module
     /// specifiers emitted verbatim. Consulted before the built-in
@@ -992,8 +1391,58 @@ pub struct JsCodegen {
     /// method (`re.split`, `os.count`) must NOT be lowered as that method —
     /// it is a module function call, emitted verbatim (`re.split(...)`).
     module_namespaces: HashSet<String>,
+    /// autotester docstrings: the module docstring (first statement string
+    /// literal), backing `__doc__` reads; None when absent, like CPython.
+    module_doc: Option<String>,
+    /// autotester data_classes: per-dataclass FLATTENED field statements
+    /// (base fields first, CPython inheritance order) so a derived
+    /// @dataclass constructor/__repr__/__eq__ covers inherited fields.
+    dataclass_field_stmts: HashMap<String, Vec<Stmt>>,
+    /// WB-15 (naming soundness, NB-1 family): the SINGLE predicate that governs
+    /// how a bare identifier `self` lowers here — see `SelfLowering`. Replaces
+    /// the former interacting quartet (`self_receiver_depth`,
+    /// `in_nested_fn_of_method`, `self_param_fn_depth`, `method_self_alias`);
+    /// computed from real binding structure and saved/restored at every scope
+    /// boundary that can rebind `self`, so no call site can reintroduce the leak.
+    self_lowering: SelfLowering,
+    /// autotester callable_test: true when any class in this module defines
+    /// a `__call__` method — gates the __pyCall local-variable call wrap.
+    module_has_dunder_call: bool,
+    /// autotester module_math/module_itertools: `from <stdlib> import *`
+    /// really binds names. Every export of the stdlib shim (parsed at build
+    /// time from the embedded source) maps to its namespace-import var +
+    /// whether it is a class (constructed with `new`). An undeclared Name
+    /// resolves through this map (declared locals/params shadow, matching
+    /// CPython's rebinding), and it suppresses the builtin lowerings —
+    /// `from math import *` makes `pow` mean `math.pow`.
+    star_import_bindings: HashMap<String, (String, bool)>,
+    /// autotester simple_and_augmented_assignment: true while emitting the
+    /// CALLEE of a direct call — `recv.m(...)` keeps `this` in plain JS, so
+    /// the value-position pyBoundMethod wrap is unnecessary noise there.
+    in_call_callee: bool,
+    /// autotester properties: while emitting a post-class attribute VALUE
+    /// (`x = property(getX, setX)` in a class body), sibling method names
+    /// resolve to `<Cls>.prototype.<name>` (Python class-body scoping).
+    class_attr_subst: Option<(String, HashSet<String>)>,
+    /// autotester module_datetime: local names bound to the datetime module
+    /// namespace (`import datetime [as dt]`). Its class names are lowercase,
+    /// so the #224 Capitalized-attr `new` heuristic never fires — qualified
+    /// constructor calls (`datetime.date(...)`) need their own `new` rule.
+    datetime_namespaces: HashSet<String>,
     /// Local names bound to asyncio's `run` via `from asyncio import run`.
     asyncio_run_fns: HashSet<String>,
+    /// #448: local names bound to `importlib.import_module` via
+    /// `from importlib import import_module [as X]`. A call on such a name
+    /// lowers to native ES dynamic `import(<spec>)` (see the call site and
+    /// builtins::import_module). Covers the aliased form; the bare
+    /// `import_module(...)` builtin is handled by builtin_func_mapping.
+    import_module_fns: HashSet<String>,
+    /// #448: local names bound to the `importlib` module via `import importlib
+    /// [as X]`. `importlib` is not a real module in the compiled output — the
+    /// ONLY supported surface is `import_module`, and only through the
+    /// `from importlib import import_module` / bare-builtin forms. A member call
+    /// `<ns>.import_module(...)` is diagnosed (it has no valid lowering).
+    importlib_namespaces: HashSet<String>,
     /// Whether `await` is legal at the current emission point: module top
     /// level (ESM top-level await) and async function bodies. Sync
     /// function bodies set this false.
@@ -1015,9 +1464,20 @@ impl JsCodegen {
             runtime_imports: HashSet::new(),
             inline_runtime: false,
             declared_scopes: vec![HashSet::new()], // module scope
+            scope_bindings: vec![HashSet::new()], // module scope (filled in emit_module)
+            module_bound_names: HashSet::new(),
+            module_idents: HashSet::new(),
+            scope_globals: vec![HashSet::new()],
+            dotted_import_scopes: vec![DottedImportScope::default()], // module scope
             hoisted_scopes: vec![HashSet::new()],  // module scope
             sentinel_scopes: vec![HashSet::new()], // module scope
             imported_bindings: HashSet::new(),
+            imported_binding_modules: HashMap::new(),
+            import_ref_renames: HashMap::new(),
+            aliased_import_identities: HashMap::new(),
+            hoisted_alias_module: HashMap::new(),
+            import_rename_counter: 0,
+            scope_import_decls: vec![HashMap::new()], // module scope
             local_types: vec![HashMap::new()],
             in_lhs_target: false,
             in_component: false,
@@ -1035,6 +1495,7 @@ impl JsCodegen {
             out_col: 0,
             wasm_skip: HashSet::new(),
             known_classes: HashSet::new(),
+            emitted_class_names: HashSet::new(),
             local_module_imports: HashSet::new(),
             float_returning_functions: HashSet::new(),
             pydict_forced_locals: HashSet::new(),
@@ -1044,7 +1505,9 @@ impl JsCodegen {
             react_imports: HashSet::new(),
             react_lib_bindings: HashSet::new(),
             react_lib_module_aliases: HashSet::new(),
+            react_namespace_alias_modules: HashMap::new(),
             react_member_component_bases: HashSet::new(),
+            react_create_element_fns: HashSet::new(),
             npm_imports: HashMap::new(),
             react_refresh: false,
             class_stack: Vec::new(),
@@ -1054,7 +1517,17 @@ impl JsCodegen {
             loop_flag_counter: 0,
             asyncio_namespaces: HashSet::new(),
             module_namespaces: HashSet::new(),
+            module_doc: None,
+            dataclass_field_stmts: HashMap::new(),
+            self_lowering: SelfLowering::Ordinary,
+            module_has_dunder_call: false,
+            star_import_bindings: HashMap::new(),
+            in_call_callee: false,
+            class_attr_subst: None,
+            datetime_namespaces: HashSet::new(),
             asyncio_run_fns: HashSet::new(),
+            import_module_fns: HashSet::new(),
+            importlib_namespaces: HashSet::new(),
             await_ok: true,
         }
     }
@@ -1069,9 +1542,20 @@ impl JsCodegen {
             runtime_imports: HashSet::new(),
             inline_runtime: true,
             declared_scopes: vec![HashSet::new()], // module scope
+            scope_bindings: vec![HashSet::new()], // module scope (filled in emit_module)
+            module_bound_names: HashSet::new(),
+            module_idents: HashSet::new(),
+            scope_globals: vec![HashSet::new()],
+            dotted_import_scopes: vec![DottedImportScope::default()], // module scope
             hoisted_scopes: vec![HashSet::new()],  // module scope
             sentinel_scopes: vec![HashSet::new()], // module scope
             imported_bindings: HashSet::new(),
+            imported_binding_modules: HashMap::new(),
+            import_ref_renames: HashMap::new(),
+            aliased_import_identities: HashMap::new(),
+            hoisted_alias_module: HashMap::new(),
+            import_rename_counter: 0,
+            scope_import_decls: vec![HashMap::new()], // module scope
             local_types: vec![HashMap::new()],
             in_lhs_target: false,
             in_component: false,
@@ -1089,6 +1573,7 @@ impl JsCodegen {
             out_col: 0,
             wasm_skip: HashSet::new(),
             known_classes: HashSet::new(),
+            emitted_class_names: HashSet::new(),
             local_module_imports: HashSet::new(),
             float_returning_functions: HashSet::new(),
             pydict_forced_locals: HashSet::new(),
@@ -1098,7 +1583,9 @@ impl JsCodegen {
             react_imports: HashSet::new(),
             react_lib_bindings: HashSet::new(),
             react_lib_module_aliases: HashSet::new(),
+            react_namespace_alias_modules: HashMap::new(),
             react_member_component_bases: HashSet::new(),
+            react_create_element_fns: HashSet::new(),
             npm_imports: HashMap::new(),
             react_refresh: false,
             class_stack: Vec::new(),
@@ -1108,7 +1595,17 @@ impl JsCodegen {
             loop_flag_counter: 0,
             asyncio_namespaces: HashSet::new(),
             module_namespaces: HashSet::new(),
+            module_doc: None,
+            dataclass_field_stmts: HashMap::new(),
+            self_lowering: SelfLowering::Ordinary,
+            module_has_dunder_call: false,
+            star_import_bindings: HashMap::new(),
+            in_call_callee: false,
+            class_attr_subst: None,
+            datetime_namespaces: HashSet::new(),
             asyncio_run_fns: HashSet::new(),
+            import_module_fns: HashSet::new(),
+            importlib_namespaces: HashSet::new(),
             await_ok: true,
         }
     }
@@ -1171,14 +1668,26 @@ impl JsCodegen {
         }
         let mut names: Vec<&String> = self.wasm_skip.iter().collect();
         names.sort();
+        // #439: a WASM-routed function whose name is a JS reserved word
+        // (`def default(...)`) is exported by the glue under its sanitized
+        // identifier (`default$`) — `export function default` is a SyntaxError,
+        // and `import { default } from …` an invalid binding. Sanitize the
+        // re-export names IDENTICALLY here so the import binds the glue's real
+        // export and matches this module's call sites (which also go through
+        // `sanitize_ident`).
         let joined = names
             .iter()
-            .map(|s| s.as_str())
+            .map(|s| Self::sanitize_ident(s).into_owned())
             .collect::<Vec<_>>()
             .join(", ");
+        // SECURITY (#4): `glue_filename` is source/output-stem-derived. A `"`
+        // or newline in it would break out of the import specifier string.
+        // Encode it. `joined` is the sorted set of WASM-skipped function names
+        // (parser identifiers), which cannot contain a quote.
         self.write(&format!(
-            "\nimport {{ {} }} from \"{}\";\n",
-            joined, glue_filename
+            "\nimport {{ {} }} from {};\n",
+            joined,
+            js_string_literal(glue_filename)
         ));
         self.write(&format!("export {{ {} }};\n", joined));
     }
@@ -1289,8 +1798,31 @@ impl JsCodegen {
         {
             needed.insert("pyBool".to_string());
         }
+        // Bug-1 (aliasing soundness): the in-place aug-assign helpers fall
+        // back to their binary value helpers for immutable targets — force
+        // the binary helper (and thus its hand-inline mirror + dep chain)
+        // in whenever the pyI* wrapper is needed. The wrapper bodies
+        // themselves come from the #170 extraction (canonical operators.js).
+        for (iop, vop) in [
+            ("pyIAdd", "pyAdd"),
+            ("pyISub", "pySub"),
+            ("pyIMul", "pyMul"),
+            ("pyIBitOr", "pyBitOr"),
+            ("pyIBitAnd", "pyBitAnd"),
+            ("pyIBitXor", "pyBitXor"),
+        ] {
+            if needed.contains(iop) {
+                needed.insert(vop.to_string());
+            }
+        }
         if needed.contains("pyPrint") {
             needed.insert("pyStr".to_string());
+        }
+        // public #3: pyGetItem dispatches a slice-object key (`xs[slice(1,3)]`)
+        // through pySlice — the hand-written inline copy needs the extracted
+        // canonical pySlice present to link against.
+        if needed.contains("pyGetItem") {
+            needed.insert("pySlice".to_string());
         }
         if needed.contains("pyStr") {
             needed.insert("pyRepr".to_string());
@@ -1336,6 +1868,31 @@ impl JsCodegen {
         // pyDivmod returns a tuple built from floor-div + mod.
         if needed.contains("pyDivmod") {
             needed.insert("pyTuple".to_string());
+        }
+        // Option-B spike: the inline arith mirror (PY_ARITH_JS) constructs
+        // boxed floats via __pyF — pull the canonical __pyF + PyFloat from
+        // operators.js whenever any arith helper (or float()) is present.
+        if [
+            "pyAdd",
+            "pySub",
+            "pyMul",
+            "pyDiv",
+            "pyFloorDiv",
+            "pyMod",
+            "pyPow",
+            "pyDivmod",
+            "pySum",
+            "pyFloat",
+            "pyRound",
+            // Option B: the inline PyComplex block boxes __abs__ results via
+            // __pyF, and pyBoundMethod re-tags .real/.imag through it.
+            "pyComplex",
+            "pyBoundMethod",
+        ]
+        .iter()
+        .any(|h| needed.contains(*h))
+        {
+            needed.insert("__pyF".to_string());
         }
         // #83 dict-shape dependency chain: pyBitOr's dict branch merges via
         // pyDictMerge; pyDictMerge/pyDict construct PyDicts; pyDictItems
@@ -1384,22 +1941,112 @@ impl JsCodegen {
         if needed.contains("pyMin") || needed.contains("pyMax") || needed.contains("pySorted") {
             needed.insert("pyForIter".to_string());
         }
+        // SEC-7 (CWE-1321): every plain-object dict/kwargs write goes through
+        // the proto-safe __pyDictWrite primitive, so pull it in whenever any
+        // of its consumers is inlined. Mirrors runtime/src/runtime.js.
+        if needed.contains("pySetItem")
+            || needed.contains("pyDictSetdefault")
+            || needed.contains("pyUpdate")
+            || needed.contains("pyDictMerge")
+            || needed.contains("__pyCallKw")
+            || needed.contains("__pyKwArgs")
+        {
+            needed.insert("__pyDictWrite".to_string());
+        }
+        // delta4: EVERY plain-dict subscript/probe op shares the coerce-once
+        // key primitive — read/delete/write/probe must all agree on ONE
+        // coercion of the key (Symbol.toPrimitive double-coercion invariant).
+        if needed.contains("__pyDictWrite")
+            || needed.contains("pyGetItem")
+            || needed.contains("pyDelItem")
+            || needed.contains("pyPop")
+            || needed.contains("pyDictGet")
+            || needed.contains("pyDictSetdefault")
+            || needed.contains("pyContains")
+        {
+            needed.insert("__pyPropKey".to_string());
+        }
         let needed = &needed;
 
         let mut rt = String::new();
         rt.push_str("// --- PythScribe Runtime (inlined) ---\n");
 
-        if needed.contains("pyRange") {
+        if needed.contains("__pyPropKey") {
+            // Mirrors runtime/src/runtime.js __pyPropKey — the SINGLE
+            // coerce-once dict-key primitive (see that copy's doc comment).
+            // delta4: full ToPropertyKey — a Symbol.toPrimitive returning a
+            // Symbol passes through (String() would throw); the computed-
+            // property position applies the spec coercion EXACTLY ONCE.
             rt.push_str(
-                r#"function pyRange(startOrStop, stop, step) {
+                r#"function __pyPropKey(k) {
+    if (typeof k === "symbol") return k;
+    if ((typeof k === "object" && k !== null) || typeof k === "function") return Reflect.ownKeys({ [k]: 0 })[0];
+    return String(k);
+}
+"#,
+            );
+        }
+        if needed.contains("__pyDictWrite") {
+            // Mirrors runtime/src/runtime.js __pyDictWrite (SEC-7). `o[k] = v`
+            // with k === "__proto__" invokes the inherited Object.prototype
+            // setter and reparents `o` instead of storing a key — prototype
+            // pollution, and a Python-semantics break (`"__proto__" in d`).
+            rt.push_str(
+                r#"function __pyDictWrite(o, k, v) {
+    const pk = __pyPropKey(k); // R1: compare the coerced property key
+    if (pk === "__proto__") { Object.defineProperty(o, "__proto__", { value: v, writable: true, enumerable: true, configurable: true }); return; }
+    o[pk] = v; // R1: write the ALREADY-coerced key so o[k] cannot re-coerce (Symbol.toPrimitive)
+}
+"#,
+            );
+        }
+
+        if needed.contains("pyRange") || needed.contains("__pyRangeIter") {
+            // ROOT FIX (mirrors runtime/src/runtime.js): ONE guard/normalize
+            // source (__pyRangeNorm/__pyRangeLen) shared by the materializing
+            // `pyRange` AND the lazy `__pyRangeIter` that the optimized
+            // `for i in range(...)` loop iterates — so the fast path can never
+            // diverge (bool ok; float args rejected; BigInt/2**53-safe counted
+            // stepping; no hang).
+            rt.push_str(
+                r#"function __pyRangeNorm(startOrStop, stop, step) {
     const __b = (v) => (typeof v === "boolean" ? (v ? 1 : 0) : v);
     startOrStop = __b(startOrStop); stop = __b(stop); step = __b(step);
     let start;
     if (stop === undefined) { start = 0; stop = startOrStop; step = 1; }
-    else { start = startOrStop; step = step || 1; }
+    else { start = startOrStop; if (step === undefined || step === null) step = 1; else if (step === 0 || step === 0n) { const e = new Error("range() arg 3 must not be zero"); e.name = "ValueError"; throw e; } }
+    const __numOrBig = (v) => typeof v === "number" || typeof v === "bigint";
+    for (const v of [start, stop, step]) { if (v != null && v.__pyfloat__ === true) { const e = new Error("'float' object cannot be interpreted as an integer"); e.name = "TypeError"; throw e; } }
+    if (!__numOrBig(start) || !__numOrBig(stop) || !__numOrBig(step)) { const bad = !__numOrBig(start) ? start : !__numOrBig(stop) ? stop : step; const tn = bad === null || bad === undefined ? "NoneType" : typeof bad === "string" ? "str" : Array.isArray(bad) ? (bad.__pytuple__ ? "tuple" : "list") : typeof bad === "object" ? "dict" : typeof bad; const e = new Error("'" + tn + "' object cannot be interpreted as an integer"); e.name = "TypeError"; throw e; }
+    for (const v of [start, stop, step]) { if (typeof v === "number" && !Number.isInteger(v)) { const e = new Error("'float' object cannot be interpreted as an integer"); e.name = "TypeError"; throw e; } }
+    return { start, stop, step };
+}
+function __pyRangeLen(start, stop, step) {
+    const bs = BigInt(start), bt = BigInt(stop), bp = BigInt(step);
+    return bp > 0n ? (bt > bs ? (bt - bs + bp - 1n) / bp : 0n) : (bs > bt ? (bs - bt + (-bp) - 1n) / (-bp) : 0n);
+}
+const __MAX_SAFE_BIG = 9007199254740991n;
+function __pyRangeUseBig(start, stop, step, bs, bp, len) {
+    if (typeof start === "bigint" || typeof stop === "bigint" || typeof step === "bigint") return true;
+    if (len === 0n) return false;
+    const last = bs + (len - 1n) * bp; const abs = (x) => (x < 0n ? -x : x);
+    return abs(bs) > __MAX_SAFE_BIG || abs(last) > __MAX_SAFE_BIG || abs(last - bs) > __MAX_SAFE_BIG; // delta4: the Number loop's INTERMEDIATE i*step reaches |last-start|
+}
+function* __pyRangeIter(startOrStop, stop, step) {
+    const n = __pyRangeNorm(startOrStop, stop, step);
+    const len = __pyRangeLen(n.start, n.stop, n.step);
+    const bs = BigInt(n.start), bp = BigInt(n.step);
+    if (__pyRangeUseBig(n.start, n.stop, n.step, bs, bp, len)) { let v = bs; for (let c = 0n; c < len; c++, v += bp) yield v; }
+    else { const count = Number(len); let v = n.start; for (let i = 0; i < count; i++, v += n.step) yield v; }
+}
+function pyRange(startOrStop, stop, step) {
+    const n = __pyRangeNorm(startOrStop, stop, step);
+    const len = __pyRangeLen(n.start, n.stop, n.step);
+    if (len > 4294967295n) { const e = new Error("range() result has too many items"); e.name = "OverflowError"; throw e; }
     const result = [];
-    if (step > 0) { for (let i = start; i < stop; i += step) result.push(i); }
-    else if (step < 0) { for (let i = start; i > stop; i += step) result.push(i); }
+    const bs = BigInt(n.start), bp = BigInt(n.step);
+    if (__pyRangeUseBig(n.start, n.stop, n.step, bs, bp, len)) { for (let i = 0n; i < len; i++) result.push(bs + i * bp); }
+    else { const count = Number(len); for (let i = 0; i < count; i++) result.push(n.start + i * n.step); }
     return result;
 }
 "#,
@@ -1433,7 +2080,7 @@ impl JsCodegen {
     const iters = iterables.map((it) => {
         if (it instanceof Map) return it.keys();
         if (typeof it[Symbol.iterator] === "function") return it[Symbol.iterator]();
-        return Object.keys(it)[Symbol.iterator]();
+        return __pyOwnKeys(it)[Symbol.iterator](); // r6: symbol keys iterate too
     });
     while (true) {
         const row = [];
@@ -1504,6 +2151,9 @@ impl JsCodegen {
         if needed.contains("pyReversed") {
             rt.push_str("function pyReversed(iterable) { return [...iterable].reverse(); }\n");
         }
+        // WF-1: the hand-written inline __pyEffect mirror was DELETED — the
+        // #170 extraction pulls the canonical package __pyEffect (and its
+        // spread-form sibling __pyEffectArgs) from runtime/src/runtime.js.
         if needed.contains("pyRound") {
             rt.push_str(
                 r#"function __roundBigNeg(x, k) {
@@ -1523,6 +2173,8 @@ impl JsCodegen {
 function pyRound(x, ndigits) {
     if (typeof x === "boolean") x = x ? 1 : 0;
     if (typeof ndigits === "boolean") ndigits = ndigits ? 1 : 0;
+    const __wasF = x != null && x.__pyfloat__ === true;
+    if (__wasF) x = x.valueOf();
     if (typeof x === "bigint") {
         const nd = ndigits == null ? 0 : Math.trunc(Number(ndigits));
         return nd >= 0 ? x : __roundBigNeg(x, -nd);
@@ -1532,24 +2184,26 @@ function pyRound(x, ndigits) {
             if (Number.isNaN(x)) throw new ValueError("cannot convert float NaN to integer");
             throw new OverflowError("cannot convert float infinity to integer");
         }
-        return x;
+        return __pyF(x);
     }
     if (x == null || typeof x !== "number") {
         throw new TypeError("type cannot be interpreted as a number");
     }
+    const __reF = ndigits != null && (__wasF || !Number.isInteger(x));
     const nd = ndigits == null ? 0 : Math.trunc(ndigits);
     const factor = Math.pow(10, nd);
-    if (factor === 0) return x < 0 ? -0 : 0;
-    if (!isFinite(factor)) return x;
+    if (factor === 0) return __reF ? __pyF(x < 0 ? -0 : 0) : (x < 0 ? -0 : 0);
+    if (!isFinite(factor)) return __reF ? __pyF(x) : x;
     const scaled = x * factor;
-    if (!isFinite(scaled)) return x;
+    if (!isFinite(scaled)) return __reF ? __pyF(x) : x;
     const floor = Math.floor(scaled);
     const diff = scaled - floor;
     let rounded;
     if (diff > 0.5) rounded = floor + 1;
     else if (diff < 0.5) rounded = floor;
     else rounded = floor % 2 === 0 ? floor : floor + 1;
-    return rounded / factor;
+    const result = rounded / factor;
+    return __reF ? __pyF(result) : result;
 }
 "#,
             );
@@ -1558,6 +2212,9 @@ function pyRound(x, ndigits) {
             rt.push_str(
                 r#"function pyLen(obj) {
     if (obj == null) throw new TypeError("object of type 'NoneType' has no len()");
+    if (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean" || obj.__pyfloat__ === true) {
+        throw new TypeError(`object of type '${__pyTypeName(obj)}' has no len()`); // #467: one type-name source
+    }
     if (typeof obj === "string") return /[\uD800-\uDBFF]/.test(obj) ? [...obj].length : obj.length;
     if (Array.isArray(obj)) return obj.length;
     if (obj instanceof Set || obj instanceof Map) return obj.size;
@@ -1569,7 +2226,7 @@ function pyRound(x, ndigits) {
     // Drift fix: match the package pyLen `.size` fallback (custom
     // collections exposing `.size` without being a Set/Map).
     if (typeof obj.size === "number") return obj.size;
-    return Object.keys(obj).length;
+    return __pyOwnKeys(obj).length; // r6: symbol-keyed entries count
 }
 "#,
             );
@@ -1580,35 +2237,15 @@ function pyRound(x, ndigits) {
         // Like pySetSlice, it now flows through the #170 extraction fallback
         // below, which pulls the canonical runtime/src/runtime.js definition
         // with its dependencies — one source of truth for slice semantics.
-        if needed.contains("pyBool") {
-            rt.push_str(r#"function pyBool(x) {
-    if (x == null) return false;
-    if (typeof x === "boolean") return x;
-    if (typeof x === "number") return x !== 0;
-    if (typeof x === "string") return x.length > 0;
-    if (Array.isArray(x)) return x.length > 0;
-    if (x instanceof Set || x instanceof Map) return x.size > 0;
-    if (typeof x.__bool__ === "function") return x.__bool__();
-    if (typeof x.__len__ === "function") return x.__len__() > 0;
-    if (typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype) return Object.keys(x).length > 0;
-    return true;
-}
-"#);
-        }
-        if needed.contains("pyAnd") {
-            rt.push_str("function pyAnd(a, b) { return pyBool(a) ? b() : a; }\n");
-        }
-        if needed.contains("pyOr") {
-            rt.push_str("function pyOr(a, b) { return pyBool(a) ? a : b(); }\n");
-        }
-        // #348: any()/all() consume the iterable lazily and short-circuit.
-        // Mirrors runtime/src/types.js pyAny/pyAll.
-        if needed.contains("pyAny") {
-            rt.push_str("function pyAny(iterable) { for (const item of iterable) { if (pyBool(item)) return true; } return false; }\n");
-        }
-        if needed.contains("pyAll") {
-            rt.push_str("function pyAll(iterable) { for (const item of iterable) { if (!pyBool(item)) return false; } return true; }\n");
-        }
+        // pyBool / pyAnd / pyOr / pyAny / pyAll: intentionally NOT hand-written
+        // here (bytes-completeness root fix). The hand-inlined pyBool copy
+        // drifted from the canonical runtime/src/types.js one — it had no
+        // bytes/bytearray branch, so `bool(b"")` stayed truthy under
+        // `pyths run` even after the package runtime was fixed (#457). All
+        // five now flow through the #170 extraction fallback below, which
+        // pulls the canonical types.js definitions with their transitive
+        // dependencies (pyAnd/pyOr/pyAny/pyAll pull pyBool automatically) —
+        // one source of truth for Python truthiness, like pySlice/pySetSlice.
         // Builtin exception classes — emitted when user code raises or
         // subclasses one, so `class X(Exception)` / `raise ValueError(...)`
         // work under `pyths run` (the inline path), not just the npm/Vite
@@ -1647,6 +2284,7 @@ function __encodeTupleKey(t) {
     for (const el of t) {
         if (el === null || el === undefined) s += "N;";
         else if (typeof el === "boolean") s += "n:" + (el ? 1 : 0) + ";";
+        else if (el != null && el.__pyfloat__ === true) s += "n:" + String(el.valueOf()) + ";";
         else if (typeof el === "number" || typeof el === "bigint") s += "n:" + String(el) + ";";
         else if (typeof el === "string") s += "s:" + el.length + ":" + el + ";";
         else if (Array.isArray(el) && el.__pytuple__) s += __encodeTupleKey(el) + ";";
@@ -1659,6 +2297,7 @@ function __encodeTupleKey(t) {
 }
 function __pyKey(k) {
     if (typeof k === "boolean") return k ? 1 : 0;
+    if (k != null && k.__pyfloat__ === true) return k.valueOf();
     if (typeof k === "bigint") { const n = Number(k); return (Number.isFinite(n) && BigInt(n) === k) ? n : k; } // crit-16: fold exactly-representable BigInts with Numbers
     if (Array.isArray(k)) { if (k.__pytuple__) return __TUPKEY + __encodeTupleKey(k); throw __unhashable("list"); }
     if (k instanceof Set) throw __unhashable("set");
@@ -1672,12 +2311,12 @@ class PyDict extends Map {
         if (src != null) {
             if (src instanceof Map) { for (const [k, v] of src.entries()) this.set(k, v); }
             else if (typeof src[Symbol.iterator] === "function") { for (const [k, v] of src) this.set(k, v); }
-            else { for (const k of Object.keys(src)) this.set(k, src[k]); }
+            else { for (const k of __pyOwnKeys(src)) this.set(k, src[k]); } // r6: symbols survive
         }
     }
     set(k, v) {
         const c = __pyKey(k);
-        if ((typeof k === "boolean" || Array.isArray(k)) && !super.has(c)) {
+        if ((typeof k === "boolean" || Array.isArray(k) || (k != null && k.__pyfloat__ === true)) && !super.has(c)) {
             let m = __pyKeyObjs.get(this);
             if (!m) { m = new Map(); __pyKeyObjs.set(this, m); }
             m.set(c, k);
@@ -1697,62 +2336,26 @@ class PyDict extends Map {
 }
 "#);
         }
-        if needed.contains("pyDict") {
-            // Mirrors runtime/src/runtime.js pyDict (#83): dict() factory.
-            rt.push_str(r#"function pyDict(src, kwargs) {
-    const entries = [];
-    if (src != null) {
-        if (src instanceof Map) { for (const [k, v] of src.entries()) entries.push([k, v]); }
-        else if (typeof src.keys === "function" && typeof src.__getitem__ === "function") { for (const k of src.keys()) entries.push([k, src.__getitem__(k)]); }
-        else if (typeof src[Symbol.iterator] === "function" && typeof src !== "string") { for (const pair of src) entries.push([pair[0], pair[1]]); }
-        else if (typeof src === "object") { for (const k of Object.keys(src)) entries.push([k, src[k]]); }
-        else { const e = new Error(`'${typeof src}' object is not iterable`); e.name = "TypeError"; throw e; }
-    }
-    if (kwargs != null) for (const k of Object.keys(kwargs)) entries.push([k, kwargs[k]]);
-    if (entries.every(([k]) => typeof k === "string")) {
-        const out = {};
-        for (const [k, v] of entries) {
-            if (k === "__proto__") Object.defineProperty(out, k, { value: v, writable: true, enumerable: true, configurable: true });
-            else out[k] = v;
-        }
-        return out;
-    }
-    return new PyDict(entries);
-}
-"#);
-        }
-        if needed.contains("pySetItem") {
-            // Mirrors runtime/src/runtime.js pySetItem (#83).
-            rt.push_str(r#"function pySetItem(obj, key, value) {
-    if (obj == null) { const e = new Error("'NoneType' object does not support item assignment"); e.name = "TypeError"; throw e; }
-    if (Array.isArray(obj)) {
-        if (obj.__pytuple__) { const e = new Error("'tuple' object does not support item assignment"); e.name = "TypeError"; throw e; }
-        let i = typeof key === "boolean" ? (key ? 1 : 0) : typeof key === "bigint" ? Number(key) : key;
-        if (typeof i === "number" && Number.isInteger(i)) {
-            if (i < 0) i += obj.length;
-            if (i < 0 || i >= obj.length) { const e = new Error("list assignment index out of range"); e.name = "IndexError"; throw e; }
-            obj[i] = value;
-            return;
-        }
-        const e = new Error("list indices must be integers or slices"); e.name = "TypeError"; throw e;
-    }
-    if (obj instanceof Map) { obj.set(key, value); return; }
-    if (typeof key === "boolean") key = key ? 1 : 0;
-    if (typeof obj.__setitem__ === "function") { obj.__setitem__(key, value); return; }
-    const proto = Object.getPrototypeOf(obj);
-    if ((proto === Object.prototype || proto === null) && key === "__proto__") {
-        Object.defineProperty(obj, "__proto__", { value, writable: true, enumerable: true, configurable: true });
-        return;
-    }
-    obj[key] = value;
-}
-"#);
-        }
+        // autotester dictionaries: the hand-written inline pyDict mirror was
+        // DELETED (drift trap — it lacked the CPython update-sequence element
+        // validation). The #170 extraction pulls the canonical runtime pyDict
+        // with its exception-class deps.
+        // 0.2.2 hold blocker 2: the hand-written inline pySetItem / pyDelItem
+        // mirrors were DELETED — 1b28bae5 fixed their error KINDS (non-integer
+        // list index → TypeError, del on a tuple → TypeError instead of a
+        // SILENT SPLICE) in the package runtime only, and the stale inline
+        // copies shipped the pre-fix behavior in `pyths run`/`bundle`/`test`
+        // (C4 wrong-kind + silent tuple mutation). They now flow through the
+        // #170 extraction, which pulls the canonical runtime/src/runtime.js
+        // definitions with transitive deps — inline == package by construction
+        // (same migration as pyDictGet/pyUpdate/pyContains). The
+        // inline_runtime_parity battery covers the error-kind cases the fix
+        // changed, so the pre-fix shape can no longer pass the gate.
         if needed.contains("pyDictKeys") {
             rt.push_str(r#"function pyDictKeys(d) {
     if (d == null) { const e = new Error("'NoneType' object is not iterable"); e.name = "TypeError"; throw e; }
     if (!Array.isArray(d) && typeof d.keys === "function") return [...d.keys()];
-    return Object.keys(d);
+    return __pyOwnKeys(d); // r6: symbol keys listed too
 }
 "#);
         }
@@ -1763,8 +2366,9 @@ class PyDict extends Map {
     if (x instanceof Map) return x.keys();
     if (typeof x[Symbol.iterator] === "function") return x;
     if (typeof x[Symbol.asyncIterator] === "function") return x;
-    if (typeof x === "object") return Object.keys(x);
-    return x;
+    if (x.__pyfloat__ === true) { const e = new Error("'float' object is not iterable"); e.name = "TypeError"; throw e; }
+    if (typeof x === "object") return __pyOwnKeys(x); // r6: symbols too
+    const e = new Error("'" + __pyTypeName(x) + "' object is not iterable"); e.name = "TypeError"; throw e; // #467
 }
 "#);
         }
@@ -1775,8 +2379,9 @@ class PyDict extends Map {
     if (typeof it === "string") return /[\uD800-\uDBFF]/.test(it) ? [...it] : it.split("");
     if (it instanceof Map) return [...it.keys()];
     if (typeof it[Symbol.iterator] === "function") return [...it];
-    if (typeof it === "object") return Object.keys(it);
-    const e = new Error("'" + typeof it + "' object is not iterable"); e.name = "TypeError"; throw e;
+    if (it.__pyfloat__ === true) { const e = new Error("'float' object is not iterable"); e.name = "TypeError"; throw e; }
+    if (typeof it === "object") return __pyOwnKeys(it); // r6: symbols too
+    const e = new Error("'" + __pyTypeName(it) + "' object is not iterable"); e.name = "TypeError"; throw e; // #467
 }
 "#);
         }
@@ -1784,46 +2389,20 @@ class PyDict extends Map {
             rt.push_str(r#"function pyDictValues(d) {
     if (d == null) { const e = new Error("'NoneType' object is not iterable"); e.name = "TypeError"; throw e; }
     if (!Array.isArray(d) && typeof d.values === "function") return [...d.values()];
-    return Object.values(d);
+    return __pyOwnKeys(d).map((k) => d[k]); // r6: symbol-keyed values included
 }
 "#);
         }
-        if needed.contains("pyDictItems") {
-            rt.push_str(r#"function pyDictItems(d) {
-    if (d == null) { const e = new Error("'NoneType' object is not iterable"); e.name = "TypeError"; throw e; }
-    if (!Array.isArray(d) && typeof d.entries === "function") return [...d.entries()].map((p) => pyTuple(p[0], p[1]));
-    return Object.entries(d).map((p) => pyTuple(p[0], p[1]));
-}
-"#);
-        }
-        if needed.contains("pyDictGet") {
-            // Mirrors runtime/src/runtime.js pyDictGet. (Previously absent
-            // from the inline runtime entirely — `pyths run` crashed with
-            // ReferenceError on any d.get(); noticed while wiring #83.)
-            rt.push_str(
-                r#"function pyDictGet(d, k, defaultValue) {
-    if (d instanceof Map) return d.has(k) ? d.get(k) : defaultValue;
-    if (d != null && typeof d === "object" && typeof d.get === "function") {
-        const p = Object.getPrototypeOf(d);
-        if (p !== Object.prototype && p !== null) {
-            const r = d.get(k);
-            return r == null && defaultValue !== undefined ? defaultValue : r;
-        }
-    }
-    return (d != null && Object.prototype.hasOwnProperty.call(d, k)) ? d[k] : defaultValue;
-}
-"#,
-            );
-        }
-        if needed.contains("pyDictSetdefault") {
-            rt.push_str(r#"function pyDictSetdefault(d, k, defaultValue) {
-    if (d instanceof Map) { if (d.has(k)) return d.get(k); d.set(k, defaultValue); return defaultValue; }
-    if (Object.prototype.hasOwnProperty.call(d, k)) return d[k];
-    d[k] = defaultValue;
-    return defaultValue;
-}
-"#);
-        }
+        // WB-20/WB-6: the hand-written inline pyDictItems / pyDictGet /
+        // pyDictSetdefault mirrors were DELETED — they drifted from the
+        // canonical package copies (pyDictGet shipped WITHOUT the WB-20
+        // unconditional-read MobX fix in `pyths run`/`bundle`; pyDictItems
+        // and pyDictSetdefault lacked the WB-6 user-method dispatch). They
+        // now flow through the #170 extraction fallback, which pulls the
+        // canonical runtime/src/runtime.js definitions with transitive deps
+        // — inline == package by construction (same migration as
+        // pyFormatSpec and the exception classes). The
+        // inline_runtime_parity gate enforces this class-wide.
         if needed.contains("pyDictPopitem") {
             rt.push_str(r#"function pyDictPopitem(d, lastArg) {
     // Drift fix: OrderedDict (and user classes) implement popitem(last=...)
@@ -1838,90 +2417,27 @@ class PyDict extends Map {
         d.delete(last[0]);
         return pyTuple(last[0], last[1]);
     }
-    const keys = Object.keys(d);
+    const keys = __pyOwnKeys(d); // r6: a symbol-keyed last entry pops correctly
     if (keys.length === 0) { const e = new Error("popitem(): dictionary is empty"); e.name = "KeyError"; throw e; }
     const k = keys[keys.length - 1]; const v = d[k]; delete d[k];
     return pyTuple(k, v);
 }
 "#);
         }
-        if needed.contains("pyPop") {
-            // Mirrors runtime/src/runtime.js pyPop (list + dict, both shapes).
-            rt.push_str(r#"function pyPop(obj, ...rest) {
-    if (obj != null && !Array.isArray(obj) && !(obj instanceof Map) && typeof obj.pop === "function") {
-        return obj.pop(...rest);
-    }
-    if (Array.isArray(obj)) {
-        const n = obj.length;
-        if (n === 0) { const e = new Error("pop from empty list"); e.name = "IndexError"; throw e; }
-        let idx = rest.length === 0 ? -1 : rest[0];
-        if (typeof idx === "boolean") idx = idx ? 1 : 0;
-        if (typeof idx === "bigint") { if (idx >= -9007199254740991n && idx <= 9007199254740991n) idx = Number(idx); else { const e = new Error("pop index out of range"); e.name = "IndexError"; throw e; } }
-        if (idx < 0) idx += n;
-        if (idx < 0 || idx >= n) { const e = new Error("pop index out of range"); e.name = "IndexError"; throw e; }
-        return obj.splice(idx, 1)[0];
-    }
-    if (obj instanceof Map) {
-        const k = rest[0];
-        if (obj.has(k)) { const v = obj.get(k); obj.delete(k); return v; }
-        if (rest.length >= 2) return rest[1];
-        const e = new Error(JSON.stringify(k)); e.name = "KeyError"; throw e;
-    }
-    const k = rest[0];
-    if (Object.prototype.hasOwnProperty.call(obj, k)) { const v = obj[k]; delete obj[k]; return v; }
-    if (rest.length >= 2) return rest[1];
-    const e = new Error(JSON.stringify(k)); e.name = "KeyError"; throw e;
-}
-"#);
-        }
-        if needed.contains("pyUpdate") {
-            rt.push_str(r#"function pyUpdate(obj, ...others) {
-    if (obj instanceof Set) { for (const o of others) for (const v of o) obj.add(v); return; }
-    // #242: a custom receiver with its own update (Counter adds COUNTS, not
-    // overwrites) must win over the generic Map merge below.
-    if (obj != null && Object.getPrototypeOf(obj) !== Object.prototype && typeof obj.update === "function") {
-        for (const o of others) obj.update(o); return;
-    }
-    if (obj instanceof Map) {
-        for (const o of others) for (const [k, v] of (o instanceof Map ? o.entries() : Object.entries(o))) obj.set(k, v);
-        return;
-    }
-    for (const o of others) {
-        if (o instanceof Map) { for (const [k, v] of o.entries()) obj[k] = v; }
-        else Object.assign(obj, o);
-    }
-}
-"#);
-        }
-        if needed.contains("pyClear") {
-            rt.push_str(r#"function pyClear(obj) {
-    if (Array.isArray(obj)) { obj.length = 0; return; }
-    if (obj instanceof Set || obj instanceof Map) { obj.clear(); return; }
-    // Drift fix: custom receivers with their own clear (deque, user classes).
-    const __plain = obj != null && typeof obj === "object" && (Object.getPrototypeOf(obj) === Object.prototype || Object.getPrototypeOf(obj) === null);
-    if (obj != null && !__plain && typeof obj.clear === "function") { obj.clear(); return; }
-    if (obj && typeof obj === "object") { for (const k of Object.keys(obj)) delete obj[k]; return; }
-    { const e = new Error(`object of type '${typeof obj}' has no clear()`); e.name = "TypeError"; throw e; }
-}
-"#);
-        }
-        if needed.contains("pyCopy") {
-            rt.push_str(r#"function pyCopy(obj) {
-    if (Array.isArray(obj)) return obj.slice();
-    if (obj instanceof Set) return new (obj.constructor)(obj);
-    // Custom receivers with their own copy (deque, Counter, OrderedDict,
-    // defaultdict, user classes) — keeps the subclass type + __missing__/factory,
-    // like CPython. Must precede the PyDict/Map fallbacks (#277).
-    if (obj != null && typeof obj.copy === "function") return obj.copy();
-    if (obj instanceof PyDict) return new PyDict(obj);
-    if (obj instanceof Map) return new Map(obj.entries());
-    // Drift fix: match the package TypeError guard for non-object receivers
-    // (`(5).copy()` etc.) instead of returning a bogus `{}`.
-    if (obj && typeof obj === "object") return { ...obj };
-    { const e = new Error(`object of type '${typeof obj}' has no copy()`); e.name = "TypeError"; throw e; }
-}
-"#);
-        }
+        // pyPop: migrated to the #170 extraction (0.2.2 hold item 3) — the
+        // canonical package copy gained the receiver-class guards (None/set/
+        // int/float/bool/str/bytes no longer fall into the dict-pop path with
+        // a wrong-kind KeyError; set.pop() is a real method) and keeping a
+        // hand mirror in sync would be exactly the drift class blocker 2
+        // closed. Inline == package by construction.
+        // WB-6: the hand-written inline pyUpdate mirror was DELETED — it
+        // drifted (no pairs-iterable form, weaker error surface). The #170
+        // extraction now pulls the canonical package pyUpdate with its deps
+        // (__pyUpdatePairs/__pyUpdatePairShape/__pyDictWrite).
+        // WB-6: the hand-written inline pyClear / pyCopy mirrors were DELETED
+        // (same migration as pyUpdate/pyDictGet above) — the #170 extraction
+        // pulls the canonical package copies, which propagate a user
+        // receiver's method return value and share one __isPlainObj rule.
         if needed.contains("pyDictMerge") {
             // Mirrors runtime/src/runtime.js pyDictMerge (#83).
             rt.push_str(r#"function pyDictMerge(...parts) {
@@ -1930,17 +2446,14 @@ class PyDict extends Map {
         for (const p of parts) {
             if (p == null) continue;
             if (p instanceof Map) { for (const [k, v] of p.entries()) out.set(k, v); }
-            else { for (const k of Object.keys(p)) out.set(k, p[k]); }
+            else { for (const k of __pyOwnKeys(p)) out.set(k, p[k]); } // delta4: symbols survive
         }
         return out;
     }
     const out = {};
     for (const p of parts) {
         if (p == null) continue;
-        for (const k of Object.keys(p)) {
-            if (k === "__proto__") Object.defineProperty(out, k, { value: p[k], writable: true, enumerable: true, configurable: true });
-            else out[k] = p[k];
-        }
+        for (const k of __pyOwnKeys(p)) __pyDictWrite(out, k, p[k]); // SEC-7 + delta4
     }
     return out;
 }
@@ -1953,6 +2466,7 @@ class PyDict extends Map {
             // toExponential()'s shortest-round-trip digit string).
             rt.push_str(r#"function pyFormatFloat(n) {
     if (typeof n === "bigint") { const f = Number(n); if (!isFinite(f)) { const e = new Error("int too large to convert to float"); e.name = "OverflowError"; throw e; } n = f; }
+    if (n != null && n.__pyfloat__ === true) n = n.valueOf();
     if (Number.isNaN(n)) return "nan";
     if (n === Infinity) return "inf";
     if (n === -Infinity) return "-inf";
@@ -1996,12 +2510,20 @@ function __cpNonPrintable(cp) {
     while (lo <= hi) { const mid = (lo + hi) >> 1; const a = __NP_RANGES[mid*2], b = __NP_RANGES[mid*2+1]; if (cp < a) hi = mid-1; else if (cp > b) lo = mid+1; else return true; }
     return false;
 }
+const __pyAddrMap = new WeakMap();
+let __pyAddrNext = 0x7f6c00000000;
+function __pyObjAddr(obj) {
+    let a = __pyAddrMap.get(obj);
+    if (a === undefined) { a = __pyAddrNext; __pyAddrNext += 0x40; __pyAddrMap.set(obj, a); }
+    return a.toString(16).padStart(12, "0");
+}
 function pyRepr(obj) {
     if (obj === null || obj === undefined) return "None";
     if (typeof obj === "boolean") return obj ? "True" : "False";
+    if (obj.__pyfloat__ === true) return pyFormatFloat(obj.valueOf());
     if (typeof obj === "object" && typeof obj.__repr__ === "function") return obj.__repr__();
     if (typeof obj === "bigint") return obj.toString();
-    if (typeof obj === "number") { if (Number.isInteger(obj) && Math.abs(obj) <= Number.MAX_SAFE_INTEGER) return String(obj); return pyFormatFloat(obj); }
+    if (typeof obj === "number") { if (Number.isInteger(obj) && Math.abs(obj) <= Number.MAX_SAFE_INTEGER) return String(obj); if (Number.isInteger(obj)) return BigInt(obj).toString(); return pyFormatFloat(obj); }
     if (typeof obj === "string") {
         let body = "";
         for (const ch of obj) {
@@ -2037,7 +2559,16 @@ function pyRepr(obj) {
         const msg = obj.message;
         return `${nm}(${msg != null && msg !== "" ? pyRepr(String(msg)) : ""})`;
     }
-    if (typeof obj === "object") { const parts = []; for (const k of Object.keys(obj)) parts.push(`${pyRepr(k)}: ${pyRepr(obj[k])}`); return `{${parts.join(", ")}}`; }
+    if (typeof obj === "object") {
+        const proto = Object.getPrototypeOf(obj);
+        if (proto !== Object.prototype && proto !== null) {
+            const ctor = obj.constructor;
+            const nm = (ctor && (ctor.__name__ || ctor.name)) || "object";
+            const mod = (ctor && ctor.__module__) || "__main__";
+            return `<${mod}.${nm} object at 0x${__pyObjAddr(obj)}>`;
+        }
+        const parts = []; for (const k of __pyOwnKeys(obj)) parts.push(`${pyRepr(k)}: ${pyRepr(obj[k])}`); return `{${parts.join(", ")}}`; // r6: symbol entries shown
+    }
     return String(obj);
 }
 "#);
@@ -2048,6 +2579,7 @@ function pyRepr(obj) {
             rt.push_str(
                 r#"function pyStr(obj) {
     if (typeof obj === "string") return obj;
+    if (obj != null && obj.__pyfloat__ === true) return pyFormatFloat(obj.valueOf());
     if (obj != null && typeof obj.__str__ === "function") return obj.__str__();
     if (obj instanceof Error) return obj.message != null ? String(obj.message) : "";
     if (obj !== null && typeof obj === "object" && !Array.isArray(obj)
@@ -2060,45 +2592,14 @@ function pyRepr(obj) {
 "#,
             );
         }
-        if needed.contains("pyEq") {
-            rt.push_str(r#"function pyEq(a, b) {
-    if (a === b) return true;
-    if (a == null || b == null) return a == b;
-    { const __n = (x) => typeof x === "bigint" || typeof x === "number" || typeof x === "boolean"; if (__n(a) && __n(b)) return a == b; }
-    if (typeof a.__eq__ === "function") return a.__eq__(b);
-    if (typeof b.__eq__ === "function") return b.__eq__(a);
-    if (Array.isArray(a) && Array.isArray(b)) {
-        if (!!a.__pytuple__ !== !!b.__pytuple__) return false;
-        if (a.length !== b.length) return false;
-        for (let i = 0; i < a.length; i++) if (!pyEq(a[i], b[i])) return false;
-        return true;
-    }
-    if (a instanceof Set && b instanceof Set) {
-        if (a.size !== b.size) return false;
-        for (const x of a) if (!b.has(x)) return false;
-        return true;
-    }
-    {
-        const __plain = (x) => typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype;
-        const aMap = a instanceof Map, bMap = b instanceof Map;
-        if ((aMap || __plain(a)) && (bMap || __plain(b))) {
-            const aLen = aMap ? a.size : Object.keys(a).length;
-            const bLen = bMap ? b.size : Object.keys(b).length;
-            if (aLen !== bLen) return false;
-            for (const [k, v] of (aMap ? a.entries() : Object.entries(a))) {
-                let bHas, bv;
-                if (bMap) { bHas = b.has(k); bv = b.get(k); }
-                else if (typeof k !== "string") return false;
-                else { bHas = Object.prototype.hasOwnProperty.call(b, k); bv = b[k]; }
-                if (!bHas || !pyEq(v, bv)) return false;
-            }
-            return true;
-        }
-    }
-    return a === b;
-}
-"#);
-        }
+        // pyEq is no longer hand-inlined here: the canonical
+        // runtime/src/operators.js definition is pulled by the #170 extractor
+        // with its transitive deps (__isPlainObject, __pyOwnKeys), so the two
+        // copies cannot drift. The old inline copy was exactly such a drift —
+        // it lacked the S1 bound-method-equality branch (a.m == a.m compares
+        // __pyboundfunc__/__pyboundself__ tags), so `pyths run` printed False
+        // where `pyths compile` + the package runtime printed True. Same
+        // de-inline pattern as pyType / pyFormatSpec / pyDict below.
         if needed.contains("__seqLt") {
             // Drift fix: element comparison routes through pyLt (consults BOTH
             // `a.__lt__` and the reflected `b.__gt__`, and recurses on nested
@@ -2119,6 +2620,7 @@ function pyRepr(obj) {
         if needed.contains("pyLt") {
             rt.push_str(
                 r#"function pyLt(a, b) {
+    if (a instanceof Set && b instanceof Set) { if (a.size >= b.size) return false; for (const x of a) { if (!b.has(x)) return false; } return true; }
     if (a != null && typeof a.__lt__ === "function") return a.__lt__(b);
     if (b != null && typeof b.__gt__ === "function") return b.__gt__(a);
     if (Array.isArray(a) && Array.isArray(b)) return __seqLt(a, b);
@@ -2130,6 +2632,7 @@ function pyRepr(obj) {
         if needed.contains("pyLe") {
             rt.push_str(
                 r#"function pyLe(a, b) {
+    if (a instanceof Set && b instanceof Set) { for (const x of a) { if (!b.has(x)) return false; } return true; }
     if (a != null && typeof a.__le__ === "function") return a.__le__(b);
     if (b != null && typeof b.__ge__ === "function") return b.__ge__(a);
     if (Array.isArray(a) && Array.isArray(b)) return !__seqLt(b, a);
@@ -2141,6 +2644,7 @@ function pyRepr(obj) {
         if needed.contains("pyGt") {
             rt.push_str(
                 r#"function pyGt(a, b) {
+    if (a instanceof Set && b instanceof Set) { if (b.size >= a.size) return false; for (const x of b) { if (!a.has(x)) return false; } return true; }
     if (a != null && typeof a.__gt__ === "function") return a.__gt__(b);
     if (b != null && typeof b.__lt__ === "function") return b.__lt__(a);
     if (Array.isArray(a) && Array.isArray(b)) return __seqLt(b, a);
@@ -2152,6 +2656,7 @@ function pyRepr(obj) {
         if needed.contains("pyGe") {
             rt.push_str(
                 r#"function pyGe(a, b) {
+    if (a instanceof Set && b instanceof Set) { for (const x of b) { if (!a.has(x)) return false; } return true; }
     if (a != null && typeof a.__ge__ === "function") return a.__ge__(b);
     if (b != null && typeof b.__le__ === "function") return b.__le__(a);
     if (Array.isArray(a) && Array.isArray(b)) return !__seqLt(a, b);
@@ -2206,12 +2711,30 @@ function __complexRepr(re, im) {
 function __toComplex(o) {
     if (o instanceof PyComplex) return o;
     if (typeof o === "number") return new PyComplex(o, 0);
+    // Option B: a boxed (integer-valued) float coerces by value — this is
+    // THE complex-coercion authority behind complex() and every PyComplex
+    // dunder, so one unbox here covers complex(8.0), 8.0+2j, abs(3.0+4.0j).
+    // (Mirrors the cmath.__c fix; keep both coercion authorities in sync.)
+    if (o != null && o.__pyfloat__ === true) return new PyComplex(o.valueOf(), 0);
     if (typeof o === "bigint") return new PyComplex(Number(o), 0);
     if (typeof o === "boolean") return new PyComplex(o ? 1 : 0, 0);
+    // Cross-copy interop: a complex-shaped object from the OTHER runtime
+    // copy (package stdlib cmath vs the inline program runtime) converts.
+    if (o !== null && typeof o === "object" && typeof o.real === "number" && typeof o.imag === "number") return new PyComplex(o.real, o.imag);
     return null;
 }
 class PyComplex {
-    constructor(re, im) { this.real = re; this.imag = im; }
+    constructor(re, im) {
+        // Option B: a boxed (integer-valued) float component unboxes ONCE
+        // here — the constructor is the single entry for complex(), the
+        // dunders (via __toComplex) and cross-copy coercion, so internals
+        // (repr's `re === 0` check, the arithmetic) always see natives.
+        this.real = re != null && re.__pyfloat__ === true ? re.valueOf() : re;
+        this.imag = im != null && im.__pyfloat__ === true ? im.valueOf() : im;
+    }
+    // Brand for the attribute-read path: complex .real/.imag are FLOATS in
+    // CPython (pyBoundMethod re-tags them via __pyF on the way out).
+    get __pycomplex__() { return true; }
     __add__(o) { const c = __toComplex(o); return c ? new PyComplex(this.real + c.real, this.imag + c.imag) : undefined; }
     __radd__(o) { const c = __toComplex(o); return c ? new PyComplex(c.real + this.real, c.imag + this.imag) : undefined; }
     __sub__(o) { const c = __toComplex(o); return c ? new PyComplex(this.real - c.real, this.imag - c.imag) : undefined; }
@@ -2220,78 +2743,44 @@ class PyComplex {
     __rmul__(o) { const c = __toComplex(o); return c ? new PyComplex(c.real * this.real - c.imag * this.imag, c.real * this.imag + c.imag * this.real) : undefined; }
     __neg__() { return new PyComplex(-this.real, -this.imag); }
     __pos__() { return new PyComplex(this.real, this.imag); }
-    __abs__() { return Math.hypot(this.real, this.imag); }
+    // CPython: abs(complex) is a FLOAT — abs(3.0+4.0j) is 5.0, not int 5.
+    __abs__() { return __pyF(Math.hypot(this.real, this.imag)); }
     __eq__(o) { const c = __toComplex(o); return c ? (this.real === c.real && this.imag === c.imag) : false; }
+    conjugate() { return new PyComplex(this.real, -this.imag); }
+    __truediv__(o) {
+        const c = __toComplex(o); if (!c) return undefined;
+        const d = c.real * c.real + c.imag * c.imag;
+        return new PyComplex((this.real * c.real + this.imag * c.imag) / d, (this.imag * c.real - this.real * c.imag) / d);
+    }
+    __rtruediv__(o) { const c = __toComplex(o); return c ? c.__truediv__(this) : undefined; }
+    __pow__(o) {
+        const c = __toComplex(o); if (!c) return undefined;
+        const r = Math.hypot(this.real, this.imag);
+        if (r === 0) return new PyComplex(0, 0);
+        const lnRe = Math.log(r), lnIm = Math.atan2(this.imag, this.real);
+        const eRe = c.real * lnRe - c.imag * lnIm;
+        const eIm = c.real * lnIm + c.imag * lnRe;
+        const m = Math.exp(eRe);
+        return new PyComplex(m * Math.cos(eIm), m * Math.sin(eIm));
+    }
+    __rpow__(o) { const c = __toComplex(o); return c ? c.__pow__(this) : undefined; }
     __repr__() { return __complexRepr(this.real, this.imag); }
     __str__() { return __complexRepr(this.real, this.imag); }
 }
 function pyComplex(re, im) { return new PyComplex(re, im); }
 "#);
         }
-        if needed.contains("pyContains") {
-            rt.push_str(r#"function pyContains(container, item) {
-    if (container == null) { const e = new Error("argument of type 'NoneType' is not iterable"); e.name = "TypeError"; throw e; }
-    if (typeof container.__contains__ === "function") return container.__contains__(item);
-    if (typeof container === "string") { if (typeof item !== "string") { const e = new Error("'in <string>' requires string as left operand"); e.name = "TypeError"; throw e; } return container.includes(item); }
-    if (Array.isArray(container)) return container.some((x) => pyEq(x, item));
-    if (container instanceof Set) {
-        if (container.has(item)) return true;
-        if (typeof item === "boolean" || typeof item === "number" || typeof item === "bigint") { for (const x of container) if (pyEq(x, item)) return true; }
-        return false;
-    }
-    if (container instanceof Map) return container.has(item);
-    if (container != null && typeof container[Symbol.iterator] === "function") {
-        for (const x of container) { if (pyEq(x, item)) return true; }
-        return false;
-    }
-    return Object.prototype.hasOwnProperty.call(container, item);
-}
-"#);
-        }
-        if needed.contains("pyType") {
-            rt.push_str(r#"class __PyTypeObj {
-    constructor(name) { this.__name__ = name; }
-    __repr__() { return "<class '" + this.__name__ + "'>"; }
-    __str__() { return "<class '" + this.__name__ + "'>"; }
-}
-const __PyInt = new __PyTypeObj("int");
-const __PyFloat = new __PyTypeObj("float");
-const __PyBool = new __PyTypeObj("bool");
-const __PyStr = new __PyTypeObj("str");
-const __PyList = new __PyTypeObj("list");
-const __PyTuple = new __PyTypeObj("tuple");
-const __PySet = new __PyTypeObj("set");
-const __PyDict = new __PyTypeObj("dict");
-const __PyNoneType = new __PyTypeObj("NoneType");
-const __PyTypeMeta = new __PyTypeObj("type");
-const __PyFunction = new __PyTypeObj("function");
-function pyType(v) {
-    if (v === null || v === undefined) return __PyNoneType;
-    switch (typeof v) {
-        case "boolean": return __PyBool;
-        case "number": return Number.isInteger(v) ? __PyInt : __PyFloat;
-        case "bigint": return __PyInt;
-        case "string": return __PyStr;
-        case "function":
-            return /^class[\s{]/.test(Function.prototype.toString.call(v)) ? __PyTypeMeta : __PyFunction;
-    }
-    if (v instanceof __PyTypeObj) return __PyTypeMeta;
-    if (Array.isArray(v)) return v.__pytuple__ ? __PyTuple : __PyList;
-    if (v instanceof Set) return __PySet;
-    if (v instanceof Map) return __PyDict;
-    if (v instanceof Error) {
-        const ec = v.constructor;
-        if (ec && ec !== Error && ec.__name__) return ec;
-        let n = v.name;
-        if (n === "ReferenceError") { n = /before initialization/.test(v.message || "") ? "UnboundLocalError" : "NameError"; }
-        return new __PyTypeObj(n || "Exception");
-    }
-    const ctor = v.constructor;
-    if (ctor && ctor !== Object) return ctor;
-    return __PyDict;
-}
-"#);
-        }
+        // WB-20 analogue: the hand-written inline pyContains mirror was
+        // DELETED — its plain-object membership probe lacked the
+        // unconditional read that registers a host read-trap dependency
+        // (MobX `k in d` tracking), the exact drift class pyDictGet had.
+        // The #170 extraction pulls the canonical package pyContains.
+        // pyType (and the interned type-object singletons it returns) is no
+        // longer hand-inlined here: the canonical runtime/src/runtime.js
+        // definitions — now the CALLABLE __pyType* singletons shared with
+        // value-position builtin type names — are pulled by the #170
+        // extractor with their transitive deps, so the two copies cannot
+        // drift (the old inline copy was exactly such a drift).
         // pyDivmod needs pyFloorDiv/pyMod; pySum needs pyAdd — both live in
         // the arith block.
         if [
@@ -2318,14 +2807,20 @@ function pyType(v) {
         if needed.contains("pyGetItem") {
             rt.push_str(r#"function pyGetItem(obj, key) {
     if (obj == null) { const e = new Error("'NoneType' object is not subscriptable"); e.name = "TypeError"; throw e; }
-    if (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean") { const tn = typeof obj === "boolean" ? "bool" : ((typeof obj === "bigint" || Number.isInteger(obj)) ? "int" : "float"); const e = new Error("'" + tn + "' object is not subscriptable"); e.name = "TypeError"; throw e; }
+    if (key && key.__pyslice__ === true) {
+        if (typeof obj === "string" || Array.isArray(obj) || typeof obj.__getitem__ === "function") return pySlice(obj, key.start, key.stop, key.step);
+        const e = new Error("unhashable type: 'slice'"); e.name = "TypeError"; throw e;
+    }
+    if (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean" || obj.__pyfloat__ === true) { const e = new Error("'" + __pyTypeName(obj) + "' object is not subscriptable"); e.name = "TypeError"; throw e; } // #467: one type-name source
     if (obj instanceof Set) { const e = new Error("'set' object is not subscriptable"); e.name = "TypeError"; throw e; }
+    const __sn = typeof obj === "string" ? "string" : (Array.isArray(obj) ? (obj.__pytuple__ ? "tuple" : "list") : "sequence"); // centralized seq name (delta)
     if (typeof key === "boolean") key = key ? 1 : 0;
     if (typeof key === "bigint" && (typeof obj === "string" || Array.isArray(obj))) {
         if (key >= -9007199254740991n && key <= 9007199254740991n) key = Number(key);
-        else { const e = new Error((typeof obj === "string" ? "string" : "list") + " index out of range"); e.name = "IndexError"; throw e; }
+        else { const e = new Error(__sn + " index out of range"); e.name = "IndexError"; throw e; }
     }
-    if ((typeof obj === "string" || Array.isArray(obj)) && typeof key === "number" && !Number.isInteger(key)) { const e = new Error((typeof obj === "string" ? "string" : "list") + " indices must be integers"); e.name = "TypeError"; throw e; }
+    if ((typeof obj === "string" || Array.isArray(obj)) && typeof key === "number" && !Number.isInteger(key)) { const e = new Error(__sn === "string" ? "string indices must be integers" : (__sn + " indices must be integers or slices, not float")); e.name = "TypeError"; throw e; }
+    if ((typeof obj === "string" || Array.isArray(obj)) && typeof key !== "number" && typeof key !== "string") { const tn = key === null || key === undefined ? "NoneType" : key.__pyfloat__ === true ? "float" : Array.isArray(key) ? (key.__pytuple__ ? "tuple" : "list") : key instanceof Map ? "dict" : key instanceof Set ? "set" : typeof key === "object" ? "dict" : typeof key; const e = new Error(__sn === "string" ? ("string indices must be integers, not '" + tn + "'") : (__sn + " indices must be integers or slices, not " + tn)); e.name = "TypeError"; throw e; }
     if (typeof obj === "string") {
         if (typeof key === "string" || (typeof key === "number" && !Number.isInteger(key))) { const e = new Error("string indices must be integers"); e.name = "TypeError"; throw e; }
         if (/[\uD800-\uDBFF]/.test(obj)) {
@@ -2338,9 +2833,9 @@ function pyType(v) {
         return obj[i];
     }
     if (Array.isArray(obj)) {
-        if (typeof key === "string" || (typeof key === "number" && !Number.isInteger(key))) { const e = new Error("list indices must be integers or slices, not " + (typeof key === "string" ? "str" : "float")); e.name = "TypeError"; throw e; }
+        if (typeof key === "string" || (typeof key === "number" && !Number.isInteger(key))) { const e = new Error(__sn + " indices must be integers or slices, not " + (typeof key === "string" ? "str" : "float")); e.name = "TypeError"; throw e; }
         const n = obj.length; let i = key; if (i < 0) i += n;
-        if (i < 0 || i >= n) { const e = new Error("list index out of range"); e.name = "IndexError"; throw e; }
+        if (i < 0 || i >= n) { const e = new Error(__sn + " index out of range"); e.name = "IndexError"; throw e; }
         return obj[i];
     }
     if (obj instanceof Map) {
@@ -2355,22 +2850,24 @@ function pyType(v) {
         const proto = Object.getPrototypeOf(obj);
         if (proto !== Object.prototype && proto !== null) return obj[key];
     }
-    if (!Object.prototype.hasOwnProperty.call(obj, key)) {
-        const e = new Error(typeof key === "string" ? `'${key}'` : String(key)); e.name = "KeyError"; throw e;
+    const pk = __pyPropKey(key); // delta4: presence-check and read agree on ONE coercion
+    if (!Object.prototype.hasOwnProperty.call(obj, pk)) {
+        const e = new Error(typeof key === "string" ? `'${key}'` : String(pk)); e.name = "KeyError"; throw e;
     }
-    return obj[key];
+    return obj[pk];
 }
 "#);
         }
         if needed.contains("pyFloat") {
             rt.push_str(r#"function pyFloat(x) {
-    if (typeof x === "boolean") return x ? 1 : 0;
-    if (typeof x === "number") return x;
-    if (typeof x === "bigint") { const n = Number(x); if (!isFinite(n)) { const e = new Error("int too large to convert to float"); e.name = "OverflowError"; throw e; } return n; }
+    if (typeof x === "boolean") return __pyF(x ? 1 : 0);
+    if (typeof x === "number") return __pyF(x);
+    if (x != null && x.__pyfloat__ === true) return x;
+    if (typeof x === "bigint") { const n = Number(x); if (!isFinite(n)) { const e = new Error("int too large to convert to float"); e.name = "OverflowError"; throw e; } return __pyF(n); }
     if (typeof x === "string") {
         const t = x.trim();
         const m = /^([+-]?)(inf|infinity|nan)$/i.exec(t);
-        if (m) { if (m[2].toLowerCase() === "nan") return NaN; return m[1] === "-" ? -Infinity : Infinity; }
+        if (m) { if (m[2].toLowerCase() === "nan") return __pyF(NaN); return __pyF(m[1] === "-" ? -Infinity : Infinity); }
         let t2 = t;
         if (t.indexOf("_") !== -1) {
             const isDig = (c) => c >= 48 && c <= 57;
@@ -2380,9 +2877,9 @@ function pyType(v) {
             t2 = t.replace(/_/g, "");
         }
         if (t2 === "" || !/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t2)) { const e = new Error(`could not convert string to float: '${x}'`); e.name = "ValueError"; throw e; }
-        return Number(t2);
+        return __pyF(Number(t2));
     }
-    return Number(x);
+    return __pyF(Number(x));
 }
 "#);
         }
@@ -2392,34 +2889,16 @@ function pyType(v) {
     if (obj == null) { const e = new Error("'NoneType' object is not iterable"); e.name = "TypeError"; throw e; }
     if (typeof obj[Symbol.iterator] === "function") return obj[Symbol.iterator]();
     if (typeof obj.__iter__ === "function") return obj.__iter__();
-    const e = new Error("object is not iterable"); e.name = "TypeError"; throw e;
+    if (obj.__pyfloat__ === true) { const e = new Error("'float' object is not iterable"); e.name = "TypeError"; throw e; }
+    const e = new Error("'" + __pyTypeName(obj) + "' object is not iterable"); e.name = "TypeError"; throw e; // #467
 }
 "#);
         }
-        if needed.contains("__pyCallKw") || needed.contains("__pyKwArgs") {
-            // Mirrors runtime/src/runtime.js __pyKwArgs/__pyCallKw
-            // (round-2/-3 kwargs binding).
-            rt.push_str(r#"function __pyKwArgs(fn, pos, kw) {
-    const entries = kw instanceof Map ? Array.from(kw.entries()) : Object.entries(kw);
-    const names = fn ? fn.__pyparams__ : undefined;
-    if (!names) { const legacy = {}; for (const [k, v] of entries) legacy[k] = v; return [...pos, legacy]; }
-    const fname = (fn && fn.name) || "function";
-    const args = pos.slice();
-    let rest = null;
-    for (const [k, v] of entries) {
-        const idx = names.indexOf(k);
-        if (idx >= 0) {
-            if (idx < pos.length) { const e = new Error(fname + "() got multiple values for argument '" + k + "'"); e.name = "TypeError"; throw e; }
-            args[idx] = v;
-        } else if (fn.__pykw__) { (rest = rest || {})[k] = v; }
-        else { const e = new Error(fname + "() got an unexpected keyword argument '" + k + "'"); e.name = "TypeError"; throw e; }
-    }
-    if (fn.__pykw__) args[names.length] = rest || {};
-    return args;
-}
-function __pyCallKw(fn, pos, kw) { return fn(...__pyKwArgs(fn, pos, kw)); }
-"#);
-        }
+        // autotester arguments/decorators: the hand-written inline
+        // __pyKwArgs/__pyCallKw mirror was DELETED (drift trap — it lacked
+        // the __pyva__ variadic keyword-carrier path). The #170 extraction
+        // pulls the canonical runtime copies with their deps (__pyMarkKw,
+        // __PYKW_MARK, __pyDictWrite, ...).
         if needed.contains("pyNext") {
             rt.push_str(r#"function pyNext(it, ...rest) {
     if (it == null || typeof it.next !== "function") { const e = new Error("object is not an iterator"); e.name = "TypeError"; throw e; }
@@ -2438,7 +2917,8 @@ function __pyCallKw(fn, pos, kw) { return fn(...__pyKwArgs(fn, pos, kw)); }
     if (typeof x === "number") {
         if (Number.isNaN(x)) { const e = new Error("cannot convert float NaN to integer"); e.name = "ValueError"; throw e; }
         if (!Number.isFinite(x)) { const e = new Error("cannot convert float infinity to integer"); e.name = "OverflowError"; throw e; }
-        return Math.trunc(x);
+        const t = Math.trunc(x);
+        return Number.isSafeInteger(t) ? t : BigInt(t);
     }
     if (typeof x === "string") {
         const b = base == null ? 10 : Number(base);
@@ -2461,32 +2941,15 @@ function __pyCallKw(fn, pos, kw) { return fn(...__pyKwArgs(fn, pos, kw)); }
         return v;
     }
     if (x != null && typeof x.__int__ === "function") return x.__int__();
-    return Math.trunc(Number(x));
+    const t = Math.trunc(Number(x));
+    return Number.isSafeInteger(t) || !Number.isFinite(t) ? t : BigInt(t);
 }
 "#);
         }
-        if needed.contains("pyDelItem") {
-            // Mirrors runtime/src/runtime.js pyDelItem (#101).
-            rt.push_str(r#"function pyDelItem(obj, key) {
-    if (obj == null) { const e = new Error("'NoneType' object does not support item deletion"); e.name = "TypeError"; throw e; }
-    if (Array.isArray(obj)) {
-        const n = obj.length;
-        let i = typeof key === "bigint" ? Number(key) : key;
-        if (i < 0) i += n;
-        if (!Number.isInteger(i) || i < 0 || i >= n) { const e = new Error("list assignment index out of range"); e.name = "IndexError"; throw e; }
-        obj.splice(i, 1);
-        return;
-    }
-    if (obj instanceof Map) {
-        if (!obj.delete(key)) { const e = new Error(typeof key === "string" ? `'${key}'` : String(key)); e.name = "KeyError"; throw e; }
-        return;
-    }
-    if (typeof obj.__delitem__ === "function") { obj.__delitem__(key); return; }
-    if (!Object.prototype.hasOwnProperty.call(obj, key)) { const e = new Error(typeof key === "string" ? `'${key}'` : String(key)); e.name = "KeyError"; throw e; }
-    delete obj[key];
-}
-"#);
-        }
+        // pyDelItem: migrated to the #170 extraction with pySetItem (see the
+        // blocker-2 comment above) — the canonical package copy carries the
+        // 1b28bae5 error-kind fixes (TypeError for non-integer index / tuple /
+        // non-subscriptable receivers) the inline mirror lacked.
         if needed.contains("pyChr") {
             rt.push_str(r#"function pyChr(n) {
     const i = typeof n === "bigint" ? Number(n) : Math.trunc(Number(n));
@@ -2536,41 +2999,9 @@ function __pyCallKw(fn, pos, kw) { return fn(...__pyKwArgs(fn, pos, kw)); }
 "#,
             );
         }
-        if needed.contains("pyMin") || needed.contains("pyMax") {
-            // Mirrors runtime/src/runtime.js pyMin/pyMax (#88).
-            rt.push_str(r#"function __pyMinmax(name, wantGreater, args) {
-    let key = null, dflt, hasDefault = false;
-    if (args.length > 1) {
-        const last = args[args.length - 1];
-        if (last !== null && typeof last === "object"
-            && Object.getPrototypeOf(last) === Object.prototype
-            && (Object.prototype.hasOwnProperty.call(last, "key")
-                || Object.prototype.hasOwnProperty.call(last, "default"))) {
-            if (last.key != null) key = last.key;
-            if (Object.prototype.hasOwnProperty.call(last, "default")) { dflt = last.default; hasDefault = true; }
-            args = args.slice(0, -1);
-        }
-    }
-    const items = args.length === 1 ? [...pyForIter(args[0])] : args;
-    if (items.length === 0) {
-        if (hasDefault) return dflt;
-        const e = new Error(`${name}() iterable argument is empty`); e.name = "ValueError"; throw e;
-    }
-    let best = items[0];
-    let bestKey = key ? key(best) : best;
-    for (let i = 1; i < items.length; i++) {
-        const k = key ? key(items[i]) : items[i];
-        const better = wantGreater
-            ? (typeof k?.__gt__ === "function" ? k.__gt__(bestKey) : k > bestKey)
-            : (typeof k?.__lt__ === "function" ? k.__lt__(bestKey) : k < bestKey);
-        if (better) { best = items[i]; bestKey = k; }
-    }
-    return best;
-}
-function pyMin(...args) { return __pyMinmax("min", false, args); }
-function pyMax(...args) { return __pyMinmax("max", true, args); }
-"#);
-        }
+        // autotester module_builtin: the hand-written inline __pyMinmax/pyMin/
+        // pyMax mirror was DELETED (drift trap — it kept the pre-fix no-arg
+        // ValueError). The #170 extraction pulls the canonical runtime copy.
         if needed.contains("pyBitOr")
             || needed.contains("pyBitAnd")
             || needed.contains("pyBitXor")
@@ -2587,35 +3018,26 @@ function pyMax(...args) { return __pyMinmax("max", true, args); }
 const __bigNorm = (b) => (b >= -9007199254740991n && b <= 9007199254740991n ? Number(b) : b);
 const __asBig = (x) => (typeof x === "bigint" ? x : BigInt(x));
 const __bitIntOk = (x) => typeof x === "bigint" || typeof x === "boolean" || (typeof x === "number" && Number.isInteger(x));
-// NOTE: named __bitTypeName (NOT __opTypeName) on purpose — PY_ARITH_JS emits
-// its own top-level `__opTypeName`, and both blocks can be emitted for the same
-// program (arithmetic + bit-ops), so a shared name would double-declare. Drift
-// fix: the set/dict arms below were missing (reported 'object' where the package
-// __opTypeName reports 'set'/'dict').
-function __bitTypeName(v) {
-    if (v === null || v === undefined) return "NoneType";
-    if (typeof v === "boolean") return "bool";
-    if (typeof v === "number") return Number.isInteger(v) ? "int" : "float";
-    if (typeof v === "bigint") return "int";
-    if (typeof v === "string") return "str";
-    if (Array.isArray(v)) return v.__pytuple__ ? "tuple" : "list";
-    if (v instanceof Set) return "set";
-    if (v instanceof Map) return "dict";
-    const c = v && v.constructor;
-    return (c && (c.__name__ || c.name)) || "object";
-}
 "#);
+            // #469: the old local __bitTypeName copy here lacked the
+            // __pyfloat__ arm — a boxed integer-valued float leaked 'PyFloat'
+            // in bit-op messages while `+` said 'float' for the SAME value
+            // (and function/class/plain-object leaked 'Function'/'Object').
+            // Bit messages now reference __pyTypeName, extracted ON USE from
+            // the canonical runtime.js — one computer, no double-declare
+            // (extraction dedupes), no drift by construction.
             if needed.contains("pyBitOr")
                 || needed.contains("pyBitAnd")
                 || needed.contains("pyBitXor")
             {
                 rt.push_str(r#"function __reqBitInt(op, a, b, fctx) {
     fctx = fctx || 0;
-    if (fctx || !__bitIntOk(a) || !__bitIntOk(b)) { const an = (fctx & 1) ? "float" : __bitTypeName(a); const bn = (fctx & 2) ? "float" : __bitTypeName(b); const e = new Error(`unsupported operand type(s) for ${op}: '${an}' and '${bn}'`); e.name = "TypeError"; throw e; }
+    if (fctx || !__bitIntOk(a) || !__bitIntOk(b)) { const an = (fctx & 1) ? "float" : __pyTypeName(a); const bn = (fctx & 2) ? "float" : __pyTypeName(b); const e = new Error(`unsupported operand type(s) for ${op}: '${an}' and '${bn}'`); e.name = "TypeError"; throw e; }
 }
 function pyBitOr(a, b, fctx) {
     if (a instanceof Set && b instanceof Set) { const out = new (a.constructor)(a); for (const v of b) out.add(v); return out; }
     if (a != null && typeof a.__or__ === "function") return a.__or__(b);
+    if (b != null && typeof b.__ror__ === "function") return b.__ror__(a);
     const __plainD = (x) => x !== null && typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype;
     if ((a instanceof Map || __plainD(a)) && (b instanceof Map || __plainD(b))) return pyDictMerge(a, b);
     __reqBitInt("|", a, b, fctx);
@@ -2630,6 +3052,7 @@ function pyBitAnd(a, b, fctx) {
         return out;
     }
     if (a != null && typeof a.__and__ === "function") return a.__and__(b);
+    if (b != null && typeof b.__rand__ === "function") return b.__rand__(a);
     __reqBitInt("&", a, b, fctx);
     if (__fits32(a) && __fits32(b)) return a & b;
     return __bigNorm(__asBig(a) & __asBig(b));
@@ -2642,6 +3065,7 @@ function pyBitXor(a, b, fctx) {
         return out;
     }
     if (a != null && typeof a.__xor__ === "function") return a.__xor__(b);
+    if (b != null && typeof b.__rxor__ === "function") return b.__rxor__(a);
     __reqBitInt("^", a, b, fctx);
     if (__fits32(a) && __fits32(b)) return a ^ b;
     return __bigNorm(__asBig(a) ^ __asBig(b));
@@ -2656,7 +3080,7 @@ function pyBitXor(a, b, fctx) {
                 // statically float (#343 discipline, unary form).
                 rt.push_str(r#"function pyBitNot(a, fctx) {
     if (a != null && typeof a.__invert__ === "function") return a.__invert__();
-    if (fctx || !__bitIntOk(a)) { const an = fctx ? "float" : __bitTypeName(a); const e = new Error(`bad operand type for unary ~: '${an}'`); e.name = "TypeError"; throw e; }
+    if (fctx || !__bitIntOk(a)) { const an = fctx ? "float" : __pyTypeName(a); const e = new Error(`bad operand type for unary ~: '${an}'`); e.name = "TypeError"; throw e; }
     if (__fits32(a)) return ~a;
     return __bigNorm(-__asBig(a) - 1n);
 }
@@ -2704,7 +3128,7 @@ function pyBitXor(a, b, fctx) {
     if (Array.isArray(iterable)) {
         items = iterable.slice();
     } else if (iterable !== null && typeof iterable === "object" && typeof iterable[Symbol.iterator] !== "function" && Object.getPrototypeOf(iterable) === Object.prototype) {
-        items = Object.keys(iterable);
+        items = __pyOwnKeys(iterable); // r6: symbol keys included
     } else {
         items = [...iterable];
     }
@@ -2729,152 +3153,12 @@ function pyBitXor(a, b, fctx) {
 "#);
         }
 
-        if needed.contains("pyFormatSpec") {
-            // Mirrors runtime/src/runtime.js pyFormatSpec (#129).
-            rt.push_str(r##"function pyFormatSpec(value, opts, isFloat) {
-    opts = opts || {};
-    const ty = opts.type;
-    if (typeof value === "string" && ty != null && ty !== "s") {
-        const e = new Error(`Unknown format code '${ty}' for object of type 'str'`);
-        e.name = "ValueError";
-        throw e;
-    }
-    let s;
-    let isNumeric = false;
-    let neg = false;
-
-    // Group a digit string from the right (CPython: `,`/`_` every 3 for
-    // decimal, `_` every 4 for b/o/x/X). Digit-agnostic (hex letters).
-    const group = (str, size, sep) => {
-        let out = "";
-        for (let i = str.length; i > 0; i -= size) {
-            const chunk = str.slice(Math.max(0, i - size), i);
-            out = out ? chunk + sep + out : chunk;
-        }
-        return out;
-    };
-
-    if (ty === "s" || ty === undefined && typeof value === "string") {
-        s = String(value);
-        if (opts.precision != null) s = s.slice(0, opts.precision);
-    } else if (ty === "b" || ty === "o" || ty === "x" || ty === "X" || ty === "d" || ty === "n" || ty === "c"
-        || (ty === undefined && typeof value === "bigint")) {
-        isNumeric = true;
-        if (ty === "c") {
-            s = String.fromCodePoint(Number(value));
-        } else {
-            // Keep BigInt ints exact (arbitrary precision) — never round
-            // through Number.
-            let n = typeof value === "bigint" ? value : Math.trunc(Number(value));
-            neg = n < 0;
-            if (neg) n = -n;
-            const radix = ty === "b" ? 2 : ty === "o" ? 8 : (ty === "x" || ty === "X") ? 16 : 10;
-            s = n.toString(radix);
-            if (ty === "X") s = s.toUpperCase();
-            // Grouping applies to the digits only; the #-prefix goes
-            // OUTSIDE the grouped digits (0b1010_1010).
-            if (opts.grouping) s = group(s, radix === 10 ? 3 : 4, opts.grouping);
-            if (opts.alt) {
-                if (radix === 2) s = "0b" + s;
-                else if (radix === 8) s = "0o" + s;
-                else if (radix === 16) s = (ty === "X" ? "0X" : "0x") + s;
-            }
-        }
-    } else if (ty === "e" || ty === "E" || ty === "f" || ty === "F" || ty === "g" || ty === "G" || ty === "%" || ty === undefined) {
-        isNumeric = true;
-        let n = Number(value);
-        if (ty === "%") n = n * 100;
-        neg = n < 0 || Object.is(n, -0);
-        n = Math.abs(n);
-        const prec = opts.precision != null ? opts.precision : 6;
-        if (ty === "e" || ty === "E") {
-            s = n.toExponential(prec);
-            // CPython zero-pads the exponent to at least 2 digits
-            // (e+03, e-04). JS toExponential produces e+3 / e-4. Patch
-            // by normalizing the trailing exponent.
-            s = s.replace(/e([+-])(\d)$/, "e$10$2");
-            if (ty === "E") s = s.toUpperCase();
-        } else if (ty === "g" || ty === "G") {
-            // CPython 'g': with precision p (default 6; 0 → 1), let exp be
-            // the decimal exponent of the value rounded to p significant
-            // digits. If -4 <= exp < p → fixed notation, else scientific;
-            // trailing zeros stripped (unless '#'), exponent >= 2 digits.
-            let p = prec;
-            if (p === 0) p = 1;
-            if (n === 0) {
-                s = "0";
-            } else if (!Number.isFinite(n)) {
-                s = n === Infinity ? "inf" : "nan";
-            } else {
-                const m = /^(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(n.toExponential(p - 1));
-                const digits = m[1] + (m[2] || "");
-                const exp10 = parseInt(m[3], 10);
-                if (exp10 >= -4 && exp10 < p) {
-                    if (exp10 >= 0) {
-                        s = digits.length <= exp10 + 1
-                            ? digits + "0".repeat(exp10 + 1 - digits.length)
-                            : digits.slice(0, exp10 + 1) + "." + digits.slice(exp10 + 1);
-                    } else {
-                        s = "0." + "0".repeat(-exp10 - 1) + digits;
-                    }
-                    if (!opts.alt && s.includes(".")) s = s.replace(/\.?0+$/, "");
-                } else {
-                    let mant = opts.alt ? digits : digits.replace(/0+$/, "") || "0";
-                    const mantStr = mant.length > 1 ? mant[0] + "." + mant.slice(1) : mant;
-                    s = mantStr + "e" + (exp10 < 0 ? "-" : "+") + String(Math.abs(exp10)).padStart(2, "0");
-                }
-            }
-            if (ty === "G") s = s.toUpperCase();
-        } else if (ty === "%") {
-            // Round-half-even on the exact double, like CPython (#86).
-            s = __fixedHalfEven(n, opts.precision != null ? opts.precision : 6) + "%";
-        } else if (ty === "f" || ty === "F" || opts.precision != null) {
-            s = __fixedHalfEven(n, prec);
-        } else if (isFloat) {
-            s = pyFormatFloat(n);
-        } else {
-            s = String(n);
-        }
-        if ((ty === "f" || ty === "F" || ty === undefined) && opts.grouping) {
-            // Insert separators in the integer part only.
-            const dot = s.indexOf(".");
-            const intPart = dot === -1 ? s : s.slice(0, dot);
-            const fracPart = dot === -1 ? "" : s.slice(dot);
-            s = group(intPart, 3, opts.grouping) + fracPart;
-        }
-    } else {
-        s = String(value);
-    }
-
-    // Sign handling for numeric values
-    let signStr = "";
-    if (isNumeric) {
-        if (neg) signStr = "-";
-        else if (opts.sign === "+") signStr = "+";
-        else if (opts.sign === " ") signStr = " ";
-    }
-
-    // Width / fill / align
-    const width = opts.width || 0;
-    if (width > 0) {
-        const fill = opts.fill || (opts.zero && isNumeric ? "0" : " ");
-        const align = opts.align || (opts.zero && isNumeric ? "=" : (isNumeric ? ">" : "<"));
-        const total = signStr.length + s.length;
-        if (total < width) {
-            const need = width - total;
-            if (align === "<") return signStr + s + fill.repeat(need);
-            if (align === ">") return fill.repeat(need) + signStr + s;
-            if (align === "^") {
-                const left = Math.floor(need / 2);
-                return fill.repeat(left) + signStr + s + fill.repeat(need - left);
-            }
-            if (align === "=") return signStr + fill.repeat(need) + s;
-        }
-    }
-    return signStr + s;
-}
-"##);
-        }
+        // autotester string_format: the hand-written inline pyFormatSpec mirror
+        // was DELETED (it drifted from the canonical runtime — the exact
+        // whack-a-mole the #170 extraction fallback exists to prevent).
+        // pyFormatSpec is now extracted from runtime/src/runtime.js on use;
+        // its deps (__fixedHalfEven, pyFormatFloat) are preloaded above and
+        // still hand-written inline, so the extractor links against them.
 
         if needed.contains("pyFormatDynamic") {
             // Mirrors runtime/src/runtime.js parseFormatSpec +
@@ -2928,6 +3212,51 @@ function pyFormatDynamic(value, specStr) {
         // again lag behind `pyths compile`'s imported runtime.
         Self::append_extracted_helpers(needed, &mut rt);
 
+        // Bytes dispatch authority: __pyBytesKind is referenced by hand-written
+        // blocks the extractor does not scan (PY_OBJECT_MODEL_JS's
+        // __pyIsInstance bytes/bytearray cases). Emit it ON USE by scanning the
+        // assembled runtime — same discipline as __pyOwnKeys below — but pull
+        // the CANONICAL runtime.js definition via the extractor rather than a
+        // second hand copy, so the recognizer can never drift.
+        if rt.contains("__pyBytesKind(") && !Self::inline_defines(&rt, "__pyBytesKind") {
+            let mut extra: HashSet<String> = HashSet::new();
+            extra.insert("__pyBytesKind".to_string());
+            Self::append_extracted_helpers(&extra, &mut rt);
+        }
+
+        // #467: __pyTypeName is THE value-model type-name source for error
+        // messages ("'float' object is not iterable", …). Hand-written inline
+        // mirrors (pySeq/pyForIter/pyIter/pyGetItem/pyLen) reference it, and
+        // the extractor does not scan hand blocks — emit it ON USE (same
+        // discipline as __pyBytesKind above), pulling the CANONICAL runtime.js
+        // definition (with pyType + the interned type singletons as transitive
+        // deps) so inline `pyths run` names types exactly like the package.
+        if rt.contains("__pyTypeName(") && !Self::inline_defines(&rt, "__pyTypeName") {
+            let mut extra: HashSet<String> = HashSet::new();
+            extra.insert("__pyTypeName".to_string());
+            Self::append_extracted_helpers(&extra, &mut rt);
+        }
+
+        // delta4 round-6: __pyOwnKeys (own enumerable string+symbol keys) is
+        // referenced by MANY dict-family blocks — len/bool/eq/keys/values/
+        // items/popitem/clear/iteration/repr/merge/update/dict()/PyDict.
+        // Emit it ON USE, by scanning the assembled runtime, so a future
+        // block that adopts it can never emit a dangling reference (a
+        // per-consumer condition list is exactly what would drift). Function
+        // declarations hoist, so appending at the end is order-safe; the
+        // inline_defines guard avoids a duplicate when the #170 extraction
+        // already pulled the canonical package copy.
+        if rt.contains("__pyOwnKeys(") && !Self::inline_defines(&rt, "__pyOwnKeys") {
+            rt.push_str(
+                r#"function __pyOwnKeys(o) {
+    const out = Object.keys(o);
+    for (const s of Object.getOwnPropertySymbols(o)) { const d = Object.getOwnPropertyDescriptor(o, s); if (d && d.enumerable) out.push(s); }
+    return out;
+}
+"#,
+            );
+        }
+
         rt.push_str("// --- End Runtime ---\n");
         rt
     }
@@ -2935,9 +3264,15 @@ function pyFormatDynamic(value, specStr) {
     /// Package runtime sources embedded at build time (single source of truth
     /// for the #170 fallback). Order matters: first definition of a name wins,
     /// and runtime.js is preferred over operators.js.
-    const PKG_RUNTIME_SOURCES: [&'static str; 2] = [
+    const PKG_RUNTIME_SOURCES: [&'static str; 4] = [
         include_str!("../../../runtime/src/runtime.js"),
         include_str!("../../../runtime/src/operators.js"),
+        // types.js (pyBool — referenced by the __pyTypeBool singleton) and
+        // classes.js (__pyIsSubclass) joined the extraction surface so the
+        // inline `pyths run` path can never dangle on their helpers. Order
+        // still matters: first definition of a name wins.
+        include_str!("../../../runtime/src/types.js"),
+        include_str!("../../../runtime/src/classes.js"),
     ];
 
     /// Split the embedded package-runtime sources into named top-level slices.
@@ -2970,7 +3305,23 @@ function pyFormatDynamic(value, specStr) {
         let mut slices: Vec<(String, String)> = Vec::new();
         let mut by_name: HashMap<String, usize> = HashMap::new();
         for src in Self::PKG_RUNTIME_SOURCES {
-            let lines: Vec<&str> = src.lines().collect();
+            // DX-4: the shipped runtime files now end with a
+            // `//# sourceMappingURL=<file>.js.map` comment (step-into
+            // ignore-listing). The slicer attaches trailing lines to the LAST
+            // declaration, which would smuggle a dangling map reference into
+            // inline `pyths run` output — drop such lines before slicing.
+            let lines: Vec<&str> = src
+                .lines()
+                .filter(|l| {
+                    let t = l.trim_start();
+                    // Drop map pragmas AND bare re-export statements
+                    // (`export { PyDict } from "./runtime.js";` in types.js)
+                    // — a slice that swallowed one would smuggle ESM module
+                    // syntax into the inline `pyths run` script. The real
+                    // definitions are their own slices.
+                    !t.starts_with("//# sourceMappingURL=") && !t.starts_with("export {")
+                })
+                .collect();
             let mut starts: Vec<(usize, String)> = Vec::new();
             for (i, l) in lines.iter().enumerate() {
                 if l.starts_with("import ") || l.starts_with("export {") {
@@ -3116,6 +3467,25 @@ function pyFormatDynamic(value, specStr) {
         (js, map)
     }
 
+    /// Like [`finish_with_sourcemap`] but returns the RAW resolved mappings
+    /// (final-JS positions, prelude shift applied) instead of serialized JSON.
+    /// Used by `pyths bundle --sourcemap` to compose per-module maps into one
+    /// multi-source bundle map.
+    pub fn finish_with_raw_map(mut self) -> (String, Vec<sourcemap::Mapping>) {
+        let mut sm = self.sourcemap.take();
+        let (js, body_shift, directive_len) = self.finish_certified();
+        let mappings = if let Some(mut sm) = sm.take() {
+            let body_start_byte = body_shift + directive_len;
+            let body_start_line = js[..body_start_byte.min(js.len())].matches('\n').count() as u32;
+            let directive_lines = js[..directive_len.min(js.len())].matches('\n').count() as u32;
+            sm.set_line_shift(body_start_line - directive_lines, directive_lines);
+            sm.resolved_mappings()
+        } else {
+            Vec::new()
+        };
+        (js, mappings)
+    }
+
     /// Record a source map mapping from the current output position to an original byte offset.
     fn mark_mapping(&mut self, orig_byte_offset: usize) {
         if let (Some(sm), Some(src)) = (&mut self.sourcemap, &self.source_text) {
@@ -3162,6 +3532,21 @@ function pyFormatDynamic(value, specStr) {
     }
 
     fn need_runtime(&mut self, name: &str) {
+        // delta4 drift guard, direction 1 of 2: the emitter must never
+        // register a runtime import that is not in the checked manifest
+        // (EMITTABLE_RUNTIME_SYMBOLS). Direction 2 — every manifest symbol is
+        // actually EXPORTED by BOTH package entry points (index.js AND the
+        // worker core.js) — is enforced by the cli_test.rs node cross-check
+        // `runtime_export_surface_covers_all_emittable_symbols`. Together
+        // they make "compiler emits a symbol the runtime doesn't export"
+        // impossible to land: a new helper must be added to the manifest
+        // (or this fires all over the debug test suite), and the manifest
+        // entry fails CI until both entries export it. This is the SOLE
+        // write path into `runtime_imports` — do not insert directly.
+        debug_assert!(
+            EMITTABLE_RUNTIME_SYMBOLS.contains(&name),
+            "runtime helper `{name}` is not in EMITTABLE_RUNTIME_SYMBOLS              (emit.rs); add it there AND export it from BOTH              runtime/src/index.js and runtime/src/core.js (the export-*              surface makes that automatic once it lives in one of the four              canonical helper modules)"
+        );
         self.runtime_imports.insert(name.to_string());
     }
 
@@ -3291,6 +3676,8 @@ function pyFormatDynamic(value, specStr) {
                     "tuple" => Some("tuple"),
                     "bool" => Some("bool"),
                     "float" => Some("float"),
+                    "bytes" => Some("bytes"),
+                    "bytearray" => Some("bytearray"),
                     _ => None,
                 };
             }
@@ -3419,18 +3806,102 @@ function pyFormatDynamic(value, specStr) {
         }
     }
 
-    fn push_scope(&mut self) {
+    /// Enter a new Python scope. `bindings` is the PRE-COMPUTED complete local
+    /// binding set (issue #438) used for order-independent shadow resolution.
+    fn push_scope(&mut self, bindings: HashSet<String>) {
         self.declared_scopes.push(HashSet::new());
+        self.scope_bindings.push(bindings);
+        // Empty by default; func/method sites populate it with their `global`
+        // declarations right after pushing (see `set_scope_globals`).
+        self.scope_globals.push(HashSet::new());
         self.hoisted_scopes.push(HashSet::new());
         self.sentinel_scopes.push(HashSet::new());
         self.local_types.push(HashMap::new());
+        self.scope_import_decls.push(HashMap::new());
+        self.dotted_import_scopes.push(DottedImportScope::default());
     }
 
     fn pop_scope(&mut self) {
         self.declared_scopes.pop();
+        self.scope_bindings.pop();
+        self.scope_globals.pop();
         self.hoisted_scopes.pop();
         self.sentinel_scopes.pop();
         self.local_types.pop();
+        self.scope_import_decls.pop();
+        self.dotted_import_scopes.pop();
+    }
+
+    /// Record the `global`-declared names of the just-pushed function scope
+    /// (review finding 2), so a `global X` reference resolves at module scope.
+    fn set_scope_globals(&mut self, globals: HashSet<String>) {
+        if let Some(top) = self.scope_globals.last_mut() {
+            *top = globals;
+        }
+    }
+
+    /// Names declared `global` (NOT `nonlocal`) directly in this body, honoring
+    /// nested control-flow but not nested def/class scopes.
+    fn collect_global_declared(body: &[Stmt]) -> HashSet<String> {
+        fn walk(stmts: &[Stmt], out: &mut HashSet<String>) {
+            for s in stmts {
+                match &s.kind {
+                    StmtKind::Global(names) => {
+                        for n in names {
+                            out.insert(n.clone());
+                        }
+                    }
+                    StmtKind::If {
+                        body,
+                        elif_clauses,
+                        else_body,
+                        ..
+                    } => {
+                        walk(body, out);
+                        for (_, b) in elif_clauses {
+                            walk(b, out);
+                        }
+                        if let Some(b) = else_body {
+                            walk(b, out);
+                        }
+                    }
+                    StmtKind::While { body, else_body, .. }
+                    | StmtKind::For { body, else_body, .. } => {
+                        walk(body, out);
+                        if let Some(b) = else_body {
+                            walk(b, out);
+                        }
+                    }
+                    StmtKind::With { body, .. } => walk(body, out),
+                    StmtKind::Try {
+                        body,
+                        handlers,
+                        else_body,
+                        finally_body,
+                    } => {
+                        walk(body, out);
+                        for h in handlers {
+                            walk(&h.body, out);
+                        }
+                        if let Some(b) = else_body {
+                            walk(b, out);
+                        }
+                        if let Some(b) = finally_body {
+                            walk(b, out);
+                        }
+                    }
+                    StmtKind::Match { cases, .. } => {
+                        for c in cases {
+                            walk(&c.body, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut out = HashSet::new();
+        walk(body, &mut out);
+        out
     }
 
     /// #269: mark `name` as genuinely hoisted (a function/module-scope `let`)
@@ -3459,19 +3930,64 @@ function pyFormatDynamic(value, specStr) {
         }
     }
 
-    /// PBT-2: is `name` a sentinel-initialized hoisted for-target in the
-    /// CURRENT scope? (Outer-scope sentinels are deliberately not guarded —
-    /// closure reads of an outer loop var keep their existing behavior.)
-    fn is_sentinel(&self, name: &str) -> bool {
-        self.sentinel_scopes
-            .last()
-            .is_some_and(|s| s.contains(name))
-    }
-
-    /// PBT-2: true while emitting module scope (sentinel reads there raise
-    /// NameError, not UnboundLocalError).
-    fn at_module_scope(&self) -> bool {
-        self.sentinel_scopes.len() == 1
+    /// PBT-2 / #452 (review blocker 2): classify a READ of a
+    /// sentinel-initialized hoisted for-target, SCOPE-CHAIN aware — CPython's
+    /// three distinct unbound-read behaviors depend on which scope OWNS the
+    /// variable, not on where the read happens:
+    ///   - `Local`: the innermost function scope owns it → UnboundLocalError
+    ///     guard (`__pyChkLocal`).
+    ///   - `Free`: an ENCLOSING function scope owns it (closure read,
+    ///     `nonlocal` included) → free-variable NameError guard
+    ///     (`__pyChkFree`).
+    ///   - `Global`: module scope owns it (module-level read, a read from a
+    ///     nested function with no intervening binding, or `global`-declared)
+    ///     → CPython's dynamic globals → builtins chain: builtin-named reads
+    ///     fall back to the builtin value, the rest raise NameError
+    ///     (`__pyChkGlobal`).
+    /// `None`: not a sentinel read — the name resolves to a real binding
+    /// before any sentinel-owning frame is reached.
+    fn sentinel_read(&self, name: &str) -> Option<SentinelRead> {
+        let n = self.sentinel_scopes.len();
+        // Innermost frame owns it as a sentinel → Local (Global at module).
+        if self.sentinel_scopes[n - 1].contains(name) {
+            return Some(if n == 1 {
+                SentinelRead::Global
+            } else {
+                SentinelRead::Local
+            });
+        }
+        if n == 1 {
+            return None;
+        }
+        // `global name` in the innermost function scope resolves at module
+        // scope ONLY — skip every intervening frame (same rule as
+        // `is_declared_in_any_scope`, review finding 2).
+        if !self.scope_globals[n - 1].contains(name) {
+            // The innermost frame binds it normally → not a sentinel read.
+            if self.scope_bindings[n - 1].contains(name) {
+                return None;
+            }
+            // Walk the enclosing function-like frames outward: the first
+            // frame that binds the name decides — a sentinel there is an
+            // unbound FREE variable; a normal binding shadows anything
+            // further out. (Comprehension frames bind only their targets and
+            // never mark sentinels, so they pass through transparently.)
+            for i in (1..n - 1).rev() {
+                if self.sentinel_scopes[i].contains(name) {
+                    return Some(SentinelRead::Free);
+                }
+                if self.scope_bindings[i].contains(name) {
+                    return None;
+                }
+            }
+        }
+        // Module frame: a module-owned sentinel read from any depth is a
+        // GLOBAL read.
+        if self.sentinel_scopes[0].contains(name) {
+            Some(SentinelRead::Global)
+        } else {
+            None
+        }
     }
 
     /// Record a coarse inferred type for `name` in the innermost scope.
@@ -3513,7 +4029,7 @@ function pyFormatDynamic(value, specStr) {
         // truthiness and keep the bare fast path. Previously only `is_collection`
         // wrapped, so `while lst:` on an unannotated param over-ran on empty
         // (HumanEval /70: `max()`/`min()` on the empty tail).
-        if !self.infer_type(test).is_scalar() {
+        if !matches!(self.infer_type(test), JsInferredType::Primitive) {
             self.need_runtime("pyBool");
             self.write("pyBool(");
             self.emit_expr(test);
@@ -3644,6 +4160,12 @@ function pyFormatDynamic(value, specStr) {
                     B::Add | B::Sub | B::Mul | B::Div | B::Mod | B::Pow | B::FloorDiv
                 ) =>
             {
+                // float op COMPLEX is complex, not float (`8.0 + 2j`), and
+                // pre-formatting a PyComplex through pyFormatFloat crashes —
+                // a complex operand disqualifies the whole expression.
+                if self.is_definitely_complex(left) || self.is_definitely_complex(right) {
+                    return false;
+                }
                 if self.is_definitely_float(left) || self.is_definitely_float(right) {
                     return true;
                 }
@@ -3709,10 +4231,9 @@ function pyFormatDynamic(value, specStr) {
     /// A container or Unknown may be an empty collection (JS-truthy, Python-falsy)
     /// so it must go through pyAnd/pyOr.
     fn truthiness_agrees(&self, expr: &Expr) -> bool {
-        matches!(
-            self.infer_type(expr),
-            JsInferredType::Primitive | JsInferredType::Float
-        )
+        // Option-B spike: Float excluded — a boxed 0.0 is a JS object and
+        // objects are always JS-truthy, so floats route through pyBool.
+        matches!(self.infer_type(expr), JsInferredType::Primitive)
     }
 
     fn infer_type(&self, expr: &Expr) -> JsInferredType {
@@ -3846,14 +4367,582 @@ function pyFormatDynamic(value, specStr) {
             .is_some_and(|s| s.contains(name))
     }
 
-    /// #306: check if a name is declared in ANY live scope (module scope
-    /// included). `is_declared` only consults the innermost frame, which is
-    /// right for shadowing decisions but wrong for "is this name bound to
-    /// anything at all?" — a module-level `ins = ...` or an outer-function
-    /// local must count as a binding when deciding whether a lowercase PSX
-    /// call can be claimed as an HTML tag.
+    /// Fix A: build a from-import specifier whose BINDING is sanitized to match
+    /// `sanitize_ident` at every reference site. `from m import x as default`
+    /// must emit `x as default$` — a raw `default` binding is invalid JS AND
+    /// mismatches the `default$` that references get. Emits the bare imported
+    /// name when no rename is needed (`foo` → `foo`, `foo as bar` → `foo as
+    /// bar`). `orig` is the exported name as it appears in the specifier
+    /// (post snake→camel for React), `binding` the local name user code uses.
+    fn import_specifier(orig: &str, binding: &str) -> String {
+        let js = Self::sanitize_ident(binding);
+        if js.as_ref() == orig {
+            orig.to_string()
+        } else {
+            format!("{} as {}", orig, js)
+        }
+    }
+
+    /// Is `name` bound as a local anywhere in the enclosing scope chain?
+    ///
+    /// FUNCTION-LIKE frames (index >= 1) consult the PRE-COMPUTED
+    /// `scope_bindings` (issue #438), so resolution inside a function is
+    /// ORDER-INDEPENDENT — a name bound anywhere in the function shadows a
+    /// builtin throughout it (incl. forward references and param shadow).
+    ///
+    /// The MODULE frame (index 0) instead consults the INCREMENTAL
+    /// `declared_scopes[0]` (source order): the module body executes
+    /// top-to-bottom, so a name referenced before its module-level assignment
+    /// is not yet declared — matching pre-pre-pass behavior exactly. Used for
+    /// builtin- and PSX-tag-shadow decisions.
     fn is_declared_in_any_scope(&self, name: &str) -> bool {
-        self.declared_scopes.iter().any(|s| s.contains(name))
+        // Review finding 2: if the innermost function scope declares `name`
+        // `global`, it resolves ONLY at module/builtin scope — skip every
+        // intervening function frame (an enclosing local `name` must not
+        // capture it). So `def outer(): len=…; def inner(): global len;
+        // return len(…)` lowers `len` by the MODULE binding, not outer's.
+        let is_global = self
+            .scope_globals
+            .last()
+            .is_some_and(|g| g.contains(name));
+        let module_has = self
+            .declared_scopes
+            .first()
+            .is_some_and(|m| m.contains(name));
+        if is_global {
+            return module_has;
+        }
+        module_has || self.scope_bindings.iter().skip(1).any(|s| s.contains(name))
+    }
+
+    /// DX-B2: record that JS `binding` is imported from `module` under the
+    /// Python source name `py_local`. Returns `Ok(true)` when the binding was
+    /// already claimed at MODULE scope by a different import whose PYTHON
+    /// name DIFFERS — the snake→camel-manufactured convergence, resolved by
+    /// ALIASING the new import (both Python names stay usable). Returns
+    /// `Err(diagnostic)` when the collision is a genuine double-bind of ONE
+    /// Python name — a cross-module collision that the old flat
+    /// `imported_bindings` set resolved by silently dropping one side.
+    /// Fresh bindings and same-module re-imports return `Ok(false)`.
+    ///
+    /// Scope-aware (fix J): only MODULE-LEVEL imports are tracked/checked.
+    /// Function-local imports (`def f(): import a as m` / `def g(): import b as
+    /// m`) are distinct Python-scoped bindings — flagging them as a collision
+    /// was a false positive. `declared_scopes.len() == 1` is exactly module
+    /// scope (every function/method/comprehension body pushes a scope; the
+    /// function-local-import hoist only re-zeroes `indent`, not the scope
+    /// stack). A function-local import that would still clash at the hoisted
+    /// module top is a pre-existing hoisting concern, out of DX-B2's scope.
+    fn register_import_binding_module(
+        &mut self,
+        py_local: &str,
+        binding: &str,
+        module: &str,
+        export: &str,
+    ) -> Result<bool, String> {
+        if self.declared_scopes.len() != 1 {
+            return Ok(false);
+        }
+        // Review finding 5: the import IDENTITY is (module, exported symbol),
+        // not module alone — `from react import useState as h` and `from
+        // pyths.react import use_effect as h` both resolve to "react" but bind
+        // DIFFERENT exports under `h`; deduping on module alone wrongly kept
+        // useState. `\0` cannot appear in a module path or identifier.
+        let identity = format!("{}\u{0}{}", module, export);
+        if let Some((prev, prev_py)) = self.imported_binding_modules.get(binding) {
+            if prev != &identity {
+                // DX-B2 root fix: DISTINCT Python names converging on one JS
+                // binding (our own snake→camel conversion manufactured the
+                // clash). Both are valid Python bindings — alias, don't error.
+                if prev_py != py_local {
+                    return Ok(true);
+                }
+                let (prev_mod, prev_exp) = prev.split_once('\u{0}').unwrap_or((prev.as_str(), ""));
+                let show = |m: &str, e: &str| {
+                    if e.is_empty() {
+                        format!("{:?}", m)
+                    } else {
+                        format!("`{}` from {:?}", e, m)
+                    }
+                };
+                return Err(format!(
+                    "import name collision: `{}` is bound by two different imports \
+                     ({} vs {}) at module scope. ES modules cannot bind one name twice. \
+                     Alias one side.",
+                    binding,
+                    show(prev_mod, prev_exp),
+                    show(module, export)
+                ));
+            }
+        } else {
+            self.imported_binding_modules
+                .insert(binding.to_string(), (identity, py_local.to_string()));
+        }
+        Ok(false)
+    }
+
+    /// public #3: hard compile-time error at EXPRESSION position — recorded
+    /// in `codegen_errors` (fails `pyths compile` and `pyths check`) plus an
+    /// inline throw-expression so any artifact that slips through a
+    /// non-gating path (`pyths run`/`test`/`bundle` inline codegen) still
+    /// fails LOUDLY with the named diagnostic, never a bare ReferenceError.
+    fn emit_expr_error(&mut self, diag: &str) {
+        eprintln!("error: {}", diag);
+        self.codegen_errors.push(diag.to_string());
+        self.write(&format!(
+            "(() => {{ throw new Error({}); }})()",
+            js_string_literal(&format!("PythScribe: {}", diag))
+        ));
+    }
+
+    /// Emit a hard compile-time error (recorded in `codegen_errors` + an inline
+    /// `throw`), matching the ImportSideEffect breakout-rejection precedent.
+    fn emit_import_error(&mut self, diag: &str) {
+        eprintln!("error: {}", diag);
+        self.codegen_errors.push(diag.to_string());
+        self.writeln(&format!(
+            "throw new Error({});",
+            js_string_literal(&format!("PythScribe: {}", diag))
+        ));
+    }
+
+    /// Record a hard compile-time diagnostic WITHOUT altering the emitted
+    /// code. Fails `pyths check` / `pyths compile` (via `codegen_errors`) but
+    /// leaves the current lowering in place — used by NB-2, where the intrinsic
+    /// HTML element correctly wins the name collision (React-consistent) and we
+    /// only need to make the silently-shadowed user binding LOUD.
+    fn record_codegen_error(&mut self, diag: &str) {
+        eprintln!("error: {}", diag);
+        self.codegen_errors.push(diag.to_string());
+    }
+
+    /// Is `name` bound to a user symbol somewhere reachable at this call site —
+    /// a local/param, a module-level `def`/`class`, or an import? Used by NB-2
+    /// to detect a user binding that an intrinsic HTML tag silently shadows
+    /// inside `@component`/`@psx`. (A `class` binding is already routed to
+    /// `new` earlier, so in practice this fires for defs / locals / imports.)
+    fn has_user_binding(&self, name: &str) -> bool {
+        self.is_declared_in_any_scope(name)
+            || self.known_functions.contains(name)
+            || self.known_classes.contains(name)
+            || self.imported_bindings.contains(name)
+            || self.react_imports.contains(name)
+            || self.module_namespaces.contains(name)
+    }
+
+    /// FULL_SURFACE bug #1: `import pkg.sub` (dotted, NO alias). CPython
+    /// binds the TOP name (`pkg`) and makes the dotted path reachable
+    /// through it (the submodule is set as an attribute on its parent
+    /// package). The old lowering reused the aliased-form path with
+    /// `local = "pkg.sub"`, emitting `import * as pkg.sub from "pkg/sub"`
+    /// — a JS SyntaxError (an ESM namespace binding must be an identifier).
+    ///
+    /// Lowering: hoist the namespace under a UNIQUE name and graft it onto
+    /// a mutable head object:
+    ///
+    /// ```text
+    /// import * as __pyimp_pkg_sub_0 from "pkg/sub";
+    /// let pkg = {};                    // first dotted import of `pkg`
+    /// pkg.sub = __pyimp_pkg_sub_0;
+    /// ```
+    ///
+    /// Deeper paths materialize plain-object intermediates (`a.b = {};`),
+    /// copying a previously-grafted frozen namespace into a mutable object
+    /// first when that level must now also hold a child (`a.b =
+    /// Object.assign({}, a.b);`), and a leaf grafted where an intermediate
+    /// object already exists merges the namespace UNDER the existing
+    /// children (`a.b = Object.assign({}, ns, a.b);`). Inside a function
+    /// body, `emit_stmt`'s #201 capture hoists the `import` line to module
+    /// top while the `let`/graft lines stay local — same as every other
+    /// import form.
+    ///
+    /// Documented residuals (each loud or CPython-rare):
+    /// * `import a` followed by `import a.b` is a hard compile error — the
+    ///   plain form bound `a` to an immutable frozen ESM namespace, so the
+    ///   submodule graft cannot be expressed; alias one side.
+    /// * `import a.b` followed by `import a` rebinds `a` to the plain
+    ///   namespace (CPython would keep `a.b` reachable on the module).
+    /// * Parent-package `__init__` attributes are NOT loaded — only the
+    ///   dotted path itself is reachable (the multi-file package-graph
+    ///   boundary, unchanged by this fix).
+    fn emit_dotted_no_alias_import(&mut self, dotted: &str) {
+        // Idempotent re-import of the exact same dotted path — no-op.
+        if self
+            .dotted_import_scopes
+            .last()
+            .is_some_and(|s| s.ns_paths.contains(dotted))
+        {
+            return;
+        }
+        let segs: Vec<&str> = dotted.split('.').collect();
+        let head = segs[0];
+        let head_js = Self::sanitize_ident(head).into_owned();
+        let head_identity = format!("__pydotted__\u{0}{}", head);
+        let head_known = self
+            .dotted_import_scopes
+            .last()
+            .is_some_and(|s| s.heads.contains(head));
+        if !head_known {
+            if self.is_declared(head) {
+                let diag = format!(
+                    "`import {dotted}`: `{head}` is already bound in this scope \
+                     (a plain `import {head}`, a parameter, or a local). ES module \
+                     namespace objects are immutable, so the submodule cannot be \
+                     attached to the existing binding; alias the dotted import \
+                     (`import {dotted} as <name>`) or the plain one."
+                );
+                self.emit_import_error(&diag);
+                return;
+            }
+            // DX-B2 collision registration for the head name (module scope):
+            // a later `import x as {head}` / `from m import {head}` collides
+            // loudly instead of silently clobbering the package object.
+            // The head is a mutable graft object (`let {head} = {{}}`), not a
+            // hoisted import, so the alias-and-rewrite path does NOT apply to
+            // it — an aliasable (distinct-Python-name) collision against an
+            // earlier import is also a hard error here: `let {head}` beside
+            // the existing binding would be a redeclaration SyntaxError.
+            match self.register_import_binding_module(head, head, head, "") {
+                Err(diag) => {
+                    self.emit_import_error(&diag);
+                    return;
+                }
+                Ok(true) => {
+                    let diag = format!(
+                        "`import {dotted}`: the package head `{head}` collides with \
+                         an earlier import's JS binding of the same name. Alias the \
+                         dotted import (`import {dotted} as <name>`) or the earlier \
+                         import."
+                    );
+                    self.emit_import_error(&diag);
+                    return;
+                }
+                Ok(false) => {}
+            }
+        }
+        let module_path = self.resolve_module(dotted);
+        let unique = format!(
+            "__pyimp_{}_{}",
+            segs.iter()
+                .map(|s| Self::sanitize_ident(s).into_owned())
+                .collect::<Vec<_>>()
+                .join("_"),
+            self.import_rename_counter
+        );
+        self.import_rename_counter += 1;
+        self.writeln(&format!(
+            "import * as {} from {};",
+            unique,
+            js_string_literal(&module_path)
+        ));
+        if !head_known {
+            self.writeln(&format!("let {} = {{}};", head_js));
+            self.declare(head);
+            // Record like an ASSIGNABLE import binding so a later plain
+            // `import {head}` in this scope reassigns (`{head} = ns;`)
+            // instead of `let`-redeclaring (a SyntaxError), and reserve the
+            // module-top alias for the fix-J unique-rename machinery.
+            if let Some(m) = self.scope_import_decls.last_mut() {
+                m.insert(head.to_string(), (head_identity.clone(), true));
+            }
+            if self.declared_scopes.len() == 1 {
+                self.hoisted_alias_module
+                    .entry(head_js.clone())
+                    .or_insert(head_identity);
+                self.imported_bindings.insert(head.to_string());
+            }
+            if let Some(s) = self.dotted_import_scopes.last_mut() {
+                s.heads.insert(head.to_string());
+            }
+        }
+        // Materialize intermediate levels, then graft the namespace leaf.
+        let mut path_js = head_js;
+        let mut path_py = head.to_string();
+        for (i, seg) in segs.iter().enumerate().skip(1) {
+            path_js = format!("{}.{}", path_js, seg);
+            path_py = format!("{}.{}", path_py, seg);
+            let is_leaf = i == segs.len() - 1;
+            enum Action {
+                None,
+                FreshObj,
+                CopyNsToObj,
+                GraftLeaf,
+                MergeLeafUnderChildren,
+            }
+            let action = {
+                let scope = self
+                    .dotted_import_scopes
+                    .last_mut()
+                    .expect("module scope always present");
+                if is_leaf {
+                    if scope.obj_paths.contains(&path_py) {
+                        Action::MergeLeafUnderChildren
+                    } else {
+                        scope.ns_paths.insert(path_py.clone());
+                        Action::GraftLeaf
+                    }
+                } else if scope.obj_paths.contains(&path_py) {
+                    Action::None
+                } else if scope.ns_paths.remove(&path_py) {
+                    scope.obj_paths.insert(path_py.clone());
+                    Action::CopyNsToObj
+                } else {
+                    scope.obj_paths.insert(path_py.clone());
+                    Action::FreshObj
+                }
+            };
+            match action {
+                Action::None => {}
+                Action::FreshObj => self.writeln(&format!("{} = {{}};", path_js)),
+                Action::CopyNsToObj => self.writeln(&format!(
+                    "{} = Object.assign({{}}, {});",
+                    path_js, path_js
+                )),
+                Action::GraftLeaf => self.writeln(&format!("{} = {};", path_js, unique)),
+                Action::MergeLeafUnderChildren => self.writeln(&format!(
+                    "{} = Object.assign({{}}, {}, {});",
+                    path_js, unique, path_js
+                )),
+            }
+        }
+    }
+
+    /// Round-3 unification: THE single decision point for ANY import form
+    /// that binds a name — plain/aliased `import`, generic `from ... import`,
+    /// the recognized-lib hybrid from-import (`pyths.react`), and relative
+    /// from-imports. For one (binding, module, exported-symbol) it:
+    ///
+    ///   (a) registers the import IDENTITY for DX-B2 collision detection
+    ///       (module scope) — a cross-module collision hard-errors when the
+    ///       PYTHON names match (genuine double-bind), or ALIASES the new
+    ///       import (`Alias { unique }`) when the Python names differ — the
+    ///       snake→camel convergence class, where both names are valid and
+    ///       reference sites are rewritten via `import_ref_renames`;
+    ///   (b) dedups an idempotent re-import (same scope, same identity —
+    ///       tracked in `scope_import_decls`, NOT inferred from
+    ///       `is_declared`, so a param that merely shares the name is not
+    ///       mistaken for the import itself);
+    ///   (c) applies the param-shadow rebind: a binding that is already a
+    ///       param/earlier local REASSIGNS (`hook = __pyimp_hook_0`) instead
+    ///       of `const`-redeclaring (a SyntaxError) or being shadowed;
+    ///   (d) unique-renames a same-alias/different-identity hoist collision
+    ///       (fix J) into a body-local `const` shadow.
+    ///
+    /// The pre-pass local set (`collect_bound_names`) already treats
+    /// Import/ImportFrom uniformly, so this closes the loop: no import form
+    /// can bypass the shared binding logic. Emission SYNTAX (named specifier
+    /// vs `import * as`) stays with the caller; the DECISION lives here.
+    ///
+    /// Callers MUST `declare(binding)` only AFTER planning (the shadow check
+    /// reads the declared set) and must abort the whole statement on
+    /// [`ImportBindingPlan::Error`].
+    fn plan_import_binding(
+        &mut self,
+        py_local: &str,
+        binding: &str,
+        reg_module: &str,
+        exported: &str,
+        identity_module: &str,
+    ) -> ImportBindingPlan {
+        let plan =
+            self.plan_import_binding_impl(py_local, binding, reg_module, exported, identity_module);
+        // #443: an import that REBINDS a name whose `class` definition
+        // already executed (source order) shadows the class — Python is
+        // last-wins. Drop it from the pre-scanned `known_classes` so calls
+        // after this point lower as plain calls, not `new`-construction
+        // (`class sqrt: …; from math import sqrt; sqrt(9.0)` must call
+        // math.sqrt). A Fresh/Dedup plan leaves the heuristic sets alone —
+        // stdlib CapWords class registrations (Counter, datetime, …) are
+        // Fresh binds and stay `new`-lowered.
+        if matches!(plan, ImportBindingPlan::Rebind { .. })
+            && self.emitted_class_names.contains(binding)
+        {
+            self.known_classes.remove(binding);
+        }
+        plan
+    }
+
+    fn plan_import_binding_impl(
+        &mut self,
+        py_local: &str,
+        binding: &str,
+        reg_module: &str,
+        exported: &str,
+        identity_module: &str,
+    ) -> ImportBindingPlan {
+        // (a) DX-B2 registration — module-scope cross-module collision.
+        // `aliasable` = the JS binding is claimed by an import bound under a
+        // DIFFERENT Python name (snake→camel convergence, e.g. zustand's
+        // `create_store` vs redux's `createStore`): both Python names are
+        // valid distinct bindings, so the new import hoists under a unique
+        // JS name and its references are rewritten — not a hard error.
+        let aliasable =
+            match self.register_import_binding_module(py_local, binding, reg_module, exported) {
+                Err(diag) => {
+                    self.emit_import_error(&diag);
+                    return ImportBindingPlan::Error;
+                }
+                Ok(a) => a,
+            };
+        let js_binding = Self::sanitize_ident(binding).into_owned();
+        // Identity = (resolved module, exported symbol); `\0` can appear in
+        // neither, so the pair packs into one string (finding 5).
+        let identity = format!("{}\u{0}{}", identity_module, exported);
+        if aliasable {
+            // Idempotent re-import of the SAME aliased import — dedup, the
+            // existing unique hoist + rename already serve it.
+            if self.aliased_import_identities.get(py_local) == Some(&identity) {
+                return ImportBindingPlan::Dedup;
+            }
+            // A THIRD import rebinding this Python name (last-wins from here
+            // on) overwrites the rename; earlier reference sites already
+            // emitted the previous unique in source order, matching Python's
+            // module-body execution order.
+            let u = format!("__pyimp_{}_{}", js_binding, self.import_rename_counter);
+            self.import_rename_counter += 1;
+            self.import_ref_renames
+                .insert(py_local.to_string(), u.clone());
+            self.aliased_import_identities
+                .insert(py_local.to_string(), identity);
+            return ImportBindingPlan::Alias { unique: u };
+        }
+        // B8(b) CLASS rule: our snake→camel conversion must never CLAIM a JS
+        // name that MODULE-level user code binds (`from zustand import
+        // create_store` + a user `createStore = …` / `def createStore` —
+        // "Identifier 'createStore' has already been declared", or a silently
+        // killed import). Same resolution as the import-import convergence
+        // above: hoist under a unique name and rewrite this Python name's
+        // reference sites. Fires only when the conversion actually renamed
+        // (`binding != py_local`) — a user binding of the import's OWN Python
+        // name is the #443/B2 rebind lane, not a manufactured collision.
+        if self.declared_scopes.len() == 1
+            && binding != py_local
+            && self.module_bound_names.contains(binding)
+        {
+            if self.aliased_import_identities.get(py_local) == Some(&identity) {
+                return ImportBindingPlan::Dedup;
+            }
+            let u = format!("__pyimp_{}_{}", js_binding, self.import_rename_counter);
+            self.import_rename_counter += 1;
+            self.import_ref_renames
+                .insert(py_local.to_string(), u.clone());
+            self.aliased_import_identities
+                .insert(py_local.to_string(), identity);
+            return ImportBindingPlan::Alias { unique: u };
+        }
+        // What does `binding` refer to in THIS scope right now?
+        // `prior_here` = a previous import in this scope: (identity,
+        // assignable) where `assignable` means the JS binding the name
+        // resolves to here is a body-local `let` / reassigned param (true)
+        // rather than an immutable module-top import hoist (false).
+        let prior_here = self
+            .scope_import_decls
+            .last()
+            .and_then(|m| m.get(binding))
+            .cloned();
+        // (b) idempotent re-import: THIS scope already bound `binding` via
+        // this exact import — Python's re-import is a no-op rebind.
+        if let Some((prev_id, _)) = &prior_here {
+            if prev_id == &identity {
+                return ImportBindingPlan::Dedup;
+            }
+        }
+        // Module scope (`declared_scopes` == [module]) is the ONLY scope
+        // where the top-level ESM binding IS the Python binding. Every
+        // function/method/comprehension body pushes a scope, so len > 1 means
+        // the import binds a name LOCAL to a function.
+        let at_module_scope = self.declared_scopes.len() == 1;
+        let record = |zelf: &mut Self, assignable: bool| {
+            if let Some(m) = zelf.scope_import_decls.last_mut() {
+                m.insert(binding.to_string(), (identity.clone(), assignable));
+            }
+        };
+        let unique = |zelf: &mut Self| {
+            let u = format!("__pyimp_{}_{}", js_binding, zelf.import_rename_counter);
+            zelf.import_rename_counter += 1;
+            u
+        };
+        match prior_here {
+            // A DIFFERENT import of the same name earlier in THIS scope. If
+            // that import left a mutable body-local (`let` shadow / reassigned
+            // param), REASSIGN; if it was this scope's own immutable hoist
+            // (module scope), introduce the body-local `let` shadow now.
+            Some((_, assignable)) => {
+                let u = unique(self);
+                record(self, true);
+                ImportBindingPlan::Rebind {
+                    js_binding,
+                    unique: u,
+                    reassign: assignable,
+                }
+            }
+            None => {
+                // (c) captured BEFORE the caller declares this import's
+                // binding: the name is a param / earlier local of the CURRENT
+                // scope, so the import must overwrite it (Python rebind), not
+                // redeclare (SyntaxError) or be shadowed by it.
+                if self.is_declared(binding) {
+                    let u = unique(self);
+                    record(self, true);
+                    return ImportBindingPlan::Rebind {
+                        js_binding,
+                        unique: u,
+                        reassign: true,
+                    };
+                }
+                if !at_module_scope {
+                    // Findings 2 & 3 — FUNCTION-LOCAL import. Python scoping
+                    // makes this a name LOCAL to the function, so it must
+                    // NEVER dedup against or reuse an outer/module ESM binding
+                    // (that erases Python's local/use-before-import
+                    // semantics — finding 2). The actual `import` is hoisted
+                    // under a UNIQUE name and the local name is bound in the
+                    // body via `let name = <unique>` at the import's position.
+                    // Consequences: a use BEFORE the import is a TDZ fault
+                    // (≈ UnboundLocalError) rather than a silent outer read;
+                    // and a re-import later in the SAME function is a plain
+                    // reassignment (prior_here → assignable), not a second
+                    // `let` that would TDZ-shadow the earlier reads (finding
+                    // 3). Not registered in `hoisted_alias_module` — that map
+                    // is only for module-top dedup, which local scopes must
+                    // not participate in.
+                    self.imported_bindings.insert(binding.to_string());
+                    let u = unique(self);
+                    record(self, true);
+                    return ImportBindingPlan::Rebind {
+                        js_binding,
+                        unique: u,
+                        reassign: false,
+                    };
+                }
+                match self.hoisted_alias_module.get(&js_binding).cloned() {
+                    // Same identity already hoisted at module scope — the
+                    // binding is visible here untouched; dedup.
+                    Some(prev) if prev == identity => {
+                        record(self, false);
+                        ImportBindingPlan::Dedup
+                    }
+                    // (d) different module/export under the same module-top
+                    // alias (fix J): hoist uniquely, `let`-shadow in the body.
+                    Some(_) => {
+                        let u = unique(self);
+                        record(self, true);
+                        ImportBindingPlan::Rebind {
+                            js_binding,
+                            unique: u,
+                            reassign: false,
+                        }
+                    }
+                    None => {
+                        self.hoisted_alias_module
+                            .insert(js_binding.clone(), identity.clone());
+                        self.imported_bindings.insert(binding.to_string());
+                        record(self, false);
+                        ImportBindingPlan::Fresh
+                    }
+                }
+            }
+        }
     }
 
     /// #306: inside a @component/@psx body, should this lowercase call name
@@ -3918,6 +5007,25 @@ function pyFormatDynamic(value, specStr) {
         }
     }
 
+    /// #452/#453: a guaranteed-fresh JS identifier for an internal codegen
+    /// temporary. ONE rule applied at every temp-minting site: if the module
+    /// uses `base` anywhere (as a reference or a binding — `module_idents` is
+    /// the whole-module pre-pass, so the decision is order-independent), the
+    /// temp gets a `$` suffix, which can never appear in a Python identifier
+    /// (and `sanitize_ident` appends `$` only to JS RESERVED words, which the
+    /// `__`-prefixed bases never are) — fresh by construction. Otherwise the
+    /// bare base is kept, so emitted JS is unchanged in the common
+    /// (non-colliding) case. Same-base temps in NESTED emission sites reuse
+    /// the same name deliberately: each binds its own JS block/IIFE scope,
+    /// where the shadowing mirrors Python's comprehension-scope nesting.
+    fn fresh_temp(&self, base: &str) -> String {
+        if self.module_idents.contains(base) {
+            format!("{base}$")
+        } else {
+            base.to_string()
+        }
+    }
+
     /// Mark a name as declared in the current scope.
     fn declare(&mut self, name: &str) {
         if let Some(scope) = self.declared_scopes.last_mut() {
@@ -3925,10 +5033,30 @@ function pyFormatDynamic(value, specStr) {
         }
     }
 
+    /// Round-4 finding 1: forget any import-identity this scope recorded for
+    /// `name`. The `scope_import_decls` cache lets `plan_import_binding` dedup
+    /// an idempotent re-import, but ORDINARY code that rebinds the name
+    /// between two imports (`from math import sqrt; sqrt = ...; from math
+    /// import sqrt`) breaks that identity — the SECOND import must re-emit,
+    /// not dedup to the (now-overwritten) first. Called from every non-import
+    /// rebinding of a bare name (assignment / for-target / aug-assign /
+    /// annotated-assign-with-value / del).
+    fn invalidate_import_decl(&mut self, name: &str) {
+        if let Some(m) = self.scope_import_decls.last_mut() {
+            m.remove(name);
+        }
+    }
+
     /// Mark all names in an assignment/for target as declared.
     fn declare_target(&mut self, target: &Expr) {
         match &target.kind {
-            ExprKind::Name(name) => self.declare(name),
+            ExprKind::Name(name) => {
+                // A plain-name assignment target is a non-import rebind — it
+                // invalidates any import identity cached for the name so a
+                // later re-import is not wrongly deduped (finding 1).
+                self.invalidate_import_decl(name);
+                self.declare(name);
+            }
             ExprKind::Tuple(elts) | ExprKind::List(elts) => {
                 for elt in elts {
                     self.declare_target(elt);
@@ -3941,18 +5069,257 @@ function pyFormatDynamic(value, specStr) {
 
     // ── Module ────────────────────────────────────────────
 
+    /// Collect every `class` name at ANY nesting depth (inside functions,
+    /// class bodies, if/while/for/with/try/match blocks). Feeds
+    /// `known_classes` so a class defined inside a function participates in
+    /// the cooperative PyObject MRO model exactly like a module-level one
+    /// (autotester classes / local_classes: `class C(A, B)` inside `def run`
+    /// previously treated A as an external native base).
+    fn collect_class_names(body: &[Stmt], out: &mut HashSet<String>) {
+        for stmt in body {
+            match &stmt.kind {
+                StmtKind::ClassDef { name, body, .. } => {
+                    out.insert(name.clone());
+                    Self::collect_class_names(body, out);
+                }
+                StmtKind::FuncDef { body, .. } => Self::collect_class_names(body, out),
+                StmtKind::If {
+                    body,
+                    elif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    Self::collect_class_names(body, out);
+                    for (_, b) in elif_clauses {
+                        Self::collect_class_names(b, out);
+                    }
+                    if let Some(b) = else_body {
+                        Self::collect_class_names(b, out);
+                    }
+                }
+                StmtKind::While { body, else_body, .. } => {
+                    Self::collect_class_names(body, out);
+                    if let Some(b) = else_body {
+                        Self::collect_class_names(b, out);
+                    }
+                }
+                StmtKind::For { body, else_body, .. } => {
+                    Self::collect_class_names(body, out);
+                    if let Some(b) = else_body {
+                        Self::collect_class_names(b, out);
+                    }
+                }
+                StmtKind::With { body, .. } => Self::collect_class_names(body, out),
+                StmtKind::Try {
+                    body,
+                    handlers,
+                    else_body,
+                    finally_body,
+                } => {
+                    Self::collect_class_names(body, out);
+                    for h in handlers {
+                        Self::collect_class_names(&h.body, out);
+                    }
+                    if let Some(b) = else_body {
+                        Self::collect_class_names(b, out);
+                    }
+                    if let Some(b) = finally_body {
+                        Self::collect_class_names(b, out);
+                    }
+                }
+                StmtKind::Match { cases, .. } => {
+                    for c in cases {
+                        Self::collect_class_names(&c.body, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The docstring of a body: its FIRST statement when that is a bare
+    /// string-literal expression (CPython rules; later strings are not
+    /// docstrings).
+    fn body_docstring(body: &[Stmt]) -> Option<&str> {
+        match body.first().map(|st| &st.kind) {
+            Some(StmtKind::Expr(e)) => match &e.kind {
+                ExprKind::StringLiteral(lit) => Some(lit),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// WB-15: does this method body directly contain a `this`-rebinding nested
+    /// scope — a nested `function` def OR a nested `class` — that a bare `self`
+    /// could close over? Such a method must capture `const __self = this;` so
+    /// the nested scope reads the receiver via the alias (its own JS `this` is
+    /// rebound). Covers both a nested def and a nested class (whose static
+    /// method may close over the outer `self`). Recurses through control-flow
+    /// blocks (if/while/for/with/try/match) but stops at the first nested scope.
+    fn contains_nested_scope(body: &[Stmt]) -> bool {
+        body.iter().any(|stmt| match &stmt.kind {
+            StmtKind::FuncDef { .. } | StmtKind::ClassDef { .. } => true,
+            StmtKind::If { body, elif_clauses, else_body, .. } => {
+                Self::contains_nested_scope(body)
+                    || elif_clauses.iter().any(|(_, b)| Self::contains_nested_scope(b))
+                    || else_body.as_deref().is_some_and(Self::contains_nested_scope)
+            }
+            StmtKind::While { body, else_body, .. }
+            | StmtKind::For { body, else_body, .. } => {
+                Self::contains_nested_scope(body)
+                    || else_body.as_deref().is_some_and(Self::contains_nested_scope)
+            }
+            StmtKind::With { body, .. } => Self::contains_nested_scope(body),
+            StmtKind::Try { body, handlers, else_body, finally_body } => {
+                Self::contains_nested_scope(body)
+                    || handlers.iter().any(|h| Self::contains_nested_scope(&h.body))
+                    || else_body.as_deref().is_some_and(Self::contains_nested_scope)
+                    || finally_body.as_deref().is_some_and(Self::contains_nested_scope)
+            }
+            StmtKind::Match { cases, .. } => {
+                cases.iter().any(|c| Self::contains_nested_scope(&c.body))
+            }
+            _ => false,
+        })
+    }
+
+    /// WB-15: cross into a nested scope whose own JS `this` is rebound (a nested
+    /// `function`, a `class` body, a static/classmethod) and that does NOT bind
+    /// `self` as a local. A live receiver (`Receiver`) must switch to the
+    /// `__self` alias there; `ReceiverAlias`/`Ordinary` are unchanged. Returns
+    /// the previous state for the caller to restore. When the crossed scope
+    /// instead binds `self` (a `self` param/const), the caller sets `Ordinary`
+    /// directly rather than calling this.
+    fn cross_self_this_boundary(&mut self) -> SelfLowering {
+        let prev = self.self_lowering;
+        if prev == SelfLowering::Receiver {
+            self.self_lowering = SelfLowering::ReceiverAlias;
+        }
+        prev
+    }
+
+    /// WB-15 (S5): a comprehension is its own Python scope. If one of its
+    /// for-targets is named `self`, that target SHADOWS any enclosing
+    /// instance-method receiver — inside the comprehension's target + element +
+    /// condition, `self` is the ordinary comprehension variable (binder position
+    /// AND reference), never `this`/`__self`. Callers wrap ONLY that region: the
+    /// OUTERMOST iterable is evaluated in the enclosing scope and keeps its
+    /// lowering. Returns the previous state; restore it after the region.
+    fn enter_comp_self_shadow(&mut self, generators: &[Comprehension]) -> SelfLowering {
+        let prev = self.self_lowering;
+        if Self::comprehension_target_names(generators).contains("self") {
+            self.self_lowering = SelfLowering::Ordinary;
+        }
+        prev
+    }
+
+    /// WB-15 (B3): emit the OUTERMOST comprehension iterable — `generators[0]
+    /// .iter`, with its sync/async protocol bridge — as an expression evaluated
+    /// in the ENCLOSING scope. Every comprehension emission path (fast, loop, and
+    /// genexp) evaluates the outer iterable OUTSIDE `enter_comp_self_shadow` and
+    /// passes it in (the fast path via a lifted-scope inline; the loop paths as an
+    /// IIFE argument `__comp_it`; genexps via `.call(this, …)`), so a
+    /// receiver-reading outer iterable (`for self in self.items`) lowers to the
+    /// receiver, never to the not-yet-bound comprehension variable. Bridge
+    /// policy is UNIFORM with emit_for and emit_comp_loops: sync →
+    /// `emit_iterable` (pyForIter/pyDictKeys shape dispatch); async →
+    /// `__pyAsyncIter(<raw expr>)` — the async protocol bridge on the RAW
+    /// expression, never the sync pyForIter wrap (an async iterable is
+    /// never a dict, and the sync wrap turned a Python-protocol
+    /// `__aiter__` class into its attribute keys — the comprehension
+    /// matrix's async rows guard this).
+    fn emit_outer_comp_iterable(&mut self, generators: &[Comprehension]) {
+        let first = &generators[0];
+        if first.is_async {
+            self.need_runtime("__pyAsyncIter");
+            self.write("__pyAsyncIter(");
+            self.emit_expr(&first.iter);
+            self.write(")");
+        } else {
+            self.emit_iterable(&first.iter);
+        }
+    }
+
+    /// True iff any class body (at any depth) defines a `__call__` method.
+    fn defines_dunder_call(body: &[Stmt]) -> bool {
+        body.iter().any(|stmt| match &stmt.kind {
+            StmtKind::ClassDef { body, .. } => {
+                body.iter().any(|s| {
+                    matches!(&s.kind, StmtKind::FuncDef { name, .. } if name == "__call__")
+                }) || Self::defines_dunder_call(body)
+            }
+            StmtKind::FuncDef { body, .. } | StmtKind::With { body, .. } => {
+                Self::defines_dunder_call(body)
+            }
+            StmtKind::If { body, elif_clauses, else_body, .. } => {
+                Self::defines_dunder_call(body)
+                    || elif_clauses.iter().any(|(_, b)| Self::defines_dunder_call(b))
+                    || else_body.as_deref().is_some_and(Self::defines_dunder_call)
+            }
+            StmtKind::While { body, else_body, .. }
+            | StmtKind::For { body, else_body, .. } => {
+                Self::defines_dunder_call(body)
+                    || else_body.as_deref().is_some_and(Self::defines_dunder_call)
+            }
+            StmtKind::Try { body, handlers, else_body, finally_body } => {
+                Self::defines_dunder_call(body)
+                    || handlers.iter().any(|h| Self::defines_dunder_call(&h.body))
+                    || else_body.as_deref().is_some_and(Self::defines_dunder_call)
+                    || finally_body.as_deref().is_some_and(Self::defines_dunder_call)
+            }
+            StmtKind::Match { cases, .. } => {
+                cases.iter().any(|c| Self::defines_dunder_call(&c.body))
+            }
+            _ => false,
+        })
+    }
+
     pub fn emit_module(&mut self, module: &Module) {
         // Heuristic: ~80 bytes of JS per statement
         self.output.reserve(module.body.len() * 80);
 
-        // Pre-scan: collect every top-level `class` name so that calls
-        // inside @component functions can disambiguate dataclass
+        // Issue #438 (review: module scope stays SOURCE-ORDER): the module body
+        // executes top-to-bottom, so a name referenced before its module-level
+        // assignment is NOT yet a declared local. The module frame therefore
+        // keeps the incremental `declared_scopes[0]` path (see
+        // `is_declared_in_any_scope`); only FUNCTION-LIKE scopes get the
+        // precomputed order-independent binding set. `scope_bindings[0]` stays
+        // an unused placeholder.
+
+        // Pre-scan: collect every `class` name — at ANY nesting depth — so
+        // that calls inside @component functions can disambiguate dataclass
         // instantiation (`Alert(...)` → `new Alert(...)`) from React
-        // component creation (`Header(...)` → `createElement(Header, ...)`).
-        for stmt in &module.body {
-            if let StmtKind::ClassDef { name, .. } = &stmt.kind {
-                self.known_classes.insert(name.clone());
+        // component creation (`Header(...)` → `createElement(Header, ...)`),
+        // and so a class defined INSIDE a function (autotester classes /
+        // local_classes) is recognized as a compiled-here base: without
+        // this, `class C(A, B)` inside a `def` saw A as an "external native"
+        // base and lost the cooperative PyObject MRO model entirely (native
+        // `constructor` + `super()` → wrong ctor order, dead `A.__init__`
+        // unbound calls).
+        Self::collect_class_names(&module.body, &mut self.known_classes);
+        // B8(b): order-independent module-level USER binding pre-scan —
+        // import-bound names are SUBTRACTED: import↔import JS-name
+        // convergence is the DX-B2 register's lane (source-order aware), and
+        // including a later import's binding here would wrongly alias the
+        // EARLIER import against it. See `module_bound_names`.
+        Self::collect_bound_names(&module.body, &mut self.module_bound_names);
+        {
+            let mut import_bound = HashSet::new();
+            Self::collect_import_bound_names(&module.body, &mut import_bound);
+            for n in &import_bound {
+                self.module_bound_names.remove(n);
             }
+        }
+        // #452/#453 (naming soundness): whole-module identifier pre-pass —
+        // references AND bindings at every nesting depth — so `fresh_temp`
+        // can guarantee internal temporaries never collide with a user name,
+        // order-independently (a user `__result` bound AFTER a comprehension
+        // still forces the suffixed temp).
+        Self::collect_all_idents(&module.body, &mut self.module_idents);
+        self.module_has_dunder_call = Self::defines_dunder_call(&module.body);
+        self.module_doc = Self::body_docstring(&module.body).map(str::to_owned);
+        for stmt in &module.body {
             // #253: datetime's classes are lowercase, so record them here so
             // `date(...)` / `datetime(...)` get `new` (heuristic won't fire).
             if let StmtKind::ImportFrom {
@@ -3963,7 +5330,10 @@ function pyFormatDynamic(value, specStr) {
             {
                 if module == "datetime" {
                     for a in names {
-                        if matches!(a.name.as_str(), "datetime" | "date" | "time" | "timedelta") {
+                        if matches!(
+                            a.name.as_str(),
+                            "datetime" | "date" | "time" | "timedelta" | "timezone"
+                        ) {
                             let local = a.alias.as_deref().unwrap_or(&a.name);
                             self.known_classes.insert(local.to_string());
                         }
@@ -3997,6 +5367,27 @@ function pyFormatDynamic(value, specStr) {
                 // constructor" at instantiation). Absolute imports stay
                 // external: npm/React classes are never relative.
                 if *level > 0 {
+                    for a in names {
+                        if a.name != "*" {
+                            let local = a.alias.as_deref().unwrap_or(&a.name);
+                            self.local_module_imports.insert(local.to_string());
+                        }
+                    }
+                }
+                // WB-8: a BARE (level-0) `from <module> import ...` whose
+                // module is NOT a recognized external package (React/Next,
+                // stdlib, a known npm mapping, a scoped `at_` package, …)
+                // names a SIBLING project `.ps` module — compiled by this
+                // same compiler with the PyObject model. Its exported
+                // classes must be treated exactly like a relatively-imported
+                // base (#300): `class Sub(Base)` gets the cooperative
+                // `__pyClass`/MRO wrapping so `Sub` carries its OWN `__mro__`
+                // and cross-module `super()` (esp. a grandparent method)
+                // resolves. Before this, a bare-imported base was assumed
+                // external-native → NO `__pyClass` → no own `__mro__` →
+                // `__pySuper(...).<m> is not a function`. React/npm/stdlib
+                // bases stay native `extends` via `is_external_pkg_module`.
+                if *level == 0 && !module.is_empty() && !is_external_pkg_module(module) {
                     for a in names {
                         if a.name != "*" {
                             let local = a.alias.as_deref().unwrap_or(&a.name);
@@ -4060,7 +5451,7 @@ function pyFormatDynamic(value, specStr) {
         // is initialized to the __UNBOUND sentinel; reads route through
         // __pyChkGlobal so a zero-iteration loop leaves it raising NameError
         // (CPython) instead of reading as undefined→None.
-        let hoisted_names = Self::collect_hoisted_names(&module.body);
+        let hoisted_names = Self::collect_hoisted_names(&module.body, true);
         let hoisted_set: HashSet<String> = hoisted_names.iter().map(|(n, _)| n.clone()).collect();
         let mut sentinels = Self::sentinel_for_names(&module.body, &hoisted_set);
         // #288: a promoted name's depth-0 first assignment executes before
@@ -4148,6 +5539,30 @@ function pyFormatDynamic(value, specStr) {
         self.mark_mapping(stmt.span.start);
         match &stmt.kind {
             StmtKind::Expr(expr) => {
+                // DX (Lane B2 row 7): Python `breakpoint()` used to emit a bare
+                // `breakpoint();` — a call to an undefined global → runtime
+                // `ReferenceError`, with no compile diagnostic. Lower the bare
+                // builtin to a JS `debugger;` statement (its closest analogue).
+                // Only when `breakpoint` is not shadowed by a user binding.
+                //
+                // Fix I: ONLY the zero-arg/zero-kwarg form maps to `debugger;`.
+                // `breakpoint(**make_kwargs())` (or any args/kwargs) must not
+                // silently drop the argument expressions' side effects — fall
+                // through to normal emission, which evaluates them.
+                if let ExprKind::Call {
+                    func, args, kwargs, ..
+                } = &expr.kind
+                {
+                    if args.is_empty() && kwargs.is_empty() {
+                        if let ExprKind::Name(n) = &func.kind {
+                            if n == "breakpoint" && !self.is_declared_in_any_scope("breakpoint") {
+                                self.write_indent();
+                                self.write("debugger;\n");
+                                return;
+                            }
+                        }
+                    }
+                }
                 self.write_indent();
                 self.emit_expr(expr);
                 self.write(";\n");
@@ -4156,6 +5571,11 @@ function pyFormatDynamic(value, specStr) {
                 self.emit_assign(targets, value);
             }
             StmtKind::AugAssign { target, op, value } => {
+                // Finding 1: an aug-assign to a bare name rebinds it — forget
+                // any cached import identity so a later re-import re-emits.
+                if let ExprKind::Name(n) = &target.kind {
+                    self.invalidate_import_decl(n);
+                }
                 // #83: augmented subscript assignment on a Dict/Unknown
                 // receiver must go through the shape-dispatching helpers
                 // (raw `d[k] += v` breaks on a Map-backed dict). Hoist the
@@ -4199,6 +5619,12 @@ function pyFormatDynamic(value, specStr) {
                                 | AugAssignOp::BitXor
                                 | AugAssignOp::ShiftLeft
                                 | AugAssignOp::ShiftRight
+                                // MatMul MUST route through the helper path:
+                                // JS has no `@=` operator, so the bare fast
+                                // path would emit a syntax error — and the
+                                // helper (pyIMatMul) is what dispatches
+                                // __imatmul__ before __matmul__.
+                                | AugAssignOp::MatMul
                         );
                         let bare_ok = !op_has_helper
                             && matches!(recv_ty, JsInferredType::List | JsInferredType::Tuple)
@@ -4219,19 +5645,28 @@ function pyFormatDynamic(value, specStr) {
                             // Python-operator helper where one exists
                             // (arbitrary-precision ints, list concat, dict
                             // merge, ...); raw JS operator for the rest.
+                            // Ops with in-place CONTAINER semantics route
+                            // through the pyI* in-place protocol helpers so
+                            // `d[k] += [..]` mutates the stored list (aliases
+                            // observe it) instead of rebinding a fresh one —
+                            // see the plain-NAME map below.
                             let helper = match op {
-                                AugAssignOp::Add => Some("pyAdd"),
-                                AugAssignOp::Sub => Some("pySub"),
-                                AugAssignOp::Mul => Some("pyMul"),
+                                AugAssignOp::Add => Some("pyIAdd"),
+                                AugAssignOp::Sub => Some("pyISub"),
+                                AugAssignOp::Mul => Some("pyIMul"),
                                 AugAssignOp::Div => Some("pyDiv"),
                                 AugAssignOp::FloorDiv => Some("pyFloorDiv"),
                                 AugAssignOp::Mod => Some("pyMod"),
                                 AugAssignOp::Pow => Some("pyPow"),
-                                AugAssignOp::BitAnd => Some("pyBitAnd"),
-                                AugAssignOp::BitOr => Some("pyBitOr"),
-                                AugAssignOp::BitXor => Some("pyBitXor"),
+                                AugAssignOp::BitAnd => Some("pyIBitAnd"),
+                                AugAssignOp::BitOr => Some("pyIBitOr"),
+                                AugAssignOp::BitXor => Some("pyIBitXor"),
                                 AugAssignOp::ShiftLeft => Some("pyShiftLeft"),
                                 AugAssignOp::ShiftRight => Some("pyShiftRight"),
+                                // `@=` dispatches __imatmul__ first (CPython
+                                // in-place protocol), falling back to
+                                // __matmul__/__rmatmul__ inside the helper.
+                                AugAssignOp::MatMul => Some("pyIMatMul"),
                             };
                             match helper {
                                 Some(h) => {
@@ -4261,6 +5696,71 @@ function pyFormatDynamic(value, specStr) {
                         }
                     }
                 }
+                // Attribute target (`obj.attr OP= v`) — the ONE AugAssign
+                // form that still fell through to a raw JS operator (string
+                // coercion for `self.xs += [..]`, no BigInt promotion, no
+                // in-place protocol). Route through the same helpers as the
+                // name/subscript paths, hoisting the RECEIVER once into a
+                // const so a side-effecting receiver (`getobj().attr += v`)
+                // is not double-evaluated (same discipline as `__aug_o{n}`
+                // above). The read side mirrors the binary form's attribute
+                // read (pyBoundMethod, data attrs pass through; direct read
+                // for dunder attrs, matching the value-position rule); the
+                // write side is the plain property store emit_assign uses.
+                if let ExprKind::Attribute {
+                    value: recv,
+                    attr,
+                    optional,
+                } = &target.kind
+                {
+                    if !*optional {
+                        let helper = match op {
+                            AugAssignOp::Add => "pyIAdd",
+                            AugAssignOp::Sub => "pyISub",
+                            AugAssignOp::Mul => "pyIMul",
+                            AugAssignOp::Div => "pyDiv",
+                            AugAssignOp::FloorDiv => "pyFloorDiv",
+                            AugAssignOp::Mod => "pyMod",
+                            AugAssignOp::Pow => "pyPow",
+                            AugAssignOp::BitAnd => "pyIBitAnd",
+                            AugAssignOp::BitOr => "pyIBitOr",
+                            AugAssignOp::BitXor => "pyIBitXor",
+                            AugAssignOp::ShiftLeft => "pyShiftLeft",
+                            AugAssignOp::ShiftRight => "pyShiftRight",
+                            AugAssignOp::MatMul => "pyIMatMul",
+                        };
+                        let strict_dict =
+                            matches!(self.infer_type(recv), JsInferredType::Dict);
+                        let n = self.default_hoist_counter;
+                        self.default_hoist_counter += 1;
+                        let o = format!("__aug_o{}", n);
+                        self.need_runtime(helper);
+                        self.write_indent();
+                        self.write(&format!("{{ const {} = ", o));
+                        self.emit_expr(recv);
+                        if attr.starts_with("__") {
+                            // Dunder attrs read directly (value-position rule).
+                            self.write(&format!(
+                                "; {o}.{attr} = {h}({o}.{attr}, ",
+                                o = o,
+                                attr = attr,
+                                h = helper
+                            ));
+                        } else {
+                            self.need_runtime("pyBoundMethod");
+                            self.write(&format!(
+                                "; {o}.{attr} = {h}(pyBoundMethod({o}, {attr:?}{strict}), ",
+                                o = o,
+                                attr = attr,
+                                h = helper,
+                                strict = if strict_dict { ", 1" } else { "" }
+                            ));
+                        }
+                        self.emit_expr(value);
+                        self.write("); }\n");
+                        return;
+                    }
+                }
                 // Round-2 pythonic sweep: plain-NAME augmented assignment
                 // routes through the same Python-operator helpers as the
                 // binary form — raw JS `d |= {...}` coerces a dict to a
@@ -4268,19 +5768,32 @@ function pyFormatDynamic(value, specStr) {
                 // list concat. Reading a name twice is side-effect-free,
                 // so `x = h(x, v)` is exact.
                 if matches!(&target.kind, ExprKind::Name(_)) {
+                    // Bug-1 (aliasing soundness): ops with in-place CONTAINER
+                    // semantics lower to the pyI* helpers, which implement
+                    // CPython's in-place protocol — a mutable target (list
+                    // +=/*=, set |=/&=/-=/^=, dict |=) is MUTATED and returned
+                    // (the `x =` rebind is then a no-op and `x is y` survives,
+                    // like __iadd__/__ior__/...); immutables fall back to the
+                    // value helper inside pyI* (a genuine rebind). Generalizes
+                    // the pyIMatMul precedent below. `/=`,`//=`,`%=`,`**=` and
+                    // the shifts have no in-place container semantics — they
+                    // stay on the value helpers.
                     let helper = match op {
-                        AugAssignOp::Add => Some("pyAdd"),
-                        AugAssignOp::Sub => Some("pySub"),
-                        AugAssignOp::Mul => Some("pyMul"),
+                        AugAssignOp::Add => Some("pyIAdd"),
+                        AugAssignOp::Sub => Some("pyISub"),
+                        AugAssignOp::Mul => Some("pyIMul"),
                         AugAssignOp::Div => Some("pyDiv"),
                         AugAssignOp::FloorDiv => Some("pyFloorDiv"),
                         AugAssignOp::Mod => Some("pyMod"),
                         AugAssignOp::Pow => Some("pyPow"),
-                        AugAssignOp::BitAnd => Some("pyBitAnd"),
-                        AugAssignOp::BitOr => Some("pyBitOr"),
-                        AugAssignOp::BitXor => Some("pyBitXor"),
+                        AugAssignOp::BitAnd => Some("pyIBitAnd"),
+                        AugAssignOp::BitOr => Some("pyIBitOr"),
+                        AugAssignOp::BitXor => Some("pyIBitXor"),
                         AugAssignOp::ShiftLeft => Some("pyShiftLeft"),
                         AugAssignOp::ShiftRight => Some("pyShiftRight"),
+                        // `@=` dispatches __imatmul__ first (CPython in-place
+                        // protocol); pyIMatMul falls back to __matmul__.
+                        AugAssignOp::MatMul => Some("pyIMatMul"),
                     };
                     if let Some(h) = helper {
                         self.need_runtime(h);
@@ -4313,14 +5826,30 @@ function pyFormatDynamic(value, specStr) {
                 params,
                 body,
                 decorator_list,
-                return_type: _,
+                return_type,
                 is_async,
             } => {
                 if self.wasm_skip.contains(name) {
                     return; // compiled to WASM, re-exported from glue
                 }
+                // #443: `def X` REBINDS X (Python last-wins). Captured BEFORE
+                // `declare` — an already-declared name (an import's binding, a
+                // param, an earlier local) forces the assignment form so the
+                // emitted `function X` cannot redeclare-collide with it, and
+                // any import identity cached for the name is forgotten so a
+                // later re-import re-emits instead of deduping to the def.
+                let rebind_declared = self.is_declared(name);
+                self.invalidate_import_decl(name);
                 self.declare(name);
-                self.emit_func_def(name, params, body, decorator_list, *is_async);
+                self.emit_func_def(
+                    name,
+                    params,
+                    body,
+                    decorator_list,
+                    return_type.as_ref(),
+                    *is_async,
+                    rebind_declared,
+                );
             }
             StmtKind::ClassDef {
                 name,
@@ -4328,8 +5857,11 @@ function pyFormatDynamic(value, specStr) {
                 body,
                 decorator_list,
             } => {
+                // #443: `class X` rebinds exactly like `def X` — see above.
+                let rebind_declared = self.is_declared(name);
+                self.invalidate_import_decl(name);
                 self.declare(name);
-                self.emit_class_def(name, bases, body, decorator_list);
+                self.emit_class_def(name, bases, body, decorator_list, rebind_declared);
             }
             StmtKind::Return(value) => {
                 self.write_indent();
@@ -4393,8 +5925,57 @@ function pyFormatDynamic(value, specStr) {
             }
             StmtKind::Import { names } => {
                 for alias in names {
+                    // B4: `pyths.react` is a HYBRID surface — its symbols live in
+                    // FOUR different modules (react, react-dom, react-dom/client,
+                    // pyths-runtime/react), so it cannot be a single ESM
+                    // namespace. `import pyths.react as R` used to emit
+                    // `import * as R from "pyths-runtime/react"` (which exports
+                    // none of the React APIs) → `R.create_element` undefined at
+                    // load. Diagnose and steer to the per-symbol import form.
+                    if alias.name == "pyths.react" {
+                        let diag = "`import pyths.react` is not supported — `pyths.react` is a \
+                             hybrid surface whose symbols live in several different modules, so \
+                             it has no single namespace. Use `from pyths.react import \
+                             create_element, use_state, ...` (member access like \
+                             `R.create_element` cannot be routed)."
+                            .to_string();
+                        eprintln!("error: {}", diag);
+                        self.codegen_errors.push(diag.clone());
+                        let local = alias.alias.as_deref().unwrap_or("pyths");
+                        self.declare(local);
+                        continue;
+                    }
+                    // #448: `import importlib [as X]` — and the WHOLE importlib
+                    // package surface (`import importlib.util`, `import
+                    // importlib.machinery as m`, …). importlib is not a real
+                    // module in the compiled output — emit NOTHING (the old code
+                    // emitted a broken `import * as importlib from "importlib"`)
+                    // and remember the bound name so EVERY reference to it (not
+                    // just `.import_module` member calls) is diagnosed with the
+                    // supported-form guidance — see the Name-arm class rule.
+                    if alias.name == "importlib" || alias.name.starts_with("importlib.") {
+                        // CPython binds the TOP name for a no-alias dotted
+                        // import; the alias otherwise.
+                        let local = alias
+                            .alias
+                            .as_deref()
+                            .unwrap_or_else(|| alias.name.split('.').next().unwrap());
+                        // Track the namespace WITHOUT declaring it: it has no
+                        // runtime binding, and leaving it undeclared lets the
+                        // reference rule distinguish a genuine importlib
+                        // namespace from a user local that shadows the name.
+                        self.importlib_namespaces.insert(local.to_string());
+                        continue;
+                    }
+                    // FULL_SURFACE #1: `import pkg.sub` WITHOUT an alias
+                    // binds the top name `pkg` (CPython semantics) — a
+                    // dedicated lowering; the dotted name is not a legal ESM
+                    // namespace binding. The aliased form stays below.
+                    if alias.alias.is_none() && alias.name.contains('.') {
+                        self.emit_dotted_no_alias_import(&alias.name);
+                        continue;
+                    }
                     let local = alias.alias.as_deref().unwrap_or(&alias.name);
-                    self.declare(local);
                     // Round-4 sweep: remember asyncio namespace bindings so
                     // `asyncio.run(...)` call-sites can be awaited.
                     if alias.name == "asyncio" || alias.name == "pyths.asyncio" {
@@ -4406,26 +5987,85 @@ function pyFormatDynamic(value, specStr) {
                     if STDLIB_MODULES.contains(&base) {
                         self.module_namespaces.insert(local.to_string());
                     }
+                    if base == "datetime" {
+                        self.datetime_namespaces.insert(local.to_string());
+                    }
                     // Track-B: `import at_radix_ui.react_dialog as Dialog` —
                     // dotted PSX tags rooted at this alias (`Dialog.Root`)
                     // are library components; their props get snake→camel'd.
                     if is_react_or_next_module(&alias.name) {
                         self.react_lib_module_aliases.insert(local.to_string());
                     }
-                    // #274: `import heapq` twice → two `import * as heapq` →
-                    // "already declared". Emit the binding once.
-                    if !self.imported_bindings.insert(local.to_string()) {
-                        continue;
+                    // 0.2.2 member-call class fix: a namespace alias of a CORE
+                    // React module gets full member routing (camel + module
+                    // check + removed check) — see react_namespace_alias_modules.
+                    // (The no-alias dotted form `import react_dom.client` never
+                    // reaches here — it binds a synthetic grafted head object,
+                    // not the package namespace.)
+                    if let Some(src) = react::core_react_module(&alias.name) {
+                        self.react_namespace_alias_modules
+                            .insert(local.to_string(), src);
                     }
                     let module_path = self.resolve_module(&alias.name);
-                    // SECURITY (A2): module_path may be a verbatim
-                    // `[npm.imports]` override value — config-derived, untrusted.
-                    // Route through the escaper; never `format!("\"{}\"", …)`.
-                    self.writeln(&format!(
-                        "import * as {} from {};",
-                        local,
-                        js_string_literal(&module_path)
-                    ));
+                    // Round-3 unification: the binding DECISION (DX-B2
+                    // registration, idempotent dedup, param-shadow rebind,
+                    // fix-J unique rename) is `plan_import_binding`'s, shared
+                    // with every other import form. A namespace import's
+                    // exported symbol is "" (whole module). Planned BEFORE
+                    // `declare` — the shadow check reads the declared set.
+                    match self.plan_import_binding(local, local, &alias.name, "", &module_path) {
+                        ImportBindingPlan::Error => continue,
+                        ImportBindingPlan::Dedup => {
+                            self.declare(local);
+                        }
+                        ImportBindingPlan::Fresh => {
+                            self.declare(local);
+                            // SECURITY (A2): module_path may be a verbatim
+                            // `[npm.imports]` override — route through the
+                            // escaper. Fix A: sanitize the namespace binding
+                            // so `import numpy as default` emits
+                            // `import * as default$` (references match).
+                            self.writeln(&format!(
+                                "import * as {} from {};",
+                                Self::sanitize_ident(local),
+                                js_string_literal(&module_path)
+                            ));
+                        }
+                        ImportBindingPlan::Alias { unique } => {
+                            // DX-B2 alias-and-rewrite: the JS name is claimed
+                            // by a DIFFERENT Python name's import — hoist the
+                            // namespace under the unique name; references are
+                            // rewritten via `import_ref_renames`.
+                            self.declare(local);
+                            self.writeln(&format!(
+                                "import * as {} from {};",
+                                unique,
+                                js_string_literal(&module_path)
+                            ));
+                        }
+                        ImportBindingPlan::Rebind {
+                            js_binding,
+                            unique,
+                            reassign,
+                        } => {
+                            // Hoist the module under a UNIQUE top-level name
+                            // and bind the alias LOCALLY so it shadows the
+                            // param / outer alias for this scope only.
+                            // SECURITY (A2): escape the module specifier.
+                            self.writeln(&format!(
+                                "import * as {} from {};",
+                                unique,
+                                js_string_literal(&module_path)
+                            ));
+                            if reassign {
+                                // Param / earlier local — Python rebind.
+                                self.writeln(&format!("{} = {};", js_binding, unique));
+                            } else {
+                                self.writeln(&format!("let {} = {};", js_binding, unique));
+                            }
+                            self.declare(local);
+                        }
+                    }
                 }
             }
             StmtKind::ImportSideEffect(path) => {
@@ -4469,7 +6109,10 @@ function pyFormatDynamic(value, specStr) {
                 // heuristic won't `new`-call them — register as known classes.
                 if module == "datetime" {
                     for a in names {
-                        if matches!(a.name.as_str(), "datetime" | "date" | "time" | "timedelta") {
+                        if matches!(
+                            a.name.as_str(),
+                            "datetime" | "date" | "time" | "timedelta" | "timezone"
+                        ) {
                             let local = a.alias.as_deref().unwrap_or(&a.name);
                             self.known_classes.insert(local.to_string());
                         }
@@ -4484,6 +6127,77 @@ function pyFormatDynamic(value, specStr) {
                 // v3.x enhancement. All 5 LiveCodeBench `import *` samples used
                 // it as unused boilerplate (`from math import *`).
                 if names.len() == 1 && names[0].name == "*" {
+                    // RELATIVE star (`from .mod import *`): the CLI expands it
+                    // into explicit named imports BEFORE codegen (the
+                    // commands::relstar pass — the sibling source is on disk,
+                    // so its public name set is knowable at compile time). If
+                    // one reaches the emitter, the caller skipped that pass
+                    // (direct library/embedding use): fail LOUD. The old
+                    // behavior emitted NOTHING — a clean compile whose names
+                    // exploded as bare ReferenceErrors at runtime with no
+                    // hint of the cause (silent miscompile).
+                    if *level > 0 {
+                        let py_module =
+                            format!("{}{}", ".".repeat(*level as usize), module);
+                        let diag = format!(
+                            "wildcard relative import `from {} import *` was not \
+                             expanded — this compilation context has no source-file \
+                             access to resolve the sibling module's public names. \
+                             Compile through the pyths CLI, or list the imported \
+                             names explicitly (`from {} import a, b`).",
+                            py_module, py_module
+                        );
+                        eprintln!("error: {}", diag);
+                        self.codegen_errors.push(diag.clone());
+                        self.writeln(&format!(
+                            "throw new Error({});",
+                            js_string_literal(&format!("PythScribe: {}", diag))
+                        ));
+                        return;
+                    }
+                    // autotester module_math/module_itertools: a STDLIB
+                    // star-import now really BINDS the shim's exports —
+                    // the export list is parsed at build time from the
+                    // embedded canonical source, each name resolving to
+                    // `<ns>.<name>` at reference sites (declared locals
+                    // shadow; builtin lowerings are suppressed for bound
+                    // names, so `from math import *` makes `pow` math.pow).
+                    if *level == 0 && STDLIB_MODULES.contains(&module.as_str()) {
+                        if let Some(exports) = stdlib_export_names(module) {
+                            let module_path = self.resolve_module(module);
+                            let ns = format!("__pyStar{}", self.default_hoist_counter);
+                            self.default_hoist_counter += 1;
+                            self.writeln(&format!(
+                                "import * as {} from {};",
+                                ns,
+                                js_string_literal(&module_path)
+                            ));
+                            for (n, is_class) in exports {
+                                self.star_import_bindings
+                                    .insert(n, (ns.clone(), is_class));
+                            }
+                            return;
+                        }
+                    }
+                    // Non-stdlib modules keep the Tier C diagnostic: the
+                    // silent failure mode was the worst part — the compile
+                    // succeeded and every unqualified name later exploded as
+                    // a bare runtime ReferenceError with no hint of the
+                    // cause. Warn LOUDLY at compile time. Kept a warning
+                    // (not a hard error): the common real-world shape is
+                    // unused boilerplate, which the namespace-import no-op
+                    // handles correctly.
+                    if *level == 0
+                        && !matches!(module.as_str(), "typing" | "dataclasses" | "pydantic")
+                    {
+                        eprintln!(
+                            "warning: `from {} import *` (star-import) binds names only for \
+                             stdlib modules — names from `{}` used unqualified WILL raise \
+                             ReferenceError at runtime. Use `import {}` + qualified access or \
+                             name the imports explicitly.",
+                            module, module, module
+                        );
+                    }
                     if *level == 0
                         && !matches!(module.as_str(), "typing" | "dataclasses" | "pydantic")
                     {
@@ -4501,32 +6215,156 @@ function pyFormatDynamic(value, specStr) {
                     return;
                 }
 
-                // Relative imports (`from .foo import x`) bypass all the
-                // npm-name remapping / pyths.react splitting / stdlib
-                // routing. They emit a literal relative ESM specifier
-                // computed from the dot-depth + dotted module name; no
-                // kebab-casing of the trailing segment (B-006 dodge).
+                // Relative imports (`from .foo import x`) bypass the npm-name
+                // remapping / pyths.react splitting / stdlib routing. They
+                // emit a literal relative ESM specifier computed from the
+                // dot-depth + dotted module name; no kebab-casing of the
+                // trailing segment (B-006 dodge).
                 if *level > 0 {
                     let prefix = "../".repeat((*level - 1) as usize);
-                    let module_path = if module.is_empty() {
-                        // `from . import foo` — target the index of the
-                        // current package directory.
-                        format!("./{}", prefix.trim_end_matches('/'))
-                            .trim_end_matches('.')
-                            .to_string()
+                    // BUG #1 root fix: `from . import a` (leading-dot-only
+                    // form) names a sibling SUBMODULE, not a symbol — the old
+                    // lowering emitted `import { a } from "./"`, asking the
+                    // package index to provide ITSELF a named export `a`
+                    // (guaranteed ESM link error), and `a.X` then mis-lowered
+                    // through pyBoundMethod. The correct lowering is a
+                    // MODULE-NAMESPACE import of the submodule file
+                    // (`import * as a from "./a"`, extensionless per the
+                    // relative-specifier convention), with the binding
+                    // registered in `module_namespaces` — the SAME tracking
+                    // stdlib `import re` uses — so member access lowers to a
+                    // direct property read (`a.X`), capitalized members
+                    // `new`-call, and method-table lowerings are suppressed.
+                    // Routed through plan_import_binding like every other
+                    // import form (DX-B2 collision registration, idempotent
+                    // dedup, param-shadow rebind, fix-J rename).
+                    //
+                    // `from .pkg import name` (module non-empty) stays a
+                    // NAMED import: `name` is a symbol of pkg's index there
+                    // (the working named-reexport form). A non-empty-module
+                    // name that is itself a submodule remains a documented
+                    // limitation (needs filesystem knowledge codegen doesn't
+                    // have).
+                    if module.is_empty() {
+                        for a in names {
+                            let local = a.alias.as_deref().unwrap_or(&a.name);
+                            let sub_path = format!("./{}{}", prefix, a.name);
+                            let py_module =
+                                format!("{}{}", ".".repeat(*level as usize), a.name);
+                            match self.plan_import_binding(
+                                local, local, &py_module, "", &sub_path,
+                            ) {
+                                ImportBindingPlan::Error => return,
+                                ImportBindingPlan::Dedup => {
+                                    self.declare(local);
+                                }
+                                ImportBindingPlan::Fresh => {
+                                    self.declare(local);
+                                    // SECURITY (A2): source-derived specifier —
+                                    // route through the escaper.
+                                    self.writeln(&format!(
+                                        "import * as {} from {};",
+                                        Self::sanitize_ident(local),
+                                        js_string_literal(&sub_path)
+                                    ));
+                                }
+                                ImportBindingPlan::Alias { unique } => {
+                                    self.declare(local);
+                                    self.writeln(&format!(
+                                        "import * as {} from {};",
+                                        unique,
+                                        js_string_literal(&sub_path)
+                                    ));
+                                }
+                                ImportBindingPlan::Rebind {
+                                    js_binding,
+                                    unique,
+                                    reassign,
+                                } => {
+                                    self.writeln(&format!(
+                                        "import * as {} from {};",
+                                        unique,
+                                        js_string_literal(&sub_path)
+                                    ));
+                                    if reassign {
+                                        self.writeln(&format!(
+                                            "{} = {};",
+                                            js_binding, unique
+                                        ));
+                                    } else {
+                                        self.writeln(&format!(
+                                            "let {} = {};",
+                                            js_binding, unique
+                                        ));
+                                    }
+                                    self.declare(local);
+                                }
+                            }
+                            self.module_namespaces.insert(local.to_string());
+                        }
+                        return;
+                    }
+                    // Module sentinel "." (produced ONLY by the CLI pre-pass
+                    // commands::relstar, never by the parser — leading dots
+                    // parse into `level`): an FS-verified SYMBOL import from
+                    // the package index (`from . import CONST` where CONST
+                    // is defined in `__init__` and no submodule file
+                    // exists). Lowers to a NAMED import from the index
+                    // specifier — the correct pre-existing behavior for
+                    // this half of the ambiguous form.
+                    let module_path = if module == "." {
+                        format!("./{}", prefix)
                     } else {
                         format!("./{}{}", prefix, module.replace('.', "/"))
                     };
-                    let import_names: Vec<String> = names
-                        .iter()
-                        .map(|a| {
-                            if let Some(alias) = &a.alias {
-                                format!("{} as {}", a.name, alias)
-                            } else {
-                                a.name.clone()
+                    // Round-3 item 3: relative from-imports route through the
+                    // SAME planner as every other import form — they used to
+                    // bypass collision/identity registration entirely, so
+                    // `from .a import x` + `from .b import x` emitted two
+                    // `import { x }` declarations (an ESM parse error where
+                    // Python validly rebinds last-wins). Registration keys on
+                    // the Python-source dotted form (".a") so the DX-B2
+                    // diagnostic reads naturally and can never collide with
+                    // an absolute module name.
+                    // (Sentinel "." registers under the bare-dots form so a
+                    // DX-B2 collision diagnostic reads `from .` not `from ..`.)
+                    let py_module = if module == "." {
+                        ".".repeat(*level as usize)
+                    } else {
+                        format!("{}{}", ".".repeat(*level as usize), module)
+                    };
+                    let mut import_names: Vec<String> = Vec::new();
+                    let mut rebinds: Vec<(String, String, bool)> = Vec::new();
+                    for a in names {
+                        let binding = a.alias.as_deref().unwrap_or(&a.name);
+                        match self.plan_import_binding(
+                            binding,
+                            binding,
+                            &py_module,
+                            &a.name,
+                            &module_path,
+                        ) {
+                            ImportBindingPlan::Error => return,
+                            ImportBindingPlan::Dedup => {}
+                            ImportBindingPlan::Fresh => {
+                                // Fix A: sanitize the binding (alias or bare name).
+                                import_names.push(Self::import_specifier(&a.name, binding));
                             }
-                        })
-                        .collect();
+                            ImportBindingPlan::Rebind {
+                                js_binding,
+                                unique,
+                                reassign,
+                            } => {
+                                import_names.push(format!("{} as {}", a.name, unique));
+                                rebinds.push((js_binding, unique, reassign));
+                            }
+                            ImportBindingPlan::Alias { unique } => {
+                                // DX-B2 alias-and-rewrite (JS name claimed by a
+                                // different Python name's import).
+                                import_names.push(format!("{} as {}", a.name, unique));
+                            }
+                        }
+                    }
                     for a in names {
                         let local = a.alias.as_deref().unwrap_or(&a.name);
                         self.declare(local);
@@ -4534,16 +6372,57 @@ function pyFormatDynamic(value, specStr) {
                     // SECURITY (A2): relative specifier is source-derived
                     // (dotted module name) — escape it defensively so no import
                     // specifier is ever built by raw interpolation.
-                    self.writeln(&format!(
-                        "import {{ {} }} from {};",
-                        import_names.join(", "),
-                        js_string_literal(&module_path)
-                    ));
+                    if !import_names.is_empty() {
+                        self.writeln(&format!(
+                            "import {{ {} }} from {};",
+                            import_names.join(", "),
+                            js_string_literal(&module_path)
+                        ));
+                    }
+                    for (binding, unique, reassign) in rebinds {
+                        if reassign {
+                            self.writeln(&format!("{} = {};", binding, unique));
+                        } else {
+                            self.writeln(&format!("let {} = {};", binding, unique));
+                        }
+                    }
                     return;
                 }
 
                 // Skip compile-time-only imports
                 if module == "dataclasses" || module == "pydantic" || module == "typing" {
+                    return;
+                }
+
+                // #448: `from importlib import import_module [as X]`. importlib
+                // is not a real module in the compiled output; `import_module`
+                // lowers to native ES dynamic `import(spec)` at the call site.
+                // Emit NOTHING for the import and register the local name so a
+                // call on it routes to the native form. The name is NOT
+                // declared, so the unaliased `import_module(...)` also matches
+                // the builtin lowering (belt and braces). Any other name
+                // imported from importlib is unsupported — diagnose it rather
+                // than emit a broken `import { … } from "importlib"`.
+                if module == "importlib" || module.starts_with("importlib.") {
+                    for a in names {
+                        let local = a.alias.as_deref().unwrap_or(&a.name);
+                        // `import_module` lives at the importlib TOP level only
+                        // — submodule from-imports (`from importlib.util import
+                        // …`) are all unsupported.
+                        if module == "importlib" && a.name == "import_module" {
+                            self.import_module_fns.insert(local.to_string());
+                        } else {
+                            let diag = format!(
+                                "`from {} import {}` is not supported \
+                                 (pythscribe-v3.x); only `from importlib import \
+                                 import_module` is implemented (→ native dynamic \
+                                 `import()`).",
+                                module, a.name
+                            );
+                            eprintln!("error: {}", diag);
+                            self.codegen_errors.push(diag);
+                        }
+                    }
                     return;
                 }
 
@@ -4557,13 +6436,80 @@ function pyFormatDynamic(value, specStr) {
                 if module == "pyths" {
                     for a in names {
                         let local = a.alias.as_deref().unwrap_or(&a.name);
-                        self.declare(local);
+                        // WB-12: `js_class` is a COMPILE-TIME class decorator
+                        // (like `@dataclass`/`@component`), not a runtime value —
+                        // it makes the decorated class emit a plain JS class with
+                        // no `extends PyObject` (for foreign-lib interop, e.g.
+                        // MobX `makeAutoObservable`, which rejects any class that
+                        // has a superclass). Consumed by codegen; the import binds
+                        // the name (so the source resolves) but emits nothing.
+                        if a.name == "js_class" {
+                            self.declare(local);
+                            continue;
+                        }
                         if STDLIB_MODULES.contains(&a.name.as_str()) {
-                            self.writeln(&format!(
-                                "import * as {} from \"pyths-runtime/stdlib/{}\";",
-                                local, a.name
-                            ));
+                            // Round-4 finding 4: route through the shared
+                            // planner like every other import form — a
+                            // namespace import of a stdlib module (exported
+                            // symbol = ""). This gets the DX-B2 collision
+                            // diagnostic (`from pyths import math as m` +
+                            // `from pyths import json as m` → hard error, not
+                            // two immutable `import * as m` = a SyntaxError),
+                            // idempotent dedup, and the param-shadow/fix-J
+                            // rebinds. Planned BEFORE `declare`.
+                            let stdlib_mod =
+                                format!("pyths-runtime/stdlib/{}", a.name);
+                            match self.plan_import_binding(
+                                local,
+                                local,
+                                &stdlib_mod,
+                                "",
+                                &stdlib_mod,
+                            ) {
+                                ImportBindingPlan::Error => continue,
+                                ImportBindingPlan::Dedup => {
+                                    self.declare(local);
+                                }
+                                ImportBindingPlan::Fresh => {
+                                    self.declare(local);
+                                    // Fix A: sanitize the namespace binding.
+                                    self.writeln(&format!(
+                                        "import * as {} from \"{}\";",
+                                        Self::sanitize_ident(local),
+                                        stdlib_mod
+                                    ));
+                                }
+                                ImportBindingPlan::Rebind {
+                                    js_binding,
+                                    unique,
+                                    reassign,
+                                } => {
+                                    self.writeln(&format!(
+                                        "import * as {} from \"{}\";",
+                                        unique, stdlib_mod
+                                    ));
+                                    if reassign {
+                                        self.writeln(&format!("{} = {};", js_binding, unique));
+                                    } else {
+                                        self.writeln(&format!(
+                                            "let {} = {};",
+                                            js_binding, unique
+                                        ));
+                                    }
+                                    self.declare(local);
+                                }
+                                ImportBindingPlan::Alias { unique } => {
+                                    // DX-B2 alias-and-rewrite (JS name claimed
+                                    // by a different Python name's import).
+                                    self.declare(local);
+                                    self.writeln(&format!(
+                                        "import * as {} from \"{}\";",
+                                        unique, stdlib_mod
+                                    ));
+                                }
+                            }
                         } else {
+                            self.declare(local);
                             let diag = format!(
                                 "`from pyths import {}`: `{}` is not a PythScribe stdlib module. \
                                  Supported forms: `import {}` or `from pyths import <stdlib>` \
@@ -4595,70 +6541,208 @@ function pyFormatDynamic(value, specStr) {
                 // hard dep (which breaks non-React consumers of pyths-runtime).
                 // Split into two import statements when both groups appear.
                 if module == "pyths.react" {
-                    let mut react_names: Vec<String> = Vec::new();
-                    let mut runtime_names: Vec<String> = Vec::new();
+                    // `pyths.react` is a HYBRID surface whose symbols live in
+                    // FOUR genuinely different modules: react core, react-dom,
+                    // react-dom/client, and the pyths runtime's codegen-meta
+                    // helpers. `react::react_helper_source` is the single
+                    // audited routing table (root fix for the WB-22/WB-23
+                    // family: a symbol mapped to a module that does not export
+                    // it is a load-time crash). Each name still routes through
+                    // `plan_import_binding` with its EFFECTIVE module — same
+                    // DX-B2 registration, identity dedup, param-shadow rebind,
+                    // and fix-J rename as every other import form. Only the
+                    // multi-statement SPLIT (one `import` per distinct module,
+                    // emitted in a fixed order) is this path's own.
+                    use react::ReactHelperSource as Src;
+                    // Fixed emission order → deterministic output.
+                    let src_order = [
+                        Src::ReactCore,
+                        Src::ReactDom,
+                        Src::ReactDomClient,
+                        Src::PythsRuntime,
+                    ];
+                    // Per-source (resolved module string, specifiers).
+                    let mut buckets: Vec<(Src, String, Vec<String>)> = src_order
+                        .iter()
+                        .map(|s| (*s, self.resolve_module(s.module()), Vec::new()))
+                        .collect();
+                    let mut rebinds: Vec<(String, String, bool)> = Vec::new();
                     for a in names {
+                        // B5: a symbol the WB-22/23 table would route to a module
+                        // that no longer exports it in React 19 (findDOMNode) —
+                        // emitting the import is a load-time "no such export"
+                        // crash. Diagnose and skip the dead import (declaration
+                        // still happens below so later refs don't cascade).
+                        if let Some(msg) = react::react_19_removed(&a.name) {
+                            self.record_codegen_error(msg);
+                            continue;
+                        }
                         let js_name = react::snake_to_camel(&a.name);
-                        let with_alias = if let Some(alias) = &a.alias {
-                            format!("{} as {}", js_name, alias)
-                        } else {
-                            js_name
-                        };
-                        if react::is_react_core_export(&a.name) {
-                            react_names.push(with_alias);
-                        } else {
-                            runtime_names.push(with_alias);
+                        let binding = a.alias.clone().unwrap_or_else(|| js_name.clone());
+                        // The PYTHON-visible name (pre-conversion) — what the
+                        // user's reference sites are written against.
+                        let py_local = a.alias.as_deref().unwrap_or(&a.name);
+                        let src = react::react_helper_source(&a.name);
+                        let bucket = buckets
+                            .iter_mut()
+                            .find(|(s, _, _)| *s == src)
+                            .expect("every ReactHelperSource has a bucket");
+                        let eff_mod = bucket.1.clone();
+                        match self.plan_import_binding(py_local, &binding, &eff_mod, &js_name, &eff_mod)
+                        {
+                            ImportBindingPlan::Error => return,
+                            ImportBindingPlan::Dedup => {}
+                            ImportBindingPlan::Fresh => {
+                                bucket.2.push(Self::import_specifier(&js_name, &binding));
+                            }
+                            ImportBindingPlan::Rebind {
+                                js_binding,
+                                unique,
+                                reassign,
+                            } => {
+                                bucket.2.push(format!("{} as {}", js_name, unique));
+                                rebinds.push((js_binding, unique, reassign));
+                            }
+                            ImportBindingPlan::Alias { unique } => {
+                                // DX-B2 alias-and-rewrite (JS name claimed by
+                                // a different Python name's import).
+                                bucket.2.push(format!("{} as {}", js_name, unique));
+                            }
                         }
                     }
-                    // Track declarations + PSX dispatch hints (same as the
-                    // general path below).
+                    // Track declarations + PSX dispatch hints — the SAME
+                    // tracking the general react-import path does below. B4: the
+                    // hybrid path used to register NONE of the factory-transform
+                    // hints, so `from pyths.react import create_element` lowered
+                    // its props dict VERBATIM (`{"on_click": 1}` — a dead
+                    // handler) while `from react import …` transformed it. Mirror
+                    // the general path's `react_lib_bindings` /
+                    // `react_create_element_fns` / `react_member_component_bases`
+                    // registration so props lower identically on every import
+                    // spelling.
                     for a in names {
+                        if react::react_19_removed(&a.name).is_some() {
+                            continue;
+                        }
                         let local = a.alias.as_deref().unwrap_or(&a.name);
                         self.declare(local);
                         if a.alias.is_none() {
                             self.react_imports.insert(a.name.clone());
                         }
+                        self.react_lib_bindings.insert(local.to_string());
+                        // B4: remember a local bound to React's createElement
+                        // factory so a direct call's props dict gets the
+                        // PSX-prop snake→camel/kebab transform (alias-aware).
+                        if a.name == "create_element" || a.name == "createElement" {
+                            self.react_create_element_fns.insert(local.to_string());
+                        }
+                        if a.name == "motion" {
+                            self.react_member_component_bases.insert(local.to_string());
+                        }
                     }
-                    if !react_names.is_empty() {
-                        self.writeln(&format!(
-                            "import {{ {} }} from \"react\";",
-                            react_names.join(", ")
-                        ));
+                    for (_src, module_str, specs) in &buckets {
+                        if !specs.is_empty() {
+                            // SECURITY (#414/A2): module_str is `resolve_module`'s
+                            // output — it may be a verbatim `[npm.imports]`
+                            // config override (untrusted). Escape it exactly like
+                            // the sibling general-path site ~120 lines down; the
+                            // old raw `"{}"` interpolation let a `"`/newline in
+                            // the override break out of the specifier string.
+                            self.writeln(&format!(
+                                "import {{ {} }} from {};",
+                                specs.join(", "),
+                                js_string_literal(module_str)
+                            ));
+                        }
                     }
-                    if !runtime_names.is_empty() {
-                        self.writeln(&format!(
-                            "import {{ {} }} from \"pyths-runtime/react\";",
-                            runtime_names.join(", ")
-                        ));
+                    // Round-3 item 2: a binding that is ALSO a param/earlier
+                    // local REASSIGNS (`hook = __pyimp_hook_0;`) — the old
+                    // unconditional `const` was a redeclaration SyntaxError
+                    // inside `def f(hook): from pyths.react import
+                    // use_effect as hook`.
+                    for (binding, unique, reassign) in rebinds {
+                        if reassign {
+                            self.writeln(&format!("{} = {};", binding, unique));
+                        } else {
+                            self.writeln(&format!("let {} = {};", binding, unique));
+                        }
                     }
                     return;
                 }
 
-                // #274: dedupe by JS binding — Python allows re-importing a name
-                // (idempotent), but a second ES `import { X }` is a SyntaxError.
-                // Drop names whose binding was already imported at module scope.
-                let import_names: Vec<String> = names
-                    .iter()
-                    .filter_map(|a| {
-                        let js_name = if is_react_module {
-                            react::snake_to_camel(&a.name)
-                        } else {
-                            a.name.clone()
-                        };
-                        let binding = a.alias.clone().unwrap_or_else(|| js_name.clone());
-                        if !self.imported_bindings.insert(binding.clone()) {
-                            return None;
+                // B5 scoping (0.2.2 class fix): the React-19-removed diagnostic
+                // fires only for the CORE React packages the removal actually
+                // happened in (react / react-dom / react-dom/client; the
+                // pyths.react hybrid has its own check above). It used to key
+                // on `is_react_module` — the WHOLE react ecosystem — which,
+                // with the full removed set (`render`, `hydrate`, …), would
+                // misfire on legitimate exports of other packages
+                // (`from at_testing_library.react import render`).
+                let react_19_removed_scope = react::core_react_module(module).is_some();
+                let module_path = self.resolve_module(module);
+                // Round-3 unification: every name routes through
+                // `plan_import_binding` — DX-B2 collision registration,
+                // idempotent-re-import dedup, the param-shadow rebind
+                // (finding 5), and the fix-J unique renames all live THERE,
+                // shared with plain imports, the recognized-lib hybrid path,
+                // and relative imports. Only the named-specifier SYNTAX is
+                // this path's own. rebinds: (js_binding, unique, reassign).
+                let mut import_names: Vec<String> = Vec::new();
+                let mut rebinds: Vec<(String, String, bool)> = Vec::new();
+                for a in names {
+                    // B5: a React symbol removed in React 19 (findDOMNode,
+                    // render, hydrate, unmountComponentAtNode, createFactory) —
+                    // routing it emits a dead `import { … } from …` that fails
+                    // to load. Diagnose and skip, scoped to the CORE React
+                    // packages (see react_19_removed_scope above).
+                    if react_19_removed_scope {
+                        if let Some(msg) = react::react_19_removed(&a.name) {
+                            self.record_codegen_error(msg);
+                            continue;
                         }
-                        Some(if let Some(alias) = &a.alias {
-                            format!("{} as {}", js_name, alias)
-                        } else {
-                            js_name
-                        })
-                    })
-                    .collect();
+                    }
+                    let js_name = if is_react_module {
+                        react::snake_to_camel(&a.name)
+                    } else {
+                        a.name.clone()
+                    };
+                    let binding = a.alias.clone().unwrap_or_else(|| js_name.clone());
+                    // The PYTHON-visible name (pre-conversion) — the name the
+                    // user's reference sites are written against. It differs
+                    // from `binding` exactly when our snake→camel conversion
+                    // renamed an unaliased import (`create_store` →
+                    // `createStore`), which is what makes the DX-B2
+                    // alias-and-rewrite class detectable.
+                    let py_local = a.alias.as_deref().unwrap_or(&a.name);
+                    match self.plan_import_binding(py_local, &binding, module, &js_name, &module_path)
+                    {
+                        ImportBindingPlan::Error => return,
+                        ImportBindingPlan::Dedup => {}
+                        ImportBindingPlan::Fresh => {
+                            // Fix A: sanitize the binding so a reserved-word
+                            // import (`from m import x as default`) emits
+                            // `x as default$`, matching references.
+                            import_names.push(Self::import_specifier(&js_name, &binding));
+                        }
+                        ImportBindingPlan::Rebind {
+                            js_binding,
+                            unique,
+                            reassign,
+                        } => {
+                            import_names.push(format!("{} as {}", js_name, unique));
+                            rebinds.push((js_binding, unique, reassign));
+                        }
+                        ImportBindingPlan::Alias { unique } => {
+                            // DX-B2 alias-and-rewrite: hoist under the unique
+                            // name only — no body rebind; reference sites for
+                            // this Python name are rewritten at emission.
+                            import_names.push(format!("{} as {}", js_name, unique));
+                        }
+                    }
+                }
                 // Every name was already imported — emit nothing (the bindings
                 // are all in scope). Side-effect tracking below still runs.
-                if import_names.is_empty() {
+                if import_names.is_empty() && rebinds.is_empty() {
                     return;
                 }
                 // Mark imported names as declared. For React-like
@@ -4679,6 +6763,11 @@ function pyFormatDynamic(value, specStr) {
                 // User aliases bypass tracking — the alias is what the
                 // user wants emitted.
                 for a in names {
+                    // B5: keep a React-19-removed symbol out of the tracking
+                    // sets too — it was diagnosed and never imported above.
+                    if react_19_removed_scope && react::react_19_removed(&a.name).is_some() {
+                        continue;
+                    }
                     let local = a.alias.as_deref().unwrap_or(&a.name);
                     self.declare(local);
                     if is_react_module && a.alias.is_none() {
@@ -4690,6 +6779,14 @@ function pyFormatDynamic(value, specStr) {
                     // components.
                     if is_react_module {
                         self.react_lib_bindings.insert(local.to_string());
+                        // TB-1: remember a local bound to React's createElement
+                        // factory (`create_element`/`createElement`, alias-aware)
+                        // so a direct call's props dict is transformed as
+                        // PSX-props — the only dict-literal position that gets
+                        // the snake→camel/kebab prop-name transform.
+                        if a.name == "create_element" || a.name == "createElement" {
+                            self.react_create_element_fns.insert(local.to_string());
+                        }
                         if a.name == "motion" {
                             self.react_member_component_bases.insert(local.to_string());
                         }
@@ -4700,14 +6797,28 @@ function pyFormatDynamic(value, specStr) {
                         self.asyncio_run_fns.insert(local.to_string());
                     }
                 }
-                let module_path = self.resolve_module(module);
                 // SECURITY (A2): module_path may be a verbatim `[npm.imports]`
                 // override value — config-derived, untrusted. Escape it.
-                self.writeln(&format!(
-                    "import {{ {} }} from {};",
-                    import_names.join(", "),
-                    js_string_literal(&module_path)
-                ));
+                if !import_names.is_empty() {
+                    self.writeln(&format!(
+                        "import {{ {} }} from {};",
+                        import_names.join(", "),
+                        js_string_literal(&module_path)
+                    ));
+                }
+                // Fix J: body-local re-binds for cross-scope alias collisions
+                // (function-local; stays in the body, shadows the outer binding).
+                // A param/earlier-local shadow REASSIGNS; a fresh collision
+                // introduces a `let` (finding 5) — `let`, not `const`, so a
+                // THIRD import of the same name can reassign it (Python
+                // last-wins chains stay valid JS).
+                for (binding, unique, is_reassign) in rebinds {
+                    if is_reassign {
+                        self.writeln(&format!("{} = {};", binding, unique));
+                    } else {
+                        self.writeln(&format!("let {} = {};", binding, unique));
+                    }
+                }
             }
             StmtKind::Try {
                 body,
@@ -4792,9 +6903,10 @@ function pyFormatDynamic(value, specStr) {
                 self.write(")) { throw Object.assign(new Error(");
                 if let Some(m) = msg {
                     self.emit_expr(m);
-                } else {
-                    self.write("\"Assertion failed\"");
                 }
+                // A bare `assert x` raises AssertionError() with NO message
+                // (CPython) — repr is AssertionError(), not
+                // AssertionError('Assertion failed').
                 self.write("), { name: \"AssertionError\" }); }\n");
             }
             StmtKind::Global(_) | StmtKind::Nonlocal(_) => {
@@ -4852,6 +6964,9 @@ function pyFormatDynamic(value, specStr) {
                             self.write(&format!(".{};\n", attr));
                         }
                         ExprKind::Name(name) => {
+                            // Finding 1: `del x` unbinds the name — a later
+                            // re-import must re-emit, not dedup.
+                            self.invalidate_import_decl(name);
                             self.write_indent();
                             self.write(&format!("{} = undefined;\n", Self::sanitize_ident(name)));
                         }
@@ -5090,8 +7205,21 @@ function pyFormatDynamic(value, specStr) {
             let mut names = Vec::new();
             Self::collect_pattern_names(elts, &mut names);
             for n in &names {
+                // Finding 1: tuple-unpack targets are non-import rebinds too.
+                self.invalidate_import_decl(n);
                 if !self.is_declared(n) {
                     self.write_indent();
+                    // Module-level unpack targets EXPORT, exactly like plain
+                    // module-level assignments (B-015) and AnnAssign — they
+                    // are ordinary Python module globals. This was the one
+                    // binding form the export model missed: `x, y = 1, 2`
+                    // compiled to un-exported `let`s, so `from .m import x`
+                    // link-failed per-module and (worse) bound `undefined`
+                    // in a bundle. `export let n;` followed by the
+                    // destructuring assignment is valid ESM.
+                    if self.indent == 0 {
+                        self.write("export ");
+                    }
                     self.write(&format!("let {};\n", Self::sanitize_ident(n)));
                     self.declare(n);
                 }
@@ -5149,6 +7277,32 @@ function pyFormatDynamic(value, specStr) {
         // ignores non-object values — the F3 dict-literal proto fix has an
         // attribute-assignment sibling here. defineProperty creates a
         // normal own data property instead.
+        // autotester properties: `A.q = 5678` AFTER class creation — a plain
+        // JS property on the class object is invisible to instances (their
+        // lookup walks the prototype chain). Route static class-attribute
+        // assignment through __pyClassAttr, the same installer class-body
+        // attributes use (class prop + live prototype accessor = Python
+        // attribute lookup).
+        if let ExprKind::Attribute {
+            value: obj,
+            attr,
+            optional: false,
+        } = &target.kind
+        {
+            if let ExprKind::Name(n) = &obj.kind {
+                if self.known_classes.contains(n) && !attr.starts_with("__") {
+                    self.need_runtime("__pyClassAttr");
+                    self.write(&format!(
+                        "__pyClassAttr({}, \"{}\", ",
+                        Self::sanitize_ident(n),
+                        attr
+                    ));
+                    self.emit_expr(value);
+                    self.write(");\n");
+                    return;
+                }
+            }
+        }
         if let ExprKind::Attribute {
             value: obj, attr, ..
         } = &target.kind
@@ -5164,6 +7318,9 @@ function pyFormatDynamic(value, specStr) {
         }
 
         if let ExprKind::Name(name) = &target.kind {
+            // Finding 1: a non-import rebind breaks any import identity this
+            // scope cached for the name — a later re-import must re-emit.
+            self.invalidate_import_decl(name);
             // First assignment → `let`, subsequent → plain reassignment.
             // Module-scope (indent 0) names export so other `.ps`/`.js` modules
             // can import top-level constants — completes the export model
@@ -5336,6 +7493,898 @@ function pyFormatDynamic(value, specStr) {
         let mut out = Vec::new();
         walk(body, &mut out);
         out
+    }
+
+    /// Order-independent scope binding PRE-PASS (issue #438). Collects EVERY
+    /// name bound in `body` as a local of this scope: assign / aug-assign /
+    /// ann-assign targets (incl. tuple/list/starred), walrus (`:=`), `import` &
+    /// `from-import` aliases, `def`/`class` names, for-loop targets, `with ...
+    /// as`, `except ... as`, and match capture patterns — descending through
+    /// control-flow blocks (if/for/while/with/try/match) but NOT into nested
+    /// def/class/lambda scopes. `params` seed the set. Names declared
+    /// `global`/`nonlocal` are EXCLUDED (they resolve at module/builtin scope,
+    /// so e.g. `global len` restores the `len` builtin lowering — case H).
+    ///
+    /// Consulted by `is_declared_in_any_scope` so a builtin shadowed by a local
+    /// is resolved to the local regardless of SOURCE ORDER — closing DX-B1
+    /// (forward-reference + param shadow), E (comprehension targets), F (a
+    /// later-declared enclosing binding seen by an inner def), G (class methods),
+    /// and H (`global` builtin fallback) at the root.
+    fn collect_local_bindings(body: &[Stmt], params: &[String]) -> HashSet<String> {
+        let mut bound: HashSet<String> = params.iter().cloned().collect();
+        Self::collect_bound_names(body, &mut bound);
+        for g in Self::collect_global_names(body) {
+            bound.remove(&g);
+        }
+        bound
+    }
+
+    /// Issue #438 (case E): the for-target names bound by a comprehension's
+    /// generators — these bind the comprehension's OWN scope, shadowing a
+    /// builtin inside the element/condition (`[len(x) for len in xs]`).
+    ///
+    /// Review edge: the OUTERMOST (leftmost) iterable is evaluated in the
+    /// ENCLOSING scope, so a target must NOT shadow a name referenced there —
+    /// `[x for len in len([1,2,3])]`'s leftmost `len(...)` is the builtin, not
+    /// the `len` target. Names referenced in `generators[0].iter` are therefore
+    /// excluded from the comprehension's local binding set.
+    fn comprehension_target_names(generators: &[Comprehension]) -> HashSet<String> {
+        fn tnames(e: &Expr, out: &mut HashSet<String>) {
+            match &e.kind {
+                ExprKind::Name(n) => {
+                    out.insert(n.clone());
+                }
+                ExprKind::Tuple(elts) | ExprKind::List(elts) => {
+                    for x in elts {
+                        tnames(x, out);
+                    }
+                }
+                ExprKind::Starred(inner) => tnames(inner, out),
+                _ => {}
+            }
+        }
+        let mut out = HashSet::new();
+        for g in generators {
+            tnames(&g.target, &mut out);
+        }
+        out
+    }
+
+    /// #441: collect the TOPMOST walrus (`NamedExpr`) nodes of an expression,
+    /// in source order — the def-time-evaluated side effects of a function
+    /// ANNOTATION. CPython evaluates every annotation expression when the
+    /// `def` statement executes; PythScribe erases annotations (type names
+    /// routinely have no JS runtime binding), so the OBSERVABLE part — each
+    /// walrus assignment — is extracted and emitted as a def-site statement
+    /// instead. Topmost only: emitting an outer walrus emits any nested one
+    /// as part of its value. Does NOT enter a lambda body (its walrus runs
+    /// at call time) or a comprehension (its walrus runs per element when
+    /// the comprehension itself runs — not extractable as a one-shot
+    /// def-site statement; such targets still HOIST via walrus_in_expr, so
+    /// scoping stays sound).
+    fn collect_named_exprs<'e>(expr: &'e Expr, out: &mut Vec<&'e Expr>) {
+        use ExprKind as E;
+        match &expr.kind {
+            E::NamedExpr { .. } => out.push(expr),
+            E::BinOp { left, right, .. } => {
+                Self::collect_named_exprs(left, out);
+                Self::collect_named_exprs(right, out);
+            }
+            E::UnaryOp { operand, .. } => Self::collect_named_exprs(operand, out),
+            E::Compare { left, comparisons } => {
+                Self::collect_named_exprs(left, out);
+                for (_, e) in comparisons {
+                    Self::collect_named_exprs(e, out);
+                }
+            }
+            E::Call {
+                func, args, kwargs, ..
+            } => {
+                Self::collect_named_exprs(func, out);
+                for a in args {
+                    Self::collect_named_exprs(a, out);
+                }
+                for k in kwargs {
+                    Self::collect_named_exprs(&k.value, out);
+                }
+            }
+            E::Attribute { value, .. } => Self::collect_named_exprs(value, out),
+            E::Subscript { value, index, .. } => {
+                Self::collect_named_exprs(value, out);
+                Self::collect_named_exprs(index, out);
+            }
+            E::Slice { lower, upper, step } => {
+                for e in [lower, upper, step].into_iter().flatten() {
+                    Self::collect_named_exprs(e, out);
+                }
+            }
+            E::List(elts) | E::Tuple(elts) | E::Set(elts) => {
+                for e in elts {
+                    Self::collect_named_exprs(e, out);
+                }
+            }
+            E::Dict { items } => {
+                for it in items {
+                    match it {
+                        DictItem::KeyValue { key, value } => {
+                            Self::collect_named_exprs(key, out);
+                            Self::collect_named_exprs(value, out);
+                        }
+                        DictItem::Spread(e) => Self::collect_named_exprs(e, out),
+                    }
+                }
+            }
+            E::FString { parts } => {
+                for p in parts {
+                    if let FStringPart::Expr(e) = p {
+                        Self::collect_named_exprs(e, out);
+                    }
+                }
+            }
+            E::IfExpr {
+                test,
+                body,
+                else_body,
+            } => {
+                Self::collect_named_exprs(test, out);
+                Self::collect_named_exprs(body, out);
+                Self::collect_named_exprs(else_body, out);
+            }
+            E::Starred(e) | E::Await(e) => Self::collect_named_exprs(e, out),
+            _ => {}
+        }
+    }
+
+    /// Collect walrus (`x := ...`) target names anywhere in an expression.
+    /// PEP 572: `:=` binds the ENCLOSING function scope (comprehensions
+    /// included), so these are locals of the surrounding function.
+    fn collect_walrus_targets(expr: &Expr, out: &mut HashSet<String>) {
+        match &expr.kind {
+            ExprKind::NamedExpr { target, value } => {
+                if let ExprKind::Name(n) = &target.kind {
+                    out.insert(n.clone());
+                }
+                Self::collect_walrus_targets(value, out);
+            }
+            ExprKind::BinOp { left, right, .. } => {
+                Self::collect_walrus_targets(left, out);
+                Self::collect_walrus_targets(right, out);
+            }
+            ExprKind::UnaryOp { operand, .. } => Self::collect_walrus_targets(operand, out),
+            ExprKind::Compare { left, comparisons } => {
+                Self::collect_walrus_targets(left, out);
+                for (_, e) in comparisons {
+                    Self::collect_walrus_targets(e, out);
+                }
+            }
+            ExprKind::Call {
+                func, args, kwargs, ..
+            } => {
+                Self::collect_walrus_targets(func, out);
+                for a in args {
+                    Self::collect_walrus_targets(a, out);
+                }
+                for k in kwargs {
+                    Self::collect_walrus_targets(&k.value, out);
+                }
+            }
+            ExprKind::Attribute { value, .. } => Self::collect_walrus_targets(value, out),
+            ExprKind::Subscript { value, index, .. } => {
+                Self::collect_walrus_targets(value, out);
+                Self::collect_walrus_targets(index, out);
+            }
+            ExprKind::List(elts) | ExprKind::Tuple(elts) | ExprKind::Set(elts) => {
+                for e in elts {
+                    Self::collect_walrus_targets(e, out);
+                }
+            }
+            // Review finding 4: walrus inside dicts / f-strings / slices.
+            ExprKind::Dict { items } => {
+                for it in items {
+                    match it {
+                        DictItem::KeyValue { key, value } => {
+                            Self::collect_walrus_targets(key, out);
+                            Self::collect_walrus_targets(value, out);
+                        }
+                        DictItem::Spread(e) => Self::collect_walrus_targets(e, out),
+                    }
+                }
+            }
+            ExprKind::FString { parts } => {
+                for p in parts {
+                    if let FStringPart::Expr(e) = p {
+                        Self::collect_walrus_targets(e, out);
+                    }
+                }
+            }
+            ExprKind::Slice { lower, upper, step } => {
+                for e in [lower, upper, step].into_iter().flatten() {
+                    Self::collect_walrus_targets(e, out);
+                }
+            }
+            ExprKind::IfExpr {
+                test,
+                body,
+                else_body,
+            } => {
+                Self::collect_walrus_targets(test, out);
+                Self::collect_walrus_targets(body, out);
+                Self::collect_walrus_targets(else_body, out);
+            }
+            ExprKind::ListComp { elt, generators }
+            | ExprKind::SetComp { elt, generators }
+            | ExprKind::GeneratorExp { elt, generators } => {
+                Self::collect_walrus_targets(elt, out);
+                for g in generators {
+                    Self::collect_walrus_targets(&g.iter, out);
+                    for c in &g.ifs {
+                        Self::collect_walrus_targets(c, out);
+                    }
+                }
+            }
+            ExprKind::DictComp {
+                key,
+                value,
+                generators,
+            } => {
+                Self::collect_walrus_targets(key, out);
+                Self::collect_walrus_targets(value, out);
+                for g in generators {
+                    Self::collect_walrus_targets(&g.iter, out);
+                    for c in &g.ifs {
+                        Self::collect_walrus_targets(c, out);
+                    }
+                }
+            }
+            ExprKind::Starred(e) | ExprKind::Await(e) | ExprKind::YieldFrom(e) => {
+                Self::collect_walrus_targets(e, out)
+            }
+            ExprKind::Yield(Some(e)) => Self::collect_walrus_targets(e, out),
+            _ => {}
+        }
+    }
+
+    /// Names bound by a match `case` pattern (capture / star / as / nested).
+    fn pattern_bound_names(pat: &Pattern, out: &mut HashSet<String>) {
+        match pat {
+            Pattern::Capture(n) => {
+                out.insert(n.clone());
+            }
+            Pattern::Star(Some(n)) => {
+                out.insert(n.clone());
+            }
+            Pattern::As { pattern, name } => {
+                out.insert(name.clone());
+                Self::pattern_bound_names(pattern, out);
+            }
+            Pattern::Class { args, .. } => {
+                for a in args {
+                    Self::pattern_bound_names(a, out);
+                }
+            }
+            Pattern::Sequence(ps) | Pattern::Or(ps) => {
+                for p in ps {
+                    Self::pattern_bound_names(p, out);
+                }
+            }
+            Pattern::Mapping(entries) => {
+                for (_, p) in entries {
+                    Self::pattern_bound_names(p, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// #452/#453 (naming soundness): collect EVERY identifier the module can
+    /// surface as a bare JS name — `Name` references and binding names alike,
+    /// at ANY nesting depth. The matches are exhaustive (no `_` arm on the
+    /// node enums), so a new AST variant fails compilation here instead of
+    /// silently leaking a name past `fresh_temp`'s freshness guarantee.
+    ///
+    /// Deliberately far larger than the usual visitor: the length IS the
+    /// safety mechanism — a compact `_`-defaulted walker would compile
+    /// silently while missing a node kind, and a single missed `Name` voids
+    /// the freshness invariant. Compiler-enforced totality > brevity here.
+    fn collect_all_idents(body: &[Stmt], out: &mut HashSet<String>) {
+        for stmt in body {
+            Self::collect_idents_stmt(stmt, out);
+        }
+    }
+
+    fn collect_idents_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
+        match &stmt.kind {
+            StmtKind::Expr(e) => Self::collect_idents_expr(e, out),
+            StmtKind::Assign { targets, value } => {
+                for t in targets {
+                    Self::collect_idents_expr(t, out);
+                }
+                Self::collect_idents_expr(value, out);
+            }
+            StmtKind::AugAssign { target, op: _, value } => {
+                Self::collect_idents_expr(target, out);
+                Self::collect_idents_expr(value, out);
+            }
+            StmtKind::FuncDef {
+                name,
+                params,
+                body,
+                decorator_list,
+                return_type,
+                is_async: _,
+            } => {
+                out.insert(name.clone());
+                for p in params {
+                    Self::collect_idents_param(p, out);
+                }
+                Self::collect_all_idents(body, out);
+                for d in decorator_list {
+                    Self::collect_idents_expr(d, out);
+                }
+                if let Some(rt) = return_type {
+                    Self::collect_idents_expr(rt, out);
+                }
+            }
+            StmtKind::ClassDef {
+                name,
+                bases,
+                body,
+                decorator_list,
+            } => {
+                out.insert(name.clone());
+                for b in bases {
+                    Self::collect_idents_expr(b, out);
+                }
+                Self::collect_all_idents(body, out);
+                for d in decorator_list {
+                    Self::collect_idents_expr(d, out);
+                }
+            }
+            StmtKind::Return(v) => {
+                if let Some(v) = v {
+                    Self::collect_idents_expr(v, out);
+                }
+            }
+            StmtKind::If {
+                test,
+                body,
+                elif_clauses,
+                else_body,
+            } => {
+                Self::collect_idents_expr(test, out);
+                Self::collect_all_idents(body, out);
+                for (c, b) in elif_clauses {
+                    Self::collect_idents_expr(c, out);
+                    Self::collect_all_idents(b, out);
+                }
+                if let Some(b) = else_body {
+                    Self::collect_all_idents(b, out);
+                }
+            }
+            StmtKind::While {
+                test,
+                body,
+                else_body,
+            } => {
+                Self::collect_idents_expr(test, out);
+                Self::collect_all_idents(body, out);
+                if let Some(b) = else_body {
+                    Self::collect_all_idents(b, out);
+                }
+            }
+            StmtKind::For {
+                target,
+                iter,
+                body,
+                else_body,
+                is_async: _,
+            } => {
+                Self::collect_idents_expr(target, out);
+                Self::collect_idents_expr(iter, out);
+                Self::collect_all_idents(body, out);
+                if let Some(b) = else_body {
+                    Self::collect_all_idents(b, out);
+                }
+            }
+            StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
+            StmtKind::Import { names } => {
+                for a in names {
+                    match &a.alias {
+                        Some(alias) => {
+                            out.insert(alias.clone());
+                        }
+                        // `import a.b.c` binds the FIRST segment.
+                        None => {
+                            if let Some(first) = a.name.split('.').next() {
+                                out.insert(first.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            StmtKind::ImportSideEffect(_) => {}
+            StmtKind::ImportFrom {
+                module: _,
+                names,
+                level: _,
+            } => {
+                for a in names {
+                    if a.name != "*" {
+                        let local = a.alias.as_deref().unwrap_or(&a.name);
+                        out.insert(local.to_string());
+                    }
+                }
+            }
+            StmtKind::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+            } => {
+                Self::collect_all_idents(body, out);
+                for h in handlers {
+                    if let Some(t) = &h.exc_type {
+                        Self::collect_idents_expr(t, out);
+                    }
+                    if let Some(n) = &h.name {
+                        out.insert(n.clone());
+                    }
+                    Self::collect_all_idents(&h.body, out);
+                }
+                if let Some(b) = else_body {
+                    Self::collect_all_idents(b, out);
+                }
+                if let Some(b) = finally_body {
+                    Self::collect_all_idents(b, out);
+                }
+            }
+            StmtKind::Raise(value, cause) => {
+                for e in [value, cause].into_iter().flatten() {
+                    Self::collect_idents_expr(e, out);
+                }
+            }
+            StmtKind::Assert { test, msg } => {
+                Self::collect_idents_expr(test, out);
+                if let Some(m) = msg {
+                    Self::collect_idents_expr(m, out);
+                }
+            }
+            StmtKind::Global(names) | StmtKind::Nonlocal(names) => {
+                for n in names {
+                    out.insert(n.clone());
+                }
+            }
+            StmtKind::Del(exprs) => {
+                for e in exprs {
+                    Self::collect_idents_expr(e, out);
+                }
+            }
+            StmtKind::With {
+                items,
+                body,
+                is_async: _,
+            } => {
+                for item in items {
+                    Self::collect_idents_expr(&item.context_expr, out);
+                    if let Some(v) = &item.optional_var {
+                        Self::collect_idents_expr(v, out);
+                    }
+                }
+                Self::collect_all_idents(body, out);
+            }
+            StmtKind::AnnAssign {
+                target,
+                annotation,
+                value,
+            } => {
+                Self::collect_idents_expr(target, out);
+                Self::collect_idents_expr(annotation, out);
+                if let Some(v) = value {
+                    Self::collect_idents_expr(v, out);
+                }
+            }
+            StmtKind::Match { subject, cases } => {
+                Self::collect_idents_expr(subject, out);
+                for c in cases {
+                    Self::collect_idents_pattern(&c.pattern, out);
+                    if let Some(g) = &c.guard {
+                        Self::collect_idents_expr(g, out);
+                    }
+                    Self::collect_all_idents(&c.body, out);
+                }
+            }
+        }
+    }
+
+    fn collect_idents_param(p: &Param, out: &mut HashSet<String>) {
+        out.insert(p.name.clone());
+        if let Some(a) = &p.annotation {
+            Self::collect_idents_expr(a, out);
+        }
+        if let Some(d) = &p.default {
+            Self::collect_idents_expr(d, out);
+        }
+    }
+
+    fn collect_idents_pattern(pat: &Pattern, out: &mut HashSet<String>) {
+        match pat {
+            Pattern::Wildcard => {}
+            Pattern::Capture(n) => {
+                out.insert(n.clone());
+            }
+            Pattern::Literal(e) | Pattern::Value(e) => Self::collect_idents_expr(e, out),
+            Pattern::Class { cls, args } => {
+                out.insert(cls.clone());
+                for a in args {
+                    Self::collect_idents_pattern(a, out);
+                }
+            }
+            Pattern::Sequence(ps) | Pattern::Or(ps) => {
+                for p in ps {
+                    Self::collect_idents_pattern(p, out);
+                }
+            }
+            Pattern::Mapping(entries) => {
+                for (k, p) in entries {
+                    Self::collect_idents_expr(k, out);
+                    Self::collect_idents_pattern(p, out);
+                }
+            }
+            Pattern::As { pattern, name } => {
+                out.insert(name.clone());
+                Self::collect_idents_pattern(pattern, out);
+            }
+            Pattern::Star(n) => {
+                if let Some(n) = n {
+                    out.insert(n.clone());
+                }
+            }
+        }
+    }
+
+    fn collect_idents_expr(e: &Expr, out: &mut HashSet<String>) {
+        match &e.kind {
+            ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::ImagLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BytesLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::NoneLiteral => {}
+            ExprKind::FString { parts } => {
+                for p in parts {
+                    if let FStringPart::Expr(e) = p {
+                        Self::collect_idents_expr(e, out);
+                    }
+                }
+            }
+            ExprKind::Name(n) => {
+                out.insert(n.clone());
+            }
+            ExprKind::BinOp { left, op: _, right } => {
+                Self::collect_idents_expr(left, out);
+                Self::collect_idents_expr(right, out);
+            }
+            ExprKind::UnaryOp { op: _, operand } => Self::collect_idents_expr(operand, out),
+            ExprKind::Compare { left, comparisons } => {
+                Self::collect_idents_expr(left, out);
+                for (_, c) in comparisons {
+                    Self::collect_idents_expr(c, out);
+                }
+            }
+            ExprKind::Call {
+                func,
+                args,
+                kwargs,
+                optional: _,
+            } => {
+                Self::collect_idents_expr(func, out);
+                for a in args {
+                    Self::collect_idents_expr(a, out);
+                }
+                for k in kwargs {
+                    Self::collect_idents_expr(&k.value, out);
+                }
+            }
+            ExprKind::Attribute {
+                value,
+                attr: _,
+                optional: _,
+            } => Self::collect_idents_expr(value, out),
+            ExprKind::Subscript {
+                value,
+                index,
+                optional: _,
+            } => {
+                Self::collect_idents_expr(value, out);
+                Self::collect_idents_expr(index, out);
+            }
+            ExprKind::Slice { lower, upper, step } => {
+                for e in [lower, upper, step].into_iter().flatten() {
+                    Self::collect_idents_expr(e, out);
+                }
+            }
+            ExprKind::List(elts) | ExprKind::Tuple(elts) | ExprKind::Set(elts) => {
+                for e in elts {
+                    Self::collect_idents_expr(e, out);
+                }
+            }
+            ExprKind::Dict { items } => {
+                for item in items {
+                    match item {
+                        DictItem::KeyValue { key, value } => {
+                            Self::collect_idents_expr(key, out);
+                            Self::collect_idents_expr(value, out);
+                        }
+                        DictItem::Spread(e) => Self::collect_idents_expr(e, out),
+                    }
+                }
+            }
+            ExprKind::ListComp { elt, generators }
+            | ExprKind::SetComp { elt, generators }
+            | ExprKind::GeneratorExp { elt, generators } => {
+                Self::collect_idents_expr(elt, out);
+                for g in generators {
+                    Self::collect_idents_expr(&g.target, out);
+                    Self::collect_idents_expr(&g.iter, out);
+                    for c in &g.ifs {
+                        Self::collect_idents_expr(c, out);
+                    }
+                }
+            }
+            ExprKind::DictComp {
+                key,
+                value,
+                generators,
+            } => {
+                Self::collect_idents_expr(key, out);
+                Self::collect_idents_expr(value, out);
+                for g in generators {
+                    Self::collect_idents_expr(&g.target, out);
+                    Self::collect_idents_expr(&g.iter, out);
+                    for c in &g.ifs {
+                        Self::collect_idents_expr(c, out);
+                    }
+                }
+            }
+            ExprKind::Lambda { params, body } => {
+                for p in params {
+                    Self::collect_idents_param(p, out);
+                }
+                Self::collect_idents_expr(body, out);
+            }
+            ExprKind::IfExpr {
+                test,
+                body,
+                else_body,
+            } => {
+                Self::collect_idents_expr(test, out);
+                Self::collect_idents_expr(body, out);
+                Self::collect_idents_expr(else_body, out);
+            }
+            ExprKind::Starred(e) | ExprKind::Await(e) | ExprKind::YieldFrom(e) => {
+                Self::collect_idents_expr(e, out)
+            }
+            ExprKind::Yield(v) => {
+                if let Some(v) = v {
+                    Self::collect_idents_expr(v, out);
+                }
+            }
+            ExprKind::NamedExpr { target, value } => {
+                Self::collect_idents_expr(target, out);
+                Self::collect_idents_expr(value, out);
+            }
+        }
+    }
+
+    /// Statement walk for `collect_local_bindings` — records every bound name,
+    /// descending into control-flow bodies but NOT nested def/class scopes.
+    fn collect_bound_names(body: &[Stmt], out: &mut HashSet<String>) {
+        fn tnames(e: &Expr, out: &mut HashSet<String>) {
+            match &e.kind {
+                ExprKind::Name(n) => {
+                    out.insert(n.clone());
+                }
+                ExprKind::Tuple(elts) | ExprKind::List(elts) => {
+                    for x in elts {
+                        tnames(x, out);
+                    }
+                }
+                ExprKind::Starred(inner) => tnames(inner, out),
+                _ => {} // attribute / subscript targets bind no new local
+            }
+        }
+        for s in body {
+            match &s.kind {
+                StmtKind::Assign { targets, value } => {
+                    for t in targets {
+                        tnames(t, out);
+                        Self::collect_walrus_targets(t, out);
+                    }
+                    Self::collect_walrus_targets(value, out);
+                }
+                StmtKind::AnnAssign {
+                    target,
+                    annotation,
+                    value,
+                } => {
+                    // The annotated TARGET is a static local even with no
+                    // value (`len: int` alone → CPython UnboundLocalError on
+                    // a later read; PEP 526).
+                    tnames(target, out);
+                    // Round-3 review: a walrus inside the ANNOTATION
+                    // expression (`x: (len := int)`) also binds this scope
+                    // statically — the annotation itself is never evaluated
+                    // in a function body, but its walrus target is a local
+                    // in the symbol table, so a later `len(...)` is an
+                    // unbound-local read, NOT the builtin.
+                    Self::collect_walrus_targets(annotation, out);
+                    if let Some(v) = value {
+                        Self::collect_walrus_targets(v, out);
+                    }
+                }
+                StmtKind::AugAssign { target, value, .. } => {
+                    tnames(target, out);
+                    Self::collect_walrus_targets(value, out);
+                }
+                StmtKind::Import { names } | StmtKind::ImportFrom { names, .. } => {
+                    for a in names {
+                        if a.name == "*" {
+                            continue;
+                        }
+                        out.insert(a.alias.clone().unwrap_or_else(|| a.name.clone()));
+                    }
+                }
+                StmtKind::FuncDef {
+                    name,
+                    params,
+                    decorator_list,
+                    return_type,
+                    ..
+                } => {
+                    out.insert(name.clone());
+                    // Review finding 4 + round 3: a nested def's default args,
+                    // decorators, and ANNOTATIONS (param + return) are
+                    // evaluated in THIS (enclosing) scope at def time, so a
+                    // walrus there (`def inner(x=(y := ...))`, `@(z := ...)`,
+                    // `def inner(x: (w := ...))`) binds this scope. Do NOT
+                    // descend into the nested body/params.
+                    for p in params {
+                        if let Some(d) = &p.default {
+                            Self::collect_walrus_targets(d, out);
+                        }
+                        if let Some(ann) = &p.annotation {
+                            Self::collect_walrus_targets(ann, out);
+                        }
+                    }
+                    for d in decorator_list {
+                        Self::collect_walrus_targets(d, out);
+                    }
+                    if let Some(rt) = return_type {
+                        Self::collect_walrus_targets(rt, out);
+                    }
+                }
+                StmtKind::ClassDef {
+                    name,
+                    bases,
+                    decorator_list,
+                    ..
+                } => {
+                    out.insert(name.clone());
+                    // A nested class's bases and decorators are evaluated in the
+                    // enclosing scope too.
+                    for b in bases {
+                        Self::collect_walrus_targets(b, out);
+                    }
+                    for d in decorator_list {
+                        Self::collect_walrus_targets(d, out);
+                    }
+                }
+                StmtKind::For {
+                    target,
+                    iter,
+                    body,
+                    else_body,
+                    ..
+                } => {
+                    tnames(target, out);
+                    Self::collect_walrus_targets(iter, out);
+                    Self::collect_bound_names(body, out);
+                    if let Some(e) = else_body {
+                        Self::collect_bound_names(e, out);
+                    }
+                }
+                StmtKind::If {
+                    test,
+                    body,
+                    elif_clauses,
+                    else_body,
+                } => {
+                    Self::collect_walrus_targets(test, out);
+                    Self::collect_bound_names(body, out);
+                    for (c, b) in elif_clauses {
+                        Self::collect_walrus_targets(c, out);
+                        Self::collect_bound_names(b, out);
+                    }
+                    if let Some(e) = else_body {
+                        Self::collect_bound_names(e, out);
+                    }
+                }
+                StmtKind::While {
+                    test,
+                    body,
+                    else_body,
+                } => {
+                    Self::collect_walrus_targets(test, out);
+                    Self::collect_bound_names(body, out);
+                    if let Some(e) = else_body {
+                        Self::collect_bound_names(e, out);
+                    }
+                }
+                StmtKind::With { items, body, .. } => {
+                    for it in items {
+                        Self::collect_walrus_targets(&it.context_expr, out);
+                        if let Some(ov) = &it.optional_var {
+                            tnames(ov, out);
+                        }
+                    }
+                    Self::collect_bound_names(body, out);
+                }
+                StmtKind::Try {
+                    body,
+                    handlers,
+                    else_body,
+                    finally_body,
+                } => {
+                    Self::collect_bound_names(body, out);
+                    for h in handlers {
+                        if let Some(n) = &h.name {
+                            out.insert(n.clone());
+                        }
+                        Self::collect_bound_names(&h.body, out);
+                    }
+                    if let Some(e) = else_body {
+                        Self::collect_bound_names(e, out);
+                    }
+                    if let Some(f) = finally_body {
+                        Self::collect_bound_names(f, out);
+                    }
+                }
+                StmtKind::Match { subject, cases } => {
+                    Self::collect_walrus_targets(subject, out);
+                    for c in cases {
+                        Self::pattern_bound_names(&c.pattern, out);
+                        // Review finding 4: walrus inside a match guard.
+                        if let Some(g) = &c.guard {
+                            Self::collect_walrus_targets(g, out);
+                        }
+                        Self::collect_bound_names(&c.body, out);
+                    }
+                }
+                StmtKind::Return(Some(e))
+                | StmtKind::Expr(e)
+                | StmtKind::Raise(Some(e), _) => {
+                    Self::collect_walrus_targets(e, out);
+                }
+                StmtKind::Assert { test, msg } => {
+                    Self::collect_walrus_targets(test, out);
+                    if let Some(m) = msg {
+                        Self::collect_walrus_targets(m, out);
+                    }
+                }
+                // Review finding 4: `del name` makes `name` a LOCAL of this
+                // scope (Python static scoping), so a subsequent reference is an
+                // unbound local, NOT the builtin.
+                StmtKind::Del(exprs) => {
+                    for e in exprs {
+                        tnames(e, out);
+                    }
+                }
+                // Global/Nonlocal are handled by the exclusion pass; Pass/Break/
+                // Continue/etc. bind nothing.
+                _ => {}
+            }
+        }
     }
 
     /// #262: does the loop body reassign any of this for-target's names? If so
@@ -5684,12 +8733,106 @@ function pyFormatDynamic(value, specStr) {
         aug.into_iter().filter(|n| !bound.contains(n)).collect()
     }
 
+    /// #443: every name bound by an `import` / `from-import` in this body
+    /// (any nesting depth, not descending into def/class scopes). A NON-
+    /// import binding form that rebinds one of these names needs the
+    /// import emitted ASSIGNABLY (hoisted `let` + unique import + assign),
+    /// or the rebind hits an immutable ESM binding (`with CM() as floor`
+    /// after `from math import floor` threw "Assignment to constant
+    /// variable"; `def floor` was a redeclaration SyntaxError).
+    /// Also consulted by emit_module (B8b) to split user bindings from
+    /// import bindings in the module pre-scan.
+    fn collect_import_bound_names(stmts: &[Stmt], out: &mut HashSet<String>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::Import { names } => {
+                    for a in names {
+                        match &a.alias {
+                            Some(al) => {
+                                out.insert(al.clone());
+                            }
+                            None => {
+                                // `import a.b.c` binds the HEAD `a`.
+                                let head = a.name.split('.').next().unwrap_or(&a.name).to_string();
+                                out.insert(head);
+                            }
+                        }
+                    }
+                }
+                StmtKind::ImportFrom { names, .. } => {
+                    for a in names {
+                        if a.name != "*" {
+                            out.insert(a.alias.clone().unwrap_or_else(|| a.name.clone()));
+                        }
+                    }
+                }
+                StmtKind::If {
+                    body,
+                    elif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    Self::collect_import_bound_names(body, out);
+                    for (_, b) in elif_clauses {
+                        Self::collect_import_bound_names(b, out);
+                    }
+                    if let Some(e) = else_body {
+                        Self::collect_import_bound_names(e, out);
+                    }
+                }
+                StmtKind::While {
+                    body, else_body, ..
+                }
+                | StmtKind::For {
+                    body, else_body, ..
+                } => {
+                    Self::collect_import_bound_names(body, out);
+                    if let Some(e) = else_body {
+                        Self::collect_import_bound_names(e, out);
+                    }
+                }
+                StmtKind::With { body, .. } => Self::collect_import_bound_names(body, out),
+                StmtKind::Try {
+                    body,
+                    handlers,
+                    else_body,
+                    finally_body,
+                } => {
+                    Self::collect_import_bound_names(body, out);
+                    for h in handlers {
+                        Self::collect_import_bound_names(&h.body, out);
+                    }
+                    if let Some(e) = else_body {
+                        Self::collect_import_bound_names(e, out);
+                    }
+                    if let Some(f) = finally_body {
+                        Self::collect_import_bound_names(f, out);
+                    }
+                }
+                StmtKind::Match { cases, .. } => {
+                    for c in cases {
+                        Self::collect_import_bound_names(&c.body, out);
+                    }
+                }
+                // def/class bodies are separate scopes.
+                _ => {}
+            }
+        }
+    }
+
     /// Returns each hoist-eligible name with a `promoted` flag: `true` when
     /// the name's first binding is a depth-0 statement (`x = 5` before a
     /// loop that rebinds it) — see the #288 promotion pass at the bottom.
     /// Promoted module-scope names must keep the `export` their inline
     /// first assignment would have carried.
-    fn collect_hoisted_names(body: &[Stmt]) -> Vec<(String, bool)> {
+    ///
+    /// `at_module`: true for the MODULE body, false for function/method
+    /// bodies. The B2 import-rebind promotion below is module-only — a
+    /// function-local import already emits assignably (`let X = __pyimp_X_n`
+    /// at the import's position), and pre-hoisting it would replace the
+    /// intended use-before-import TDZ fault (≈ UnboundLocalError) with a
+    /// silent `undefined` read.
+    fn collect_hoisted_names(body: &[Stmt], at_module: bool) -> Vec<(String, bool)> {
         fn record(seen: &mut Vec<(String, u32)>, name: &str, depth: u32) {
             if !seen.iter().any(|(n, _)| n == name) {
                 seen.push((name.to_string(), depth));
@@ -5893,6 +9036,7 @@ function pyFormatDynamic(value, specStr) {
                 _ => {}
             }
         }
+        let collect_import_bound = Self::collect_import_bound_names;
         struct WalkCtx {
             seen: Vec<(String, u32)>,
             /// #288: for-target names that are "reused" (reassigned or
@@ -5901,6 +9045,12 @@ function pyFormatDynamic(value, specStr) {
             /// Names bound by a def/class in this body: never promoted
             /// (`let f;` + `function f` is a JS SyntaxError).
             defclass: std::collections::HashSet<String>,
+            /// #443: names also bound by an import in this body (see
+            /// `collect_import_bound`).
+            import_bound: std::collections::HashSet<String>,
+            /// B2: true when walking the MODULE body (the import-rebind
+            /// promotion + `del` recording are module-only).
+            b2_module: bool,
         }
         fn walk(
             stmts: &[Stmt],
@@ -6004,9 +9154,29 @@ function pyFormatDynamic(value, specStr) {
                         }
                     }
                     StmtKind::With { items, body, .. } => {
-                        for item in items {
+                        for (i, item) in items.iter().enumerate() {
                             if let Some(v) = &item.optional_var {
-                                assign_targets(v, depth, &mut ctx.seen);
+                                // autotester control_structures: items after
+                                // the first are emitted INSIDE the try{}
+                                // nesting (one JS block deeper than the
+                                // statement), so their targets must hoist to
+                                // stay visible after the statement — Python
+                                // scopes them to the enclosing function.
+                                // #443: a first-item target that ALSO carries
+                                // an import binding hoists too, so the import
+                                // emits assignably and the `as` rebind lands
+                                // on a mutable `let` instead of the immutable
+                                // ESM import binding.
+                                let mut names = Vec::new();
+                                target_names(v, &mut names);
+                                for n in names {
+                                    let d = if i == 0 && !ctx.import_bound.contains(&n) {
+                                        depth
+                                    } else {
+                                        depth + 1
+                                    };
+                                    record(&mut ctx.seen, &n, d);
+                                }
                             }
                         }
                         walk(body, depth + 1, ctx, reassigned);
@@ -6017,19 +9187,153 @@ function pyFormatDynamic(value, specStr) {
                         }
                     }
                     // Nested defs/classes have their own scope; the bound name
-                    // is recorded at the current depth but we don't recurse.
-                    StmtKind::FuncDef { name, .. } | StmtKind::ClassDef { name, .. } => {
+                    // is recorded at the current depth but we don't recurse
+                    // into the BODY. #441: a def's DEFAULTS, ANNOTATIONS
+                    // (param + return), and DECORATORS are evaluated in THIS
+                    // (enclosing) scope at def time (CPython def-time
+                    // evaluation), so a walrus in any of them binds — and
+                    // must hoist — HERE. Mirrors collect_bound_names' arm
+                    // exactly: the two walkers must agree on what evaluates
+                    // in the enclosing scope, or a walrus target ends up in
+                    // the binding set with no `let` (a strict-mode
+                    // ReferenceError on the emitted def-time assignment).
+                    StmtKind::FuncDef {
+                        name,
+                        params,
+                        decorator_list,
+                        return_type,
+                        ..
+                    } => {
                         record(&mut ctx.seen, name, depth);
                         ctx.defclass.insert(name.clone());
+                        for p in params {
+                            if let Some(d) = &p.default {
+                                walrus_in_expr(d, &mut ctx.seen);
+                            }
+                            if let Some(ann) = &p.annotation {
+                                walrus_in_expr(ann, &mut ctx.seen);
+                            }
+                        }
+                        for d in decorator_list {
+                            walrus_in_expr(d, &mut ctx.seen);
+                        }
+                        if let Some(rt) = return_type {
+                            walrus_in_expr(rt, &mut ctx.seen);
+                        }
+                    }
+                    // A class's BASES and DECORATORS likewise evaluate in the
+                    // enclosing scope at class-creation time.
+                    StmtKind::ClassDef {
+                        name,
+                        bases,
+                        decorator_list,
+                        ..
+                    } => {
+                        record(&mut ctx.seen, name, depth);
+                        ctx.defclass.insert(name.clone());
+                        for b in bases {
+                            walrus_in_expr(b, &mut ctx.seen);
+                        }
+                        for d in decorator_list {
+                            walrus_in_expr(d, &mut ctx.seen);
+                        }
+                    }
+                    // B2: `del X` REBINDS (unbinds) a bare name — for an
+                    // import-bound name it must force the assignable-import
+                    // path exactly like an assignment (the emitted
+                    // `X = undefined` otherwise writes the immutable ESM
+                    // binding). Recorded at depth ≥ 1 so it always hoists;
+                    // non-import names keep their existing emission untouched.
+                    // Module-only, like the whole B2 promotion (see below).
+                    StmtKind::Del(exprs) if ctx.b2_module => {
+                        for e in exprs {
+                            if let ExprKind::Name(n) = &e.kind {
+                                if ctx.import_bound.contains(n) {
+                                    record(&mut ctx.seen, n, depth.max(1));
+                                }
+                            }
+                        }
                     }
                     _ => {}
                 }
             }
         }
+        // B2: names `global`-declared inside any def (at any nesting) rebind
+        // the MODULE binding when assigned there — an import-bound such name
+        // must emit assignably. Over-approximating on the declaration alone
+        // is safe: hoisting flips the import onto its Rebind path
+        // (`import { X as __pyimp_X_n }` + `X = __pyimp_X_n;`), which is
+        // semantically identical when no rebind ever runs.
+        fn collect_global_declared(stmts: &[Stmt], in_def: bool, out: &mut HashSet<String>) {
+            for stmt in stmts {
+                match &stmt.kind {
+                    StmtKind::Global(names) if in_def => {
+                        for n in names {
+                            out.insert(n.clone());
+                        }
+                    }
+                    StmtKind::FuncDef { body, .. } => collect_global_declared(body, true, out),
+                    StmtKind::ClassDef { body, .. } => collect_global_declared(body, in_def, out),
+                    StmtKind::If {
+                        body,
+                        elif_clauses,
+                        else_body,
+                        ..
+                    } => {
+                        collect_global_declared(body, in_def, out);
+                        for (_, b) in elif_clauses {
+                            collect_global_declared(b, in_def, out);
+                        }
+                        if let Some(e) = else_body {
+                            collect_global_declared(e, in_def, out);
+                        }
+                    }
+                    StmtKind::While {
+                        body, else_body, ..
+                    }
+                    | StmtKind::For {
+                        body, else_body, ..
+                    } => {
+                        collect_global_declared(body, in_def, out);
+                        if let Some(e) = else_body {
+                            collect_global_declared(e, in_def, out);
+                        }
+                    }
+                    StmtKind::With { body, .. } => collect_global_declared(body, in_def, out),
+                    StmtKind::Try {
+                        body,
+                        handlers,
+                        else_body,
+                        finally_body,
+                    } => {
+                        collect_global_declared(body, in_def, out);
+                        for h in handlers {
+                            collect_global_declared(&h.body, in_def, out);
+                        }
+                        if let Some(e) = else_body {
+                            collect_global_declared(e, in_def, out);
+                        }
+                        if let Some(f) = finally_body {
+                            collect_global_declared(f, in_def, out);
+                        }
+                    }
+                    StmtKind::Match { cases, .. } => {
+                        for c in cases {
+                            collect_global_declared(&c.body, in_def, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut import_bound = std::collections::HashSet::new();
+        collect_import_bound(body, &mut import_bound);
         let mut ctx = WalkCtx {
             seen: Vec::new(),
             promote: std::collections::HashSet::new(),
             defclass: std::collections::HashSet::new(),
+            import_bound,
+            b2_module: at_module,
         };
         let mut reassigned = Self::reassigned_names(body);
         // #269 (R17): a for-loop target that is READ outside its own loop leaks
@@ -6052,6 +9356,59 @@ function pyFormatDynamic(value, specStr) {
             if *d == 0 && ctx.promote.contains(n) && !ctx.defclass.contains(n) {
                 *d = 1;
                 promoted.insert(n.clone());
+            }
+        }
+        // #443: a def/class name that ALSO carries an import binding in this
+        // body. Python's `def X`/`class X` after `from m import X` is a plain
+        // rebind, so the import must emit assignably: hoist an (exported, at
+        // module scope) `let X;`, which flips the import onto its Rebind path
+        // (`import { X as __pyimp_X_n }` + `X = __pyimp_X_n;`) and lets the
+        // def/class emit in the assignment form (`X = function …` /
+        // `X = class …`, `rebind_declared` in emit_func_def/emit_class_def)
+        // instead of a redeclaration SyntaxError. The general defclass
+        // exclusion above stays: `let f;` + `function f` only clashes when
+        // the def still emits a DECLARATION, which `rebind_declared` rules
+        // out exactly for these hoisted names.
+        for (n, d) in ctx.seen.iter_mut() {
+            if *d == 0 && ctx.defclass.contains(n) && ctx.import_bound.contains(n) {
+                *d = 1;
+                promoted.insert(n.clone());
+            }
+        }
+        // B2 (CLASS rule): an import-bound name that is REBOUND by ANY
+        // non-import binding form at ANY depth — depth-0 plain assignment,
+        // tuple-unpack, aug-assign, for/with target, del, … — must hoist so
+        // the import emits ASSIGNABLY (Rebind path: unique import + `X =
+        // __pyimp_X_n;`) instead of an immutable ESM `import { X }` binding
+        // that the rebind then hits ("Assignment to constant variable").
+        // The pre-#B2 code promoted only depth>0 rebinds (the `d > 0` filter
+        // below silently dropped module-level ones). ONE predicate, all
+        // forms: rebound-anywhere ∧ import-bound ⇒ hoist. Def/class rebinds
+        // are the pass above; `global`-declared rebinds are the pass below.
+        // Module-only (see the doc comment on `at_module`).
+        if at_module {
+            for (n, d) in ctx.seen.iter_mut() {
+                if *d == 0 && ctx.import_bound.contains(n) && !ctx.defclass.contains(n) {
+                    *d = 1;
+                    promoted.insert(n.clone());
+                }
+            }
+            // B2: `global X` inside a def whose X is import-bound — the
+            // function body assigns the MODULE binding directly, so it too
+            // must be a `let`.
+            let mut global_declared: HashSet<String> = HashSet::new();
+            collect_global_declared(body, false, &mut global_declared);
+            for n in &global_declared {
+                if ctx.import_bound.contains(n) && !ctx.defclass.contains(n) {
+                    if let Some((_, d)) = ctx.seen.iter_mut().find(|(sn, _)| sn == n) {
+                        if *d == 0 {
+                            *d = 1;
+                        }
+                    } else {
+                        ctx.seen.push((n.clone(), 1));
+                    }
+                    promoted.insert(n.clone());
+                }
             }
         }
         ctx.seen
@@ -6546,14 +9903,98 @@ function pyFormatDynamic(value, specStr) {
         out
     }
 
+    /// Emit the function-scope `let` hoists for a function-LIKE body (a `def`
+    /// body OR a class-method body — both are full Python scopes). A local
+    /// first-assigned inside a nested block (an if/else branch, a loop, a try)
+    /// is function-scoped in Python, so it must be declared once at the top of
+    /// the JS body rather than block-scoped `let` inside the branch. Without
+    /// this, `if c: x = a else: x = b; return x` emits a block-scoped
+    /// `let x = a` in the if-branch and a BARE `x = b` in the else — a
+    /// `ReferenceError` under ESM strict mode (WB-5, previously only wired for
+    /// `emit_func_def`, so METHOD bodies leaked the bug). Sentinel-init
+    /// (`__UNBOUND`) covers unbound-local reads exactly as before (PBT-2/#288/
+    /// #325). Must be called AFTER the scope is pushed and params declared, and
+    /// (for a derived constructor) AFTER the `super(...)` call.
+    fn emit_hoisted_local_decls(&mut self, body: &[Stmt]) {
+        let hoisted_names = Self::collect_hoisted_names(body, false);
+        let hoisted_set: HashSet<String> = hoisted_names.iter().map(|(n, _)| n.clone()).collect();
+        let mut sentinels = Self::sentinel_for_names(body, &hoisted_set);
+        // #288: a promoted name's depth-0 first assignment executes before
+        // any of its loops — the binding is guaranteed, so no sentinel.
+        for (n, promoted) in &hoisted_names {
+            if *promoted {
+                sentinels.remove(n);
+            }
+        }
+        // #325: a name that is ONLY ever aug-assigned (never plainly bound) is
+        // an unbound local — force it to sentinel even when it was hoisted via
+        // an aug-assign inside a nested block (`try: y += 1`), so the guarded
+        // read raises UnboundLocalError instead of poisoning with undefined.
+        let aug_only: HashSet<String> = Self::aug_only_locals(body).into_iter().collect();
+        for n in &aug_only {
+            sentinels.insert(n.clone());
+        }
+        for (hoisted, _promoted) in hoisted_names {
+            if !self.is_declared(&hoisted) {
+                self.write_indent();
+                if sentinels.contains(&hoisted) {
+                    self.need_runtime("__UNBOUND");
+                    self.write(&format!(
+                        "let {} = __UNBOUND;\n",
+                        Self::sanitize_ident(&hoisted)
+                    ));
+                    self.mark_sentinel(&hoisted);
+                } else {
+                    self.write(&format!("let {};\n", Self::sanitize_ident(&hoisted)));
+                }
+                self.declare(&hoisted);
+            }
+            // #269: genuine function-scope `let` (or a param) — bare for-target safe.
+            self.mark_hoisted(&hoisted);
+        }
+        // #325: a name that is ONLY ever aug-assigned in this body (never
+        // plainly bound) is an unbound function-local — `x += …` reads it
+        // before it is ever set, which CPython raises UnboundLocalError for.
+        // Sentinel-hoist it (shadowing any enclosing binding of the same
+        // name) so the guarded read raises instead of silently mutating the
+        // outer binding. Params / global / nonlocal names are already
+        // declared, so the `!is_declared` guard skips them.
+        for name in Self::aug_only_locals(body) {
+            if !self.is_declared(&name) {
+                self.need_runtime("__UNBOUND");
+                self.write_indent();
+                self.write(&format!(
+                    "let {} = __UNBOUND;\n",
+                    Self::sanitize_ident(&name)
+                ));
+                self.declare(&name);
+                self.mark_sentinel(&name);
+                self.mark_hoisted(&name);
+            }
+        }
+    }
+
     fn emit_func_def(
         &mut self,
         name: &str,
         params: &[Param],
         body: &[Stmt],
         decorator_list: &[Expr],
+        return_type: Option<&Expr>,
         is_async: bool,
+        rebind_declared: bool,
     ) {
+        // WB-15: a `function` def rebinds JS `this`, so a live instance-method
+        // receiver switches to the `__self` alias captured in the enclosing
+        // method (any nesting depth — the alias is a closed-over const). BUT a
+        // function that binds `self` as a real PARAMETER shadows the receiver:
+        // inside it, `self` is that ordinary param (innermost binding wins).
+        let prev_self_lowering = self.self_lowering;
+        if params.iter().any(|p| p.name == "self") {
+            self.self_lowering = SelfLowering::Ordinary;
+        } else {
+            self.cross_self_this_boundary();
+        }
         // Check for @component decorator
         let is_component = decorator_list
             .iter()
@@ -6658,6 +10099,32 @@ function pyFormatDynamic(value, specStr) {
                     self.param_default_hoists.insert(param.name.clone(), hidden);
                 }
             }
+            // #441: CPython evaluates function ANNOTATIONS at def time —
+            // after the defaults (dis order: defaults L→R, then annotations
+            // L→R params-then-return) — so a walrus inside one assigns its
+            // enclosing-scope target when the `def` executes. Annotations
+            // are otherwise erased (type names routinely have no JS runtime
+            // binding, so evaluating the WHOLE annotation would crash on
+            // `x: SomeProtocol`); the observable walrus assignments are
+            // extracted and emitted as def-site statements. Their targets
+            // are hoisted `let`s (collect_hoisted_names' FuncDef arm scans
+            // the same surfaces) and enclosing-scope bindings
+            // (collect_bound_names' arm) — the same eval-timing family as
+            // the genexp eager-iter fix (#463).
+            let mut ann_walruses: Vec<&Expr> = Vec::new();
+            for param in params {
+                if let Some(ann) = &param.annotation {
+                    Self::collect_named_exprs(ann, &mut ann_walruses);
+                }
+            }
+            if let Some(rt) = return_type {
+                Self::collect_named_exprs(rt, &mut ann_walruses);
+            }
+            for w in ann_walruses {
+                self.write_indent();
+                self.emit_expr(w);
+                self.write(";\n");
+            }
         }
 
         // Emit export prefix for module-level functions (Python modules export
@@ -6685,7 +10152,15 @@ function pyFormatDynamic(value, specStr) {
         // at module scope; a redefined component/export now reuses the
         // assignment form (`App = function …`) — it is already exported by its
         // first declaration.
-        let redefine = self.indent == 0 && !self.module_decl_names.insert(name.to_string());
+        // #443 extension: `rebind_declared` — the def's name was ALREADY
+        // declared in the current scope when the def executed (an import's
+        // binding, a param, an earlier local). Python `def` is a plain rebind
+        // there, so the assignment form applies at ANY indent (a nested
+        // `def floor` after a function-local `from math import floor`
+        // previously emitted `function floor` beside the import's `let floor`
+        // — a redeclaration SyntaxError).
+        let redefine = (self.indent == 0 && !self.module_decl_names.insert(name.to_string()))
+            || rebind_declared;
         self.write_indent();
         if !redefine && self.indent == 0 && (is_component || is_nextjs_export || !is_psx) {
             self.write("export ");
@@ -6784,7 +10259,14 @@ function pyFormatDynamic(value, specStr) {
         self.param_default_hoists.clear();
         self.write(") {\n");
         self.indent += 1;
-        self.push_scope();
+        // autotester arguments/decorators: recover the keyword channel of a
+        // `*args, <kw-only>, **kwargs` signature (emitted `...args`-last).
+        self.emit_varargs_kw_prologue(params, name);
+        // Issue #438: precompute this function's complete local binding set for
+        // order-independent shadow resolution (params + body locals).
+        let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        self.push_scope(Self::collect_local_bindings(body, &param_names));
+        self.set_scope_globals(Self::collect_global_declared(body));
         // Enable PSX mode inside @component or @psx functions.
         // Both paths flip the same flag — the difference is the rest of
         // @component's machinery (export, props destructuring) doesn't
@@ -6798,7 +10280,10 @@ function pyFormatDynamic(value, specStr) {
         // types from annotations (`: list`, `: dict`, etc.) so subscript/
         // equality/truthiness sites inside the body know the shape.
         for param in params {
-            if param.name != "self" && param.name != "cls" {
+            // `cls` is an ordinary param in a plain function (class-decorator
+            // idiom); only `self` stays implicit (its references lower to
+            // `this`).
+            if param.name != "self" {
                 self.declare(&param.name);
             }
         }
@@ -6822,63 +10307,9 @@ function pyFormatDynamic(value, specStr) {
         // PBT-2: sentinel-initialize hoisted for-targets with no other
         // guaranteed binding — reads route through __pyChkLocal so a
         // zero-iteration loop leaves them raising UnboundLocalError (CPython)
-        // instead of reading as undefined→None.
-        let hoisted_names = Self::collect_hoisted_names(body);
-        let hoisted_set: HashSet<String> = hoisted_names.iter().map(|(n, _)| n.clone()).collect();
-        let mut sentinels = Self::sentinel_for_names(body, &hoisted_set);
-        // #288: a promoted name's depth-0 first assignment executes before
-        // any of its loops — the binding is guaranteed, so no sentinel.
-        for (n, promoted) in &hoisted_names {
-            if *promoted {
-                sentinels.remove(n);
-            }
-        }
-        // #325: a name that is ONLY ever aug-assigned (never plainly bound) is
-        // an unbound local — force it to sentinel even when it was hoisted via
-        // an aug-assign inside a nested block (`try: y += 1`), so the guarded
-        // read raises UnboundLocalError instead of poisoning with undefined.
-        let aug_only: HashSet<String> = Self::aug_only_locals(body).into_iter().collect();
-        for n in &aug_only {
-            sentinels.insert(n.clone());
-        }
-        for (hoisted, _promoted) in hoisted_names {
-            if !self.is_declared(&hoisted) {
-                self.write_indent();
-                if sentinels.contains(&hoisted) {
-                    self.need_runtime("__UNBOUND");
-                    self.write(&format!(
-                        "let {} = __UNBOUND;\n",
-                        Self::sanitize_ident(&hoisted)
-                    ));
-                    self.mark_sentinel(&hoisted);
-                } else {
-                    self.write(&format!("let {};\n", Self::sanitize_ident(&hoisted)));
-                }
-                self.declare(&hoisted);
-            }
-            // #269: genuine function-scope `let` (or a param) — bare for-target safe.
-            self.mark_hoisted(&hoisted);
-        }
-        // #325: a name that is ONLY ever aug-assigned in this body (never
-        // plainly bound) is an unbound function-local — `x += …` reads it
-        // before it is ever set, which CPython raises UnboundLocalError for.
-        // Sentinel-hoist it (shadowing any enclosing binding of the same
-        // name) so the guarded read raises instead of silently mutating the
-        // outer binding. Params / global / nonlocal names are already
-        // declared, so the `!is_declared` guard skips them.
-        for name in Self::aug_only_locals(body) {
-            if !self.is_declared(&name) {
-                self.need_runtime("__UNBOUND");
-                self.write_indent();
-                self.write(&format!(
-                    "let {} = __UNBOUND;\n",
-                    Self::sanitize_ident(&name)
-                ));
-                self.declare(&name);
-                self.mark_sentinel(&name);
-                self.mark_hoisted(&name);
-            }
-        }
+        // instead of reading as undefined→None. Shared with class methods
+        // (WB-5) via emit_hoisted_local_decls.
+        self.emit_hoisted_local_decls(body);
         // Round-4 sweep: `await` is only legal inside this body if the
         // function is async (async generators included).
         let prev_await_ok = self.await_ok;
@@ -6900,11 +10331,14 @@ function pyFormatDynamic(value, specStr) {
         // undecorated functions only — components/handlers/decorated
         // functions and *args signatures keep the legacy options-object
         // convention (JS can't positionally bind past a rest param).
-        if !is_component
-            && !is_handler
-            && decorator_list.is_empty()
-            && !params.iter().any(|p| p.is_args)
-        {
+        // autotester decorators: DECORATED functions now get metadata too —
+        // the assignments run BEFORE the decorator application line, so they
+        // attach to the ORIGINAL function object, which is exactly what the
+        // decorator receives (the wrapper carries its own metadata). Without
+        // this, `f(*args, **kwargs)` inside a decorator fell to the legacy
+        // trailing-options convention and fed the kw dict into a positional
+        // parameter of the decorated function.
+        if !is_component && !is_handler {
             // B1: store the RAW Python param name. The binding is positional
             // by index (__pyKwArgs), and the call site emits raw keyword names
             // (emit_kwargs_value), so __pyparams__ must match those raw names —
@@ -6913,13 +10347,30 @@ function pyFormatDynamic(value, specStr) {
             // signature but must appear as "default" here or every keyword call
             // misses (TypeError: unexpected keyword argument). Mirrors the
             // dataclass path, which already stores raw field names.
+            //
+            // autotester arguments/decorators: varargs signatures now carry
+            // metadata too — __pyparams__ lists only the names BEFORE `*args`
+            // (positionally bindable), __pyva__ marks the variadic convention
+            // (keywords travel as the marked trailing carrier — __pyMarkKw),
+            // and __pykw__ is set when a keyword channel exists (**kwargs or
+            // keyword-only params).
+            let star = params.iter().position(|p| p.is_args);
             let names: Vec<String> = params
                 .iter()
-                .filter(|p| !p.is_kwargs && p.name != "self" && p.name != "cls")
-                .map(|p| format!("\"{}\"", p.name))
+                .enumerate()
+                .filter(|(i, p)| {
+                    // `self` stays: in a PLAIN function it is a real,
+                    // keyword-bindable first parameter (decorator wrappers).
+                    !p.is_kwargs
+                        && !p.is_args
+                        && p.name != "cls"
+                        && star.is_none_or(|s| *i < s)
+                })
+                .map(|(_, p)| format!("\"{}\"", p.name))
                 .collect();
-            let has_kw = params.iter().any(|p| p.is_kwargs);
-            if !names.is_empty() || has_kw {
+            let has_kw = params.iter().any(|p| p.is_kwargs)
+                || (star.is_some() && Self::varargs_kw_split(params).is_some());
+            if !names.is_empty() || has_kw || star.is_some() {
                 self.write_indent();
                 // B9: the assignment target must be the SAME emitted function
                 // name used by the declaration above (js_name — the
@@ -6936,6 +10387,19 @@ function pyFormatDynamic(value, specStr) {
                     self.write_indent();
                     self.write(&format!("{}.__pykw__ = true;\n", js_name));
                 }
+                if star.is_some() {
+                    self.write_indent();
+                    self.write(&format!("{}.__pyva__ = true;\n", js_name));
+                }
+            }
+            // autotester docstrings: attach the function docstring.
+            if let Some(doc) = Self::body_docstring(body) {
+                self.write_indent();
+                self.write(&format!(
+                    "{}.__doc__ = {};\n",
+                    js_name,
+                    js_string_literal(doc)
+                ));
             }
         }
 
@@ -6974,10 +10438,14 @@ function pyFormatDynamic(value, specStr) {
                 ExprKind::Name(n) if n == "component" || n == "psx" || n == "staticmethod" || n == "handler" || n == "wasm"
             );
             if !skip {
+                // __pyCall: a decorator may be a callable INSTANCE
+                // (`@Repeater(2)` — a class whose __call__ wraps). One-time
+                // application, so the wrapper costs nothing on hot paths.
+                self.need_runtime("__pyCall");
                 self.write_indent();
-                self.write(&format!("{} = ", js_name));
+                self.write(&format!("{} = __pyCall(", js_name));
                 self.emit_expr(decorator);
-                self.write(&format!("({});\n", js_name));
+                self.write(&format!(", [{}]);\n", js_name));
             }
         }
 
@@ -6988,13 +10456,127 @@ function pyFormatDynamic(value, specStr) {
         if is_handler && self.indent == 0 {
             self.write(&format!("export default {{ fetch: {} }};\n", js_name));
         }
+
+        self.self_lowering = prev_self_lowering;
+    }
+
+    /// autotester arguments/decorators: does this signature carry a keyword
+    /// channel AFTER a `*args` rest param — keyword-only params and/or
+    /// `**kwargs`? JS cannot declare parameters after a rest param, so such
+    /// defs emit `...args` LAST in the JS signature and recover the keyword
+    /// channel in a body prologue (see emit_varargs_kw_prologue): call sites
+    /// with keywords append a Symbol-marked carrier object (__pyMarkKw in
+    /// __pyKwArgs), the prologue pops it (__pyTakeKw), extracts keyword-only
+    /// params (__pyKwPop — CPython missing/unexpected TypeError shapes), and
+    /// what remains is the `**kwargs` dict.
+    fn varargs_kw_split(params: &[Param]) -> Option<(usize, Vec<&Param>, Option<&Param>)> {
+        let star = params.iter().position(|p| p.is_args)?;
+        let kwonly: Vec<&Param> = params[star + 1..]
+            .iter()
+            .filter(|p| !p.is_kwargs)
+            .collect();
+        let kwargs = params.iter().find(|p| p.is_kwargs);
+        if kwonly.is_empty() && kwargs.is_none() {
+            return None;
+        }
+        Some((star, kwonly, kwargs))
+    }
+
+    /// Emit the keyword-channel prologue for a varargs+keyword signature,
+    /// plus the `*args`-is-a-tuple marker for ANY varargs signature.
+    /// Must be called immediately after the opening `{` of the function or
+    /// method body (before any user statements). No-op for other signatures.
+    fn emit_varargs_kw_prologue(&mut self, params: &[Param], fname: &str) {
+        self.emit_varargs_kw_channel(params, fname);
+        // S2: `*args` collects into a TUPLE in Python (type/isinstance/repr).
+        // Mark the fresh JS rest array in place — after the kw channel above
+        // has popped the keyword carrier off its tail.
+        if let Some(star) = params.iter().position(|p| p.is_args) {
+            self.need_runtime("__pyMarkTuple");
+            self.write_indent();
+            self.write(&format!(
+                "__pyMarkTuple({});\n",
+                Self::sanitize_ident(&params[star].name)
+            ));
+        }
+    }
+
+    fn emit_varargs_kw_channel(&mut self, params: &[Param], fname: &str) {
+        let Some((star, kwonly, kwargs)) = Self::varargs_kw_split(params) else {
+            return;
+        };
+        let args_js = Self::sanitize_ident(&params[star].name).into_owned();
+        let kw_var = match kwargs {
+            Some(k) => Self::sanitize_ident(&k.name).into_owned(),
+            None => {
+                let n = self.default_hoist_counter;
+                self.default_hoist_counter += 1;
+                format!("__kwonly{}", n)
+            }
+        };
+        self.need_runtime("__pyTakeKw");
+        self.write_indent();
+        self.write(&format!("const {} = __pyTakeKw({});\n", kw_var, args_js));
+        if kwargs.is_none() {
+            // BEFORE the pops: CPython reports an unexpected keyword ahead
+            // of a missing keyword-only one, so validate the key set first
+            // (the kw-only names are the allowed remainder).
+            self.need_runtime("__pyNoExtraKw");
+            let allowed: Vec<String> = kwonly
+                .iter()
+                .map(|p| format!("\"{}\"", p.name))
+                .collect();
+            self.write_indent();
+            self.write(&format!(
+                "__pyNoExtraKw({}, \"{}\", [{}]);\n",
+                kw_var,
+                fname,
+                allowed.join(", ")
+            ));
+        }
+        for p in &kwonly {
+            self.need_runtime("__pyKwPop");
+            self.write_indent();
+            self.write(&format!(
+                "let {} = __pyKwPop({}, \"{}\", \"{}\"",
+                Self::sanitize_ident(&p.name),
+                kw_var,
+                p.name,
+                fname
+            ));
+            if let Some(d) = &p.default {
+                self.write(", ");
+                self.emit_expr(d);
+            }
+            self.write(");\n");
+        }
     }
 
     fn emit_params(&mut self, params: &[Param]) {
+        self.emit_params_ctx(params, false)
+    }
+
+    /// `drop_first`: drop the FIRST param — the method receiver bound to JS
+    /// `this` (an instance method's `self`, or a `@classmethod`'s first param).
+    /// WB-15: this is now driven by the caller's single receiver decision, NOT
+    /// a name test — a `@staticmethod`'s `self`/`cls` param is an ordinary
+    /// argument and is KEPT (dropping it emitted a signature whose first
+    /// argument silently shifted / left the body's `self` unbound). In a PLAIN
+    /// function (or lambda) `drop_first` is false, so a `self`/`cls` param is an
+    /// ordinary parameter — the decorator idioms `def deco(cls): ...` and
+    /// `def wrapper(self, name): ...`.
+    fn emit_params_ctx(&mut self, params: &[Param], drop_first: bool) {
+        // Varargs + keyword channel: the rest param is emitted LAST and the
+        // keyword-only/**kwargs params move to the body prologue.
+        let stop_at_star = Self::varargs_kw_split(params).is_some();
+        let star_idx = params.iter().position(|p| p.is_args);
         let mut first = true;
-        for param in params {
-            if param.name == "self" || param.name == "cls" {
+        for (i, param) in params.iter().enumerate() {
+            if drop_first && i == 0 {
                 continue;
+            }
+            if stop_at_star && star_idx.is_some_and(|s| i > s) {
+                continue; // keyword-only / **kwargs → prologue
             }
             if !first {
                 self.write(", ");
@@ -7004,6 +10586,9 @@ function pyFormatDynamic(value, specStr) {
                 self.write("...");
             }
             self.write(&Self::sanitize_ident(&param.name));
+            if param.is_args && stop_at_star {
+                break; // nothing may follow a JS rest param
+            }
             if let Some(default) = &param.default {
                 self.write(" = ");
                 // F6: reference the once-evaluated hoisted const (set up in
@@ -7054,7 +10639,30 @@ function pyFormatDynamic(value, specStr) {
         bases: &[Expr],
         body: &[Stmt],
         decorator_list: &[Expr],
+        rebind_declared: bool,
     ) {
+        // autotester reprtest: `class X(object):` — an explicit `object` base
+        // is Python's default and means "no base at all", but it was emitted
+        // verbatim as `extends object` → ReferenceError at load. Strip it
+        // HERE, at the single entry point, so every downstream consumer (the
+        // `extends` slot, the __pyClass mixin list, the dataclass path) sees
+        // the canonical no-base form. A user class actually NAMED `object`
+        // shadows the builtin and is kept (known_classes distinguishes it).
+        let is_object_base = |b: &Expr| {
+            matches!(&b.kind, ExprKind::Name(n)
+                if n == "object" && !self.known_classes.contains(n))
+        };
+        let filtered_bases: Vec<Expr>;
+        let bases: &[Expr] = if bases.iter().any(is_object_base) {
+            filtered_bases = bases
+                .iter()
+                .filter(|b| !is_object_base(b))
+                .cloned()
+                .collect();
+            &filtered_bases
+        } else {
+            bases
+        };
         // Check for @dataclass or @dataclass(frozen=True)
         let mut dc_opts = DataclassOptions::default();
         let is_dataclass = decorator_list.iter().any(|d| {
@@ -7065,10 +10673,31 @@ function pyFormatDynamic(value, specStr) {
             is_dc
         });
 
+        // WB-12: `@js_class` opt-in — emit a plain JS class (NO `extends
+        // PyObject`, NO cooperative-MRO `__pyClass` install) so libraries that
+        // reject any class with a superclass work (MobX `makeAutoObservable`,
+        // and any lib inspecting the prototype chain for "has a superclass").
+        // The DEFAULT (`extends PyObject`) is UNCHANGED — it carries Python
+        // object semantics (repr / isinstance / cooperative super); `@js_class`
+        // deliberately trades those away for foreign-lib interop. `__init__`
+        // then lowers to a plain JS `constructor` (via `pyobject_model == false`)
+        // and, with no base, no `super()` is synthesized.
+        let is_js_class = decorator_list
+            .iter()
+            .any(|d| matches!(&d.kind, ExprKind::Name(n) if n == "js_class"));
+
         // #350: a module-level class redefinition (a name already declared at
         // module scope) is Python last-wins — emit it as a `name = class …`
         // assignment so JS doesn't reject a duplicate `class name` declaration.
-        let redefine = self.indent == 0 && !self.module_decl_names.insert(name.to_string());
+        // #443: `rebind_declared` extends this to a class whose name was
+        // already declared when the class executed (an import's binding, a
+        // param, an earlier local) — a plain Python rebind, at any indent.
+        let redefine = (self.indent == 0 && !self.module_decl_names.insert(name.to_string()))
+            || rebind_declared;
+        // #443: record that this class DEFINITION has executed — an import
+        // that rebinds the name from here on drops it from `known_classes`
+        // (see plan_import_binding), so post-rebind calls stop `new`-lowering.
+        self.emitted_class_names.insert(name.to_string());
         self.write_indent();
         // Module-level classes export (Python exports all top-level names);
         // nested classes (indent > 0) stay local.
@@ -7080,14 +10709,25 @@ function pyFormatDynamic(value, specStr) {
         } else {
             self.write(&format!("class {}", Self::sanitize_ident(name)));
         }
-        // Does the first base extend a builtin JS-level class (Exception &
+        // Does ANY base extend a builtin JS-level class (Exception &
         // friends)? Those keep the native `extends` + native-`super()` path;
         // the cooperative-MRO machinery is only wired for pure-PythScribe
         // class hierarchies.
-        let first_base_is_exception = bases
-            .first()
-            .map(|b| matches!(&b.kind, ExprKind::Name(n) if is_builtin_exception(n)))
-            .unwrap_or(false);
+        //
+        // r7 BLOCKING fix: scan ALL bases, not just bases[0]. In CPython,
+        // `class E(Mixin, ValueError)` IS an exception (raisable, str(e) =
+        // args[0], caught by `except ValueError`) — the mixin-first ordering
+        // is the COMMON multiple-inheritance idiom. Treating it as a plain
+        // PyObject-model class made the raised instance a non-Error with no
+        // message and no ValueError linkage. The exception base now goes on
+        // the JS `extends` chain (instances are real Errors → raise/except/
+        // str/args all work), and the remaining bases mix in via __pyClass
+        // exactly like every other multi-base class — C3 gives the mixin
+        // precedence over the chain, matching CPython's MRO.
+        let exception_base_idx = bases
+            .iter()
+            .position(|b| matches!(&b.kind, ExprKind::Name(n) if is_builtin_exception(n)));
+        let first_base_is_exception = exception_base_idx.is_some();
         // A3: is the first base an EXTERNAL/native class — i.e. a `Name`
         // that isn't `class`-defined anywhere in this file (so it must have
         // come from an import: `Component` from react, a native `Error`
@@ -7124,25 +10764,39 @@ function pyFormatDynamic(value, specStr) {
         // `super().__init__()` works across multiple inheritance.
         // @dataclass keeps its generated constructor; exception subclasses
         // and external/native bases keep native `extends` + `constructor`.
-        let pyobject_model =
-            !is_dataclass && !first_base_is_exception && !first_base_is_external_native;
+        let pyobject_model = !is_dataclass
+            && !first_base_is_exception
+            && !first_base_is_external_native
+            && !is_js_class;
         if !bases.is_empty() {
-            // Auto-import a builtin exception base (Exception, ValueError, …)
+            // Auto-import builtin exception bases (Exception, ValueError, …)
             // when subclassed — mirrors the `raise X(...)` auto-import. Without
             // this, `class Foo(Exception)` emits `extends Exception` with no
             // import → ReferenceError at load.
-            if let ExprKind::Name(base_name) = &bases[0].kind {
-                if is_builtin_exception(base_name) {
-                    self.need_runtime(base_name);
+            //
+            // r7 BLOCKING fix: scan ALL bases, not just bases[0]. `__pyClass`
+            // below emits EVERY base into its mixin list, so an exception as a
+            // NON-FIRST base — `class E(Mixin, ValueError)`, the common
+            // multiple-inheritance pattern — referenced ValueError without
+            // ever importing it → undefined reference at runtime.
+            for base in bases {
+                if let ExprKind::Name(base_name) = &base.kind {
+                    if is_builtin_exception(base_name) {
+                        self.need_runtime(base_name);
+                    }
                 }
             }
-            // Only the FIRST base goes on the JS prototype chain (single
+            // Only ONE base goes on the JS prototype chain (single
             // `extends`); methods from the remaining bases are mixed in by
             // `__pyClass` below, in C3-MRO order. For regular hierarchies the
             // chain bottoms out at `PyObject` via the root class, enabling
-            // cooperative MRO `__init__` dispatch.
+            // cooperative MRO `__init__` dispatch. r7: when a builtin
+            // exception appears among the bases it takes the chain slot even
+            // when non-first — the instance must BE an Error for raise/
+            // except/str to work; the C3 flattening in __pyClass still gives
+            // the preceding mixins CPython's precedence for method lookup.
             self.write(" extends ");
-            self.emit_expr(&bases[0]);
+            self.emit_expr(&bases[exception_base_idx.unwrap_or(0)]);
         } else if pyobject_model {
             // No explicit base → extend the runtime `PyObject` so `new C(...)`
             // routes through its cooperative `__init__` dispatcher.
@@ -7151,7 +10805,11 @@ function pyFormatDynamic(value, specStr) {
         }
         self.write(" {\n");
         self.indent += 1;
-        self.push_scope();
+        // Issue #438: a Python class scope does NOT enclose its methods' scopes
+        // (a method sees module/builtin names, never class-level names except
+        // via self/cls). Push an EMPTY binding set so class-level names never
+        // pollute method shadow resolution.
+        self.push_scope(HashSet::new());
         self.class_stack.push(ClassCtx {
             name: name.to_string(),
             pyobject_model,
@@ -7159,7 +10817,54 @@ function pyFormatDynamic(value, specStr) {
         });
 
         if is_dataclass {
-            self.emit_dataclass_body(name, body, &dc_opts);
+            // Dataclass INHERITANCE: prepend every base dataclass's field
+            // statements (already flattened) so this constructor / __repr__
+            // / __eq__ covers inherited fields in CPython's order; register
+            // this class's flattened set for its own subclasses.
+            let mut inherited: Vec<Stmt> = Vec::new();
+            for b in bases {
+                if let ExprKind::Name(bn) = &b.kind {
+                    if let Some(fs) = self.dataclass_field_stmts.get(bn) {
+                        inherited.extend(fs.iter().cloned());
+                    }
+                }
+            }
+            let mut flat = inherited.clone();
+            flat.extend(
+                body.iter()
+                    .filter(|st| matches!(st.kind, StmtKind::AnnAssign { .. }))
+                    .cloned(),
+            );
+            self.dataclass_field_stmts.insert(name.to_string(), flat);
+            // B6: the derived constructor must call `super(...)` with the
+            // JS-extended base's OWN constructor contract — its init fields,
+            // in order (`extends` targets the FIRST base). A bare `super()`
+            // ran the base's field validators on `undefined` and threw for
+            // any base with required fields.
+            let super_fields: Vec<String> = bases
+                .first()
+                .and_then(|b| match &b.kind {
+                    ExprKind::Name(bn) => self.dataclass_field_stmts.get(bn),
+                    _ => None,
+                })
+                .map(|fs| {
+                    let mut v: Vec<String> = Vec::new();
+                    for f in collect_dataclass_fields(fs) {
+                        if !f.property_default && !v.contains(&f.name.to_string()) {
+                            v.push(f.name.to_string());
+                        }
+                    }
+                    v
+                })
+                .unwrap_or_default();
+            self.emit_dataclass_body(
+                name,
+                body,
+                &inherited,
+                !bases.is_empty(),
+                &super_fields,
+                &dc_opts,
+            );
         } else {
             self.emit_class_body(body);
         }
@@ -7177,8 +10882,13 @@ function pyFormatDynamic(value, specStr) {
         // root), and mix in methods from non-first bases (first MRO winner
         // wins). Even no-base classes need this so `new.target.__mro__`
         // exists for the PyObject `__init__` dispatcher. Dataclasses and
-        // exception subclasses keep their native paths.
-        if pyobject_model {
+        // exception subclasses keep their native paths — EXCEPT (r7) a
+        // multi-base exception class (`class E(Mixin, ValueError)`), which
+        // still needs __pyClass so the mixin's methods land on the prototype
+        // (with C3 precedence) and `__mro__` exists for isinstance(e, Mixin).
+        // Construction stays native (the exception chain's constructor);
+        // __pyC3 tolerates the runtime exception base having no __mro__.
+        if pyobject_model || (first_base_is_exception && bases.len() > 1) {
             self.need_runtime("__pyClass");
             self.write_indent();
             self.write(&format!("__pyClass({}, [", Self::sanitize_ident(name)));
@@ -7199,21 +10909,70 @@ function pyFormatDynamic(value, specStr) {
         //    stamp `.name` on subclass instances).
         self.write_indent();
         self.write(&format!("{}.__name__ = \"{}\";\n", js_name, name));
+        // autotester docstrings: class + method docstrings.
+        if let Some(doc) = Self::body_docstring(body) {
+            self.write_indent();
+            self.write(&format!(
+                "{}.__doc__ = {};\n",
+                js_name,
+                js_string_literal(doc)
+            ));
+        }
+        for stmt in body {
+            if let StmtKind::FuncDef {
+                name: m_name,
+                body: m_body,
+                ..
+            } = &stmt.kind
+            {
+                if let Some(doc) = Self::body_docstring(m_body) {
+                    self.write_indent();
+                    self.write(&format!(
+                        "if ({cls}.prototype.{m}) {cls}.prototype.{m}.__doc__ = {d};\n",
+                        cls = js_name,
+                        m = Self::sanitize_ident(m_name),
+                        d = js_string_literal(doc)
+                    ));
+                }
+            }
+        }
         // 1. Class attributes: `Cls.attr = value` + a live prototype
         //    accessor so instances read through and instance assignment
         //    shadows (Python attribute lookup).
+        //    autotester properties: while emitting these VALUES, sibling
+        //    method names are class-local (`x = property(getX, setX)`) and
+        //    resolve to Cls.prototype.<name>.
+        let method_names: HashSet<String> = body
+            .iter()
+            .filter_map(|s| match &s.kind {
+                StmtKind::FuncDef { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        self.class_attr_subst = Some((js_name.to_string(), method_names));
         for stmt in body {
-            let (target, value) = match &stmt.kind {
-                StmtKind::Assign { targets, value } if targets.len() == 1 => (&targets[0], value),
+            let (target, value, ann) = match &stmt.kind {
+                StmtKind::Assign { targets, value } if targets.len() == 1 => {
+                    (&targets[0], value, None)
+                }
                 StmtKind::AnnAssign {
                     target,
                     value: Some(v),
-                    ..
-                } => (target, v),
+                    annotation,
+                } => (target, v, Some(annotation)),
                 _ => continue,
             };
-            if is_dataclass {
-                continue; // dataclass fields are constructor params
+            // Dataclass fields are constructor params — EXCEPT ClassVar
+            // pseudo-fields, plain (un-annotated) assignments, and
+            // property(...) defaults, which CPython keeps as class
+            // attributes (autotester data_classes: m = 101010,
+            // v = property(getV, setV), w: int = property(getW, setW)).
+            if is_dataclass
+                && ann.is_some()
+                && !ann.is_some_and(is_classvar_annotation)
+                && !is_property_call(value)
+            {
+                continue;
             }
             if let ExprKind::Name(attr_name) = &target.kind {
                 self.need_runtime("__pyClassAttr");
@@ -7225,6 +10984,91 @@ function pyFormatDynamic(value, specStr) {
                 ));
                 self.emit_expr(value);
                 self.write(");\n");
+                continue;
+            }
+            // autotester classes/properties: class-body TUPLE-target
+            // assignment (`p, q = 456, 789` / `x, y = property(...), …`)
+            // previously fell through to emit_stmt inside the class body →
+            // invalid bare `let p;`. Install each name as a class attribute
+            // here instead. Matching-arity literal RHS assigns element-wise;
+            // any other RHS is materialized once and indexed.
+            if let ExprKind::Tuple(elts) | ExprKind::List(elts) = &target.kind {
+                if !elts
+                    .iter()
+                    .all(|e| matches!(&e.kind, ExprKind::Name(_)))
+                {
+                    continue; // non-Name elements in a class body: unsupported
+                }
+                self.need_runtime("__pyClassAttr");
+                let literal_vals: Option<&Vec<Expr>> = match &value.kind {
+                    ExprKind::Tuple(vals) | ExprKind::List(vals)
+                        if vals.len() == elts.len()
+                            && !vals
+                                .iter()
+                                .any(|v| matches!(v.kind, ExprKind::Starred(_))) =>
+                    {
+                        Some(vals)
+                    }
+                    _ => None,
+                };
+                let tmp = if literal_vals.is_none() {
+                    let t = format!("__clsattr{}", self.default_hoist_counter);
+                    self.default_hoist_counter += 1;
+                    self.write_indent();
+                    self.write(&format!("const {} = [...(", t));
+                    self.emit_expr(value);
+                    self.write(")];\n");
+                    Some(t)
+                } else {
+                    None
+                };
+                for (i, elt) in elts.iter().enumerate() {
+                    let ExprKind::Name(attr_name) = &elt.kind else {
+                        unreachable!()
+                    };
+                    self.write_indent();
+                    self.write(&format!(
+                        "__pyClassAttr({}, \"{}\", ",
+                        js_name,
+                        Self::sanitize_ident(attr_name)
+                    ));
+                    match (&literal_vals, &tmp) {
+                        (Some(vals), _) => self.emit_expr(&vals[i]),
+                        (None, Some(t)) => self.write(&format!("{}[{}]", t, i)),
+                        _ => unreachable!(),
+                    }
+                    self.write(");\n");
+                }
+            }
+        }
+        self.class_attr_subst = None;
+        // 1b. autotester classes: NESTED classes install as class attributes
+        //     (`Outer.Inner`). Emitted inside a bare block so the local
+        //     `class Inner` binding neither leaks to module scope nor
+        //     collides with a sibling class's nested name; __pyClassCall's
+        //     class-detection constructs it with `new` at call sites.
+        for stmt in body {
+            if let StmtKind::ClassDef {
+                name: nested_name,
+                bases: nested_bases,
+                body: nested_body,
+                decorator_list: nested_decs,
+            } = &stmt.kind
+            {
+                self.writeln("{");
+                self.indent += 1;
+                // Fresh block scope — the nested name cannot collide here.
+                self.emit_class_def(nested_name, nested_bases, nested_body, nested_decs, false);
+                self.need_runtime("__pyClassAttr");
+                self.write_indent();
+                self.write(&format!(
+                    "__pyClassAttr({}, \"{}\", {});\n",
+                    js_name,
+                    nested_name,
+                    Self::sanitize_ident(nested_name)
+                ));
+                self.indent -= 1;
+                self.writeln("}");
             }
         }
         // 2. static/class methods reachable from instances (Python allows
@@ -7282,17 +11126,29 @@ function pyFormatDynamic(value, specStr) {
                 //    methods on the prototype function; static/class
                 //    methods on the class function. *args signatures and
                 //    accessors keep the legacy options-object path.
-                if !is_accessor && !m_params.iter().any(|p| p.is_args) {
+                if !is_accessor {
                     // B1: RAW param name (see function-site rationale). The
                     // call site emits raw keyword names; __pyparams__ must
                     // match them, not the sanitized JS signature form.
+                    // autotester arguments: varargs methods carry metadata
+                    // too (names before `*args` + __pyva__ marker) — see the
+                    // function-site rationale.
+                    let star = m_params.iter().position(|p| p.is_args);
                     let names: Vec<String> = m_params
                         .iter()
-                        .filter(|p| !p.is_kwargs && p.name != "self" && p.name != "cls")
-                        .map(|p| format!("\"{}\"", p.name))
+                        .enumerate()
+                        .filter(|(i, p)| {
+                            !p.is_kwargs
+                                && !p.is_args
+                                && p.name != "self"
+                                && p.name != "cls"
+                                && star.is_none_or(|s| *i < s)
+                        })
+                        .map(|(_, p)| format!("\"{}\"", p.name))
                         .collect();
-                    let has_kw = m_params.iter().any(|p| p.is_kwargs);
-                    if !names.is_empty() || has_kw {
+                    let has_kw = m_params.iter().any(|p| p.is_kwargs)
+                        || (star.is_some() && Self::varargs_kw_split(m_params).is_some());
+                    if !names.is_empty() || has_kw || star.is_some() {
                         let target = if m_name == "__init__" {
                             js_name.to_string()
                         } else if is_static_m || is_class_m {
@@ -7310,13 +11166,80 @@ function pyFormatDynamic(value, specStr) {
                             self.write_indent();
                             self.write(&format!("{}.__pykw__ = true;\n", target));
                         }
+                        if star.is_some() {
+                            self.write_indent();
+                            self.write(&format!("{}.__pyva__ = true;\n", target));
+                        }
+                    }
+                }
+                // autotester method_and_class_decorators: USER method
+                // decorators were silently DROPPED (the worst failure mode —
+                // the undecorated method ran). Apply them here, bottom-up,
+                // after the metadata assignments (the decorator receives the
+                // plain function; the wrapper carries its own metadata).
+                // Recognized structural decorators (static/class/property/
+                // setter/validator/check) keep their dedicated lowerings.
+                let is_structural = |d: &Expr| {
+                    matches!(&d.kind, ExprKind::Name(n)
+                        if n == "staticmethod" || n == "classmethod"
+                            || n == "property" || n == "check")
+                        || matches!(&d.kind, ExprKind::Attribute { attr, .. }
+                            if attr == "setter" || attr == "getter" || attr == "deleter")
+                        || matches!(&d.kind, ExprKind::Call { func, .. }
+                            if matches!(&func.kind, ExprKind::Name(n) if n == "validator"))
+                };
+                for dec in m_decs.iter().rev() {
+                    if is_structural(dec) {
+                        continue;
+                    }
+                    let target = if is_static_m || is_class_m {
+                        format!("{}.{}", js_name, m_js)
+                    } else {
+                        format!("{}.prototype.{}", js_name, m_js)
+                    };
+                    self.write_indent();
+                    if is_class_m {
+                        // @classmethod decoration: the decorator's wrapper
+                        // signature is (cls, ...) — thread the class the
+                        // way __pyDecorateMethod threads self.
+                        self.need_runtime("__pyDecorateClassMethod");
+                        self.write(&format!("{} = __pyDecorateClassMethod(", target));
+                        self.emit_expr(dec);
+                        self.write(&format!(", {}, {});\n", target, js_name));
+                    } else if is_static_m {
+                        // No self to thread — plain application (via
+                        // __pyCall: the decorator may be a callable instance).
+                        self.need_runtime("__pyCall");
+                        self.write(&format!("{} = __pyCall(", target));
+                        self.emit_expr(dec);
+                        self.write(&format!(", [{}]);\n", target));
+                    } else {
+                        self.need_runtime("__pyDecorateMethod");
+                        self.write(&format!("{} = __pyDecorateMethod(", target));
+                        self.emit_expr(dec);
+                        self.write(&format!(", {});\n", target));
                     }
                 }
             }
         }
         if is_dataclass {
-            // Dataclass constructors bind keywords by field order.
-            let fields = collect_dataclass_fields(body);
+            // Dataclass constructors bind keywords by field order — the
+            // FLATTENED order (inherited fields first), matching the
+            // constructor signature emitted by emit_dataclass_body.
+            let flat_stmts = self
+                .dataclass_field_stmts
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
+            let mut fields: Vec<DataclassField> = Vec::new();
+            for f in collect_dataclass_fields(&flat_stmts) {
+                if let Some(existing) = fields.iter_mut().find(|e| e.name == f.name) {
+                    *existing = f;
+                } else {
+                    fields.push(f);
+                }
+            }
+            fields.retain(|f| !f.property_default); // descriptors: not params
             if !fields.is_empty() {
                 self.write_indent();
                 self.write(&format!(
@@ -7340,15 +11263,21 @@ function pyFormatDynamic(value, specStr) {
             ));
         }
 
-        // Apply class decorators (skip dataclass/component and their call forms)
+        // Apply class decorators (skip dataclass/component/js_class and their
+        // call forms — those are compile-time markers consumed by codegen, not
+        // runtime wrappers). `@js_class` (WB-12) already reshaped the emitted
+        // class above; applying it as `Store = __pyCall(js_class, [Store])`
+        // would reference an undefined runtime symbol.
         for decorator in decorator_list.iter().rev() {
             let (is_dc, _) = parse_dataclass_decorator(decorator);
-            let skip = is_dc || matches!(&decorator.kind, ExprKind::Name(n) if n == "component");
+            let skip = is_dc
+                || matches!(&decorator.kind, ExprKind::Name(n) if n == "component" || n == "js_class");
             if !skip {
+                self.need_runtime("__pyCall");
                 self.write_indent();
-                self.write(&format!("{} = ", Self::sanitize_ident(name)));
+                self.write(&format!("{} = __pyCall(", Self::sanitize_ident(name)));
                 self.emit_expr(decorator);
-                self.write(&format!("({});\n", Self::sanitize_ident(name)));
+                self.write(&format!(", [{}]);\n", Self::sanitize_ident(name)));
             }
         }
     }
@@ -7381,6 +11310,14 @@ function pyFormatDynamic(value, specStr) {
                 // assignment shadows — Python lookup semantics).
                 StmtKind::Assign { targets, .. }
                     if targets.len() == 1 && matches!(&targets[0].kind, ExprKind::Name(_)) => {}
+                // autotester classes: class-body tuple-target assignment is
+                // installed post-class via __pyClassAttr (all-Name patterns)
+                // — see emit_class_def. Skip it inside the body.
+                StmtKind::Assign { targets, .. }
+                    if targets.len() == 1
+                        && matches!(&targets[0].kind,
+                            ExprKind::Tuple(elts) | ExprKind::List(elts)
+                                if elts.iter().all(|e| matches!(&e.kind, ExprKind::Name(_)))) => {}
                 StmtKind::AnnAssign {
                     target,
                     value: Some(_),
@@ -7389,14 +11326,48 @@ function pyFormatDynamic(value, specStr) {
                 StmtKind::Assign { .. } | StmtKind::AnnAssign { .. } => {
                     self.emit_stmt(stmt);
                 }
+                // autotester classes: a NESTED class miscompiled to a raw
+                // `class Inner {…}` inside the class body (invalid JS). It is
+                // installed post-class as a class attribute — see
+                // emit_class_def.
+                StmtKind::ClassDef { .. } => {}
+                // autotester arguments/method_and_class_decorators: Python
+                // allows bare EXPRESSION statements in a class body (executed
+                // at class creation — docstrings, `__pragma__(...)` shims). A
+                // JS class body cannot hold statements, and their effects
+                // beyond name binding have no compiled representation — drop
+                // them instead of emitting invalid JS.
+                StmtKind::Expr(_) => {}
                 StmtKind::Pass => {}
                 _ => self.emit_stmt(stmt),
             }
         }
     }
 
-    fn emit_dataclass_body(&mut self, class_name: &str, body: &[Stmt], opts: &DataclassOptions) {
-        let fields = collect_dataclass_fields(body);
+    fn emit_dataclass_body<'b>(
+        &mut self,
+        class_name: &str,
+        body: &'b [Stmt],
+        inherited: &'b [Stmt],
+        has_bases: bool,
+        super_fields: &[String],
+        opts: &DataclassOptions,
+    ) {
+        // Base fields first (CPython inheritance order); a redeclared field
+        // keeps its ORIGINAL position with the derived default (CPython).
+        // Dedupe across the whole chain — the registry stores raw statement
+        // concatenations, so a grandparent field can appear twice.
+        let mut fields: Vec<DataclassField> = Vec::new();
+        for f in collect_dataclass_fields(inherited)
+            .into_iter()
+            .chain(collect_dataclass_fields(body))
+        {
+            if let Some(existing) = fields.iter_mut().find(|e| e.name == f.name) {
+                *existing = f;
+            } else {
+                fields.push(f);
+            }
+        }
 
         // Collect @validator methods: (field_name, method_name)
         let mut validators: Vec<(String, String)> = Vec::new();
@@ -7435,11 +11406,19 @@ function pyFormatDynamic(value, specStr) {
         // Emit constructor
         self.write_indent();
         self.write("constructor(");
-        for (i, field) in fields.iter().enumerate() {
+        // property-default fields are descriptors, not __init__ params.
+        let init_fields: Vec<&DataclassField> =
+            fields.iter().filter(|f| !f.property_default).collect();
+        for (i, field) in init_fields.iter().enumerate() {
             if i > 0 {
                 self.write(", ");
             }
-            self.write(&field.name);
+            // Fix C: the constructor param is a LOCAL binding — a reserved-word
+            // field (`default`, `new`, `in`) must be sanitized so it isn't
+            // emitted as `constructor(default)` (SyntaxError). The instance
+            // PROPERTY (`this.default`) keeps the raw name (member access allows
+            // reserved words); only the local var reference is renamed.
+            self.write(&Self::sanitize_ident(&field.name));
             // default_factory → default value in param
             if let Some(factory) = &field.constraints.default_factory {
                 self.write(" = ");
@@ -7465,23 +11444,35 @@ function pyFormatDynamic(value, specStr) {
         // form when the caller used `Foo(a=..., b=..., c=...)` in .ps)
         // in addition to `new Foo(a, b, c)` (positional). Detect a
         // single plain-object first arg and destructure into the params.
-        if !fields.is_empty() {
+        // B6: this runs BEFORE the `super(...)` call below (legal — it never
+        // touches `this`) so the kwargs-object form feeds real field values
+        // into the base constructor too.
+        if !init_fields.is_empty() {
+            // Fix C: the first param is referenced as a local — sanitize it.
+            let f0 = Self::sanitize_ident(&init_fields[0].name).into_owned();
             self.write_indent();
             self.write("if (arguments.length === 1 && ");
-            self.write(&fields[0].name);
+            self.write(&f0);
             self.write(" !== null && typeof ");
-            self.write(&fields[0].name);
+            self.write(&f0);
             self.write(" === \"object\" && !Array.isArray(");
-            self.write(&fields[0].name);
+            self.write(&f0);
             self.write(")) {\n");
             self.indent += 1;
             self.write_indent();
             self.write("({");
-            for (i, field) in fields.iter().enumerate() {
+            for (i, field) in init_fields.iter().enumerate() {
                 if i > 0 {
                     self.write(", ");
                 }
-                self.write(&field.name);
+                // Fix C: destructure the raw property key into the sanitized
+                // local binding (`{default: default$}`) for reserved-word fields.
+                let jf = Self::sanitize_ident(&field.name);
+                if jf.as_ref() != field.name {
+                    self.write(&format!("{}: {}", field.name, jf));
+                } else {
+                    self.write(&field.name);
+                }
                 // Preserve declared defaults when destructuring from object.
                 if let Some(factory) = &field.constraints.default_factory {
                     self.write(" = ");
@@ -7501,18 +11492,46 @@ function pyFormatDynamic(value, specStr) {
                 }
             }
             self.write("} = ");
-            self.write(&fields[0].name);
+            self.write(&f0);
             self.write(");\n");
             self.indent -= 1;
             self.write_indent();
             self.write("}\n");
         }
 
-        // 1. Coercion (if coerce=True)
+        // B6 root fix — a derived JS class MUST call super() before touching
+        // `this`, and the call must satisfy the BASE constructor's contract:
+        // pass the base's init fields (this ctor's params include them all,
+        // base-first). A bare `super();` ran the base's field validators on
+        // `undefined` — every construction of a derived dataclass with a
+        // required base field threw. A base without a registered dataclass
+        // contract (JS/interop class) keeps the bare call. The base re-runs
+        // its own validation/assignment for its fields; the derived ctor
+        // re-assigns them below with identical values (idempotent).
+        if has_bases {
+            self.write_indent();
+            self.write("super(");
+            for (i, f) in super_fields.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&Self::sanitize_ident(f));
+            }
+            self.write(");\n");
+        }
+
+        // 1. Coercion (if coerce=True). Fix C: these helpers read/mutate the
+        // field as a LOCAL var (the ctor param), so a reserved-word field is
+        // addressed by its sanitized name here.
         if opts.coerce {
-            for field in &fields {
+            for field in &init_fields {
                 if let Some(ann) = field.annotation {
-                    self.emit_coercion(class_name, &field.name, ann);
+                    self.emit_coercion(
+                        class_name,
+                        &field.name,
+                        Self::sanitize_ident(&field.name).as_ref(),
+                        ann,
+                    );
                 }
             }
         }
@@ -7525,20 +11544,30 @@ function pyFormatDynamic(value, specStr) {
         }
 
         // 3. Type validation per field
-        for field in &fields {
+        for field in &init_fields {
             if let Some(ann) = field.annotation {
                 self.emit_type_validation(class_name, &field.name, ann);
             }
         }
 
-        // 4. String transforms (trim, to_lower, to_upper) — before constraint validation
-        for field in &fields {
-            self.emit_transform_constraints(&field.name, &field.constraints);
+        // 4. String transforms (trim, to_lower, to_upper) — before constraint
+        // validation. Fix C: addressed by the sanitized local name.
+        for field in &init_fields {
+            self.emit_transform_constraints(
+                Self::sanitize_ident(&field.name).as_ref(),
+                &field.constraints,
+            );
         }
 
-        // 5. Constraint validation per field
-        for field in &fields {
-            self.emit_constraint_validation(class_name, &field.name, &field.constraints);
+        // 5. Constraint validation per field. Fix C: sanitized JS var for the
+        // conditions; review 3: RAW field name for the message labels.
+        for field in &init_fields {
+            self.emit_constraint_validation(
+                class_name,
+                Self::sanitize_ident(&field.name).as_ref(),
+                &field.name,
+                &field.constraints,
+            );
         }
 
         // 6. Throw collected errors (if collect_errors=True)
@@ -7549,17 +11578,30 @@ function pyFormatDynamic(value, specStr) {
         }
 
         // 7. Field assignments
-        for field in &fields {
+        for field in &init_fields {
+            // Fix C: LHS is the instance property (raw name is a valid member);
+            // RHS is the local ctor param, which was sanitized for reserved
+            // words — `this.default = default$`.
             self.write_indent();
-            self.write(&format!("this.{f} = {f};\n", f = field.name));
+            self.write(&format!(
+                "this.{prop} = {local};\n",
+                prop = field.name,
+                local = Self::sanitize_ident(&field.name)
+            ));
         }
 
         // 8. @validator calls
         for (field_name, method_name) in &validators {
+            // SECURITY (#3): `field_name` is the @validator("...") string arg —
+            // source-derived, arbitrary. Emitting `this.<field_name>` splices it
+            // raw into member-access syntax, injecting JS. Use safe COMPUTED
+            // access `this[<encoded>]` so it can only ever be a property name.
+            // `method_name` is a FuncDef identifier (already legal JS), safe.
             self.write_indent();
+            let sel = js_string_literal(field_name);
             self.write(&format!(
-                "this.{f} = this.{m}(this.{f});\n",
-                f = field_name,
+                "this[{sel}] = this.{m}(this[{sel}]);\n",
+                sel = sel,
                 m = method_name
             ));
         }
@@ -7625,13 +11667,50 @@ function pyFormatDynamic(value, specStr) {
         self.indent -= 1;
         self.writeln("}");
 
+        // @dataclass(order=True): CPython's generated ordering compares the
+        // field tuples.
+        if opts.order {
+            self.write_indent();
+            self.write("_astuple() {\n");
+            self.indent += 1;
+            self.write_indent();
+            self.write("return [");
+            for (i, field) in fields.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&format!("this.{}", field.name));
+            }
+            self.write("];\n");
+            self.indent -= 1;
+            self.writeln("}");
+            for (dunder, helper) in [
+                ("__lt__", "pyLt"),
+                ("__le__", "pyLe"),
+                ("__gt__", "pyGt"),
+                ("__ge__", "pyGe"),
+            ] {
+                self.need_runtime(helper);
+                self.write_indent();
+                self.write(&format!("{}(other) {{\n", dunder));
+                self.indent += 1;
+                self.write_indent();
+                self.write(&format!(
+                    "return {}(this._astuple(), other._astuple());\n",
+                    helper
+                ));
+                self.indent -= 1;
+                self.writeln("}");
+            }
+        }
+
         // Emit toDict()
         self.write_indent();
         self.write("toDict() {\n");
         self.indent += 1;
         self.write_indent();
         self.write("return { ");
-        for (i, field) in fields.iter().enumerate() {
+        for (i, field) in init_fields.iter().enumerate() {
             if i > 0 {
                 self.write(", ");
             }
@@ -7671,7 +11750,7 @@ function pyFormatDynamic(value, specStr) {
         self.indent += 1;
         self.write_indent();
         self.write(&format!("return new {}(", Self::sanitize_ident(class_name)));
-        for (i, field) in fields.iter().enumerate() {
+        for (i, field) in init_fields.iter().enumerate() {
             if i > 0 {
                 self.write(", ");
             }
@@ -7743,7 +11822,10 @@ function pyFormatDynamic(value, specStr) {
     /// Emit type validation checks for a dataclass field.
     fn emit_type_validation(&mut self, class_name: &str, field_name: &str, annotation: &Expr) {
         let tc = resolve_type_check(annotation);
-        self.emit_type_check(class_name, field_name, field_name, &tc);
+        // Fix C: the value is read from the sanitized local (the ctor param),
+        // while messages keep the raw field name.
+        let var = Self::sanitize_ident(field_name).into_owned();
+        self.emit_type_check(class_name, field_name, &var, &tc);
     }
 
     /// Recursively emit type check for a value identified by `var`.
@@ -7766,7 +11848,10 @@ function pyFormatDynamic(value, specStr) {
             }
             TypeCheck::Float => {
                 self.emit_validation_error(
-                    &format!("typeof {v} !== \"number\"", v = var),
+                    &format!(
+                        "typeof {v} !== \"number\" && !({v} != null && {v}.__pyfloat__ === true)",
+                        v = var
+                    ),
                     &format!(
                         "\"{c}.{f}: expected float, got \" + typeof {v}",
                         v = var,
@@ -7859,18 +11944,22 @@ function pyFormatDynamic(value, specStr) {
         }
     }
 
-    /// Emit constraint validation checks for a dataclass field.
+    /// Emit constraint validation checks for a dataclass field. `field_name` is
+    /// the SANITIZED JS variable (the ctor param); `label` is the RAW Python
+    /// field name used only in user-visible error-message labels (review 3 —
+    /// so a reserved-word field reads `C.default: ...`, not `C.default$: ...`).
     fn emit_constraint_validation(
         &mut self,
         class_name: &str,
         field_name: &str,
+        label: &str,
         constraints: &FieldConstraints,
     ) {
         if let Some(gt) = constraints.gt {
             self.emit_validation_error(
                 &format!("{f} <= {v}", f = field_name, v = format_f64(gt)),
                 &format!(
-                    "\"{c}.{f}: must be > {v}, got \" + {f}",
+                    "\"{c}.{label}: must be > {v}, got \" + {f}",
                     f = field_name,
                     v = format_f64(gt),
                     c = class_name
@@ -7881,7 +11970,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("{f} < {v}", f = field_name, v = format_f64(ge)),
                 &format!(
-                    "\"{c}.{f}: must be >= {v}, got \" + {f}",
+                    "\"{c}.{label}: must be >= {v}, got \" + {f}",
                     f = field_name,
                     v = format_f64(ge),
                     c = class_name
@@ -7892,7 +11981,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("{f} >= {v}", f = field_name, v = format_f64(lt)),
                 &format!(
-                    "\"{c}.{f}: must be < {v}, got \" + {f}",
+                    "\"{c}.{label}: must be < {v}, got \" + {f}",
                     f = field_name,
                     v = format_f64(lt),
                     c = class_name
@@ -7903,7 +11992,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("{f} > {v}", f = field_name, v = format_f64(le)),
                 &format!(
-                    "\"{c}.{f}: must be <= {v}, got \" + {f}",
+                    "\"{c}.{label}: must be <= {v}, got \" + {f}",
                     f = field_name,
                     v = format_f64(le),
                     c = class_name
@@ -7914,8 +12003,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("{f}.length < {v}", f = field_name, v = min_len),
                 &format!(
-                    "\"{c}.{f}: length must be >= {v}\"",
-                    f = field_name,
+                    "\"{c}.{label}: length must be >= {v}\"",
                     v = min_len,
                     c = class_name
                 ),
@@ -7925,22 +12013,29 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("{f}.length > {v}", f = field_name, v = max_len),
                 &format!(
-                    "\"{c}.{f}: length must be <= {v}\"",
-                    f = field_name,
+                    "\"{c}.{label}: length must be <= {v}\"",
                     v = max_len,
                     c = class_name
                 ),
             );
         }
         if let Some(pattern) = &constraints.pattern {
+            // SECURITY (#3): `pattern` is a source-derived string. A `/` or
+            // newline in it closes a `/.../ ` regex literal early and injects
+            // arbitrary JS; a `"` breaks the message literal. Build the regex
+            // via `new RegExp(<encoded>)` and encode the message. field_name /
+            // class_name are Python identifiers (no quote), safe as plaintext.
             self.emit_validation_error(
-                &format!("!/{p}/.test({f})", f = field_name, p = pattern),
                 &format!(
-                    "\"{c}.{f}: must match pattern /{p}/\"",
+                    "!new RegExp({p}).test({f})",
                     f = field_name,
+                    p = js_string_literal(pattern)
+                ),
+                &js_string_literal(&format!(
+                    "{c}.{label}: must match pattern /{p}/",
                     p = pattern,
                     c = class_name
-                ),
+                )),
             );
         }
         // String validators
@@ -7951,8 +12046,7 @@ function pyFormatDynamic(value, specStr) {
                     f = field_name
                 ),
                 &format!(
-                    "\"{c}.{f}: must be a valid email\"",
-                    f = field_name,
+                    "\"{c}.{label}: must be a valid email\"",
                     c = class_name
                 ),
             );
@@ -7961,8 +12055,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("!/^https?:\\/\\/.+/.test({f})", f = field_name),
                 &format!(
-                    "\"{c}.{f}: must be a valid URL\"",
-                    f = field_name,
+                    "\"{c}.{label}: must be a valid URL\"",
                     c = class_name
                 ),
             );
@@ -7970,40 +12063,53 @@ function pyFormatDynamic(value, specStr) {
         if constraints.uuid {
             self.emit_validation_error(
                 &format!("!/^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$/i.test({f})", f = field_name),
-                &format!("\"{c}.{f}: must be a valid UUID\"", f = field_name, c = class_name),
+                &format!("\"{c}.{label}: must be a valid UUID\"", c = class_name),
             );
         }
         if let Some(prefix) = &constraints.starts_with {
+            // SECURITY (#3): encode the source-derived prefix in both the
+            // condition and the message literal.
             self.emit_validation_error(
-                &format!("!{f}.startsWith(\"{p}\")", f = field_name, p = prefix),
                 &format!(
-                    "\"{c}.{f}: must start with '{p}'\"",
+                    "!{f}.startsWith({p})",
                     f = field_name,
+                    p = js_string_literal(prefix)
+                ),
+                &js_string_literal(&format!(
+                    "{c}.{label}: must start with '{p}'",
                     p = prefix,
                     c = class_name
-                ),
+                )),
             );
         }
         if let Some(suffix) = &constraints.ends_with {
+            // SECURITY (#3): encode the source-derived suffix.
             self.emit_validation_error(
-                &format!("!{f}.endsWith(\"{s}\")", f = field_name, s = suffix),
                 &format!(
-                    "\"{c}.{f}: must end with '{s}'\"",
+                    "!{f}.endsWith({s})",
                     f = field_name,
+                    s = js_string_literal(suffix)
+                ),
+                &js_string_literal(&format!(
+                    "{c}.{label}: must end with '{s}'",
                     s = suffix,
                     c = class_name
-                ),
+                )),
             );
         }
         if let Some(substr) = &constraints.includes {
+            // SECURITY (#3): encode the source-derived substring.
             self.emit_validation_error(
-                &format!("!{f}.includes(\"{s}\")", f = field_name, s = substr),
                 &format!(
-                    "\"{c}.{f}: must include '{s}'\"",
+                    "!{f}.includes({s})",
                     f = field_name,
+                    s = js_string_literal(substr)
+                ),
+                &js_string_literal(&format!(
+                    "{c}.{label}: must include '{s}'",
                     s = substr,
                     c = class_name
-                ),
+                )),
             );
         }
         // Number validators
@@ -8011,8 +12117,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("{f} <= 0", f = field_name),
                 &format!(
-                    "\"{c}.{f}: must be positive\"",
-                    f = field_name,
+                    "\"{c}.{label}: must be positive\"",
                     c = class_name
                 ),
             );
@@ -8021,8 +12126,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("{f} >= 0", f = field_name),
                 &format!(
-                    "\"{c}.{f}: must be negative\"",
-                    f = field_name,
+                    "\"{c}.{label}: must be negative\"",
                     c = class_name
                 ),
             );
@@ -8031,8 +12135,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("{f} < 0", f = field_name),
                 &format!(
-                    "\"{c}.{f}: must be nonnegative\"",
-                    f = field_name,
+                    "\"{c}.{label}: must be nonnegative\"",
                     c = class_name
                 ),
             );
@@ -8041,8 +12144,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("{f} % {d} !== 0", f = field_name, d = format_f64(divisor)),
                 &format!(
-                    "\"{c}.{f}: must be a multiple of {d}\"",
-                    f = field_name,
+                    "\"{c}.{label}: must be a multiple of {d}\"",
                     d = format_f64(divisor),
                     c = class_name
                 ),
@@ -8052,8 +12154,7 @@ function pyFormatDynamic(value, specStr) {
             self.emit_validation_error(
                 &format!("!Number.isFinite({f})", f = field_name),
                 &format!(
-                    "\"{c}.{f}: must be finite\"",
-                    f = field_name,
+                    "\"{c}.{label}: must be finite\"",
                     c = class_name
                 ),
             );
@@ -8077,8 +12178,7 @@ function pyFormatDynamic(value, specStr) {
                 .collect();
             let items_str = items.join(", ");
             let msg = format!(
-                "{c}.{f}: must be one of [{items}]",
-                f = field_name,
+                "{c}.{label}: must be one of [{items}]",
                 c = class_name,
                 items = items_str
             );
@@ -8093,10 +12193,11 @@ function pyFormatDynamic(value, specStr) {
         }
     }
 
-    /// Emit type coercion for a dataclass field (when coerce=True).
-    fn emit_coercion(&mut self, class_name: &str, field_name: &str, annotation: &Expr) {
+    /// Emit type coercion for a dataclass field (when coerce=True). `label` is
+    /// the RAW field name (message labels); `var` is the SANITIZED JS variable.
+    fn emit_coercion(&mut self, class_name: &str, label: &str, var: &str, annotation: &Expr) {
         let tc = resolve_type_check(annotation);
-        self.emit_coercion_for_type(class_name, field_name, field_name, &tc);
+        self.emit_coercion_for_type(class_name, label, var, &tc);
     }
 
     /// Recursively emit coercion logic for a type.
@@ -8220,6 +12321,22 @@ function pyFormatDynamic(value, specStr) {
             .unwrap_or(false);
         let emit_as_constructor = name == "__init__" && !pyobject_model;
 
+        // WB-16 (naming soundness, NB-1/NB-2 family): a Python method literally
+        // named `constructor` lowers to a JS `constructor() {}` method — which
+        // SILENTLY BECOMES the class's JS constructor, colliding with the
+        // model's own construction path and producing an un-instantiable class
+        // with no diagnostic. `constructor` is a reserved method slot in an
+        // emitted class; make the collision a hard compile error (the same
+        // discipline as the intrinsic-tag / #420 naming-collision family).
+        if name == "constructor" && !emit_as_constructor {
+            self.record_codegen_error(
+                "`def constructor(self, ...)` collides with the JavaScript class \
+                 `constructor` slot — the emitted method would silently replace the \
+                 class constructor and make the class un-instantiable. Rename the method \
+                 (Python's own constructor is `__init__`).",
+            );
+        }
+
         // Round-3: `__repr__`/`__str__` keep their REAL names so
         // repr()/str() can dispatch on them distinctly; emit_class_def
         // installs a `toString` alias (preferring __str__) for JS string
@@ -8230,22 +12347,117 @@ function pyFormatDynamic(value, specStr) {
             name
         };
 
+        // WB-15 — the SINGLE receiver decision that drives param-dropping, the
+        // `__self`/`const cls` bindings, and how a bare `self` lowers in the
+        // body. Computed once from the method kind + first param:
+        //  * instance method (non-static, non-classmethod) whose first param is
+        //    `self` → the instance receiver: dropped from the signature, `self`
+        //    lowers to `this` (`__self` inside a nested `this`-rebinding scope).
+        //  * @classmethod → the FIRST param (ANY name) is the CLASS receiver:
+        //    dropped from the signature, aliased `const <name> = this`. If that
+        //    name is literally `self`, the body's `self` reads that ordinary
+        //    local (fixes `@classmethod def m(self)`; no receiver-lowering).
+        //  * @staticmethod (and a `def m(me)` instance method) → NO receiver:
+        //    every param is ordinary and KEPT (a static's `self`/`cls` param is
+        //    a real argument, not `this`); the body's free `self` stays ordinary.
+        let first_param_name = params.first().map(|p| p.name.as_str());
+        let has_self_receiver =
+            !is_static && !is_classmethod && first_param_name == Some("self");
+        let class_receiver_name: Option<String> = if is_classmethod {
+            first_param_name.map(str::to_string)
+        } else {
+            None
+        };
+        let drop_first = has_self_receiver || class_receiver_name.is_some();
+
         if is_generator {
             self.write(&format!("*{}(", js_name));
         } else {
             self.write(&format!("{}(", js_name));
         }
-        self.emit_params(params);
+        self.emit_params_ctx(params, drop_first);
         self.write(") {\n");
         self.indent += 1;
+        // autotester arguments: methods with a `*args, <kw-only>, **kwargs`
+        // signature recover the keyword channel here too.
+        self.emit_varargs_kw_prologue(params, name);
+        // DX-B1 / issue #438: a method is a full Python scope. Push it with its
+        // PRE-COMPUTED complete local binding set (params + method-body locals)
+        // so a builtin-named param or local shadows the builtin regardless of
+        // source order (incl. from a nested fn/lambda inside the method — case
+        // G). Still `declare` the params for the incremental let-emission state.
+        let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        self.push_scope(Self::collect_local_bindings(body, &param_names));
+        self.set_scope_globals(Self::collect_global_declared(body));
+        // Declare every param EXCEPT the dropped receiver (bound as `this` /
+        // `const <name>`). A static method's `self`/`cls` param is a real local
+        // and must be declared (else it reads as an undeclared global).
+        for (i, param) in params.iter().enumerate() {
+            if drop_first && i == 0 {
+                continue;
+            }
+            self.declare(&param.name);
+        }
+        self.record_param_types(params);
 
-        // @classmethod body: `cls` is the class — in a JS static method
-        // that is `this` (subclass static dispatch keeps it accurate).
+        // WB-15 — set the single `self`-lowering predicate for this method body
+        // from the receiver decision above, and (for an instance receiver with a
+        // nested `this`-rebinding scope) capture the `__self` alias. A method is
+        // a fresh JS `this` frame, so this fully OVERRIDES the enclosing state.
+        let prev_self_lowering = self.self_lowering;
+        // WB-15 (S6): the method's OWN scope may REBIND `self` as a local — an
+        // assignment/for/with/except target named `self` (`self = 5`,
+        // `for self in xs`). Python makes `self` an ordinary local for the whole
+        // method then; JS `this` is not assignable, so the receiver is captured
+        // once into a mutable `let self = this;` and every `self` reference — read
+        // or write — is the ordinary local. (A native constructor may not touch
+        // `this` before super(), and rebinding `self` in `__init__` is absurd, so
+        // this path is gated to non-constructors.)
+        let self_rebound_locally = has_self_receiver
+            && !emit_as_constructor
+            && Self::collect_local_bindings(body, &[]).contains("self");
+        // Whether this instance method must capture `const __self = this;` — it
+        // owns a receiver, is NOT locally rebinding `self`, AND contains a nested
+        // `function`/`class`/static that rebinds `this` and could close over
+        // `self`. Placed after super() in a native constructor; at the body top
+        // otherwise.
+        let emit_self_alias =
+            has_self_receiver && !self_rebound_locally && Self::contains_nested_scope(body);
+        if self_rebound_locally {
+            // Receiver captured as a mutable local; `self` is Ordinary throughout
+            // (reads AND the rebinding write). Declared here so the hoister and
+            // the assignment path both see it as already-bound (`self = 5`, not
+            // `let this = 5`).
+            self.self_lowering = SelfLowering::Ordinary;
+            self.write_indent();
+            self.write("let self = this;\n");
+            self.declare("self");
+            self.mark_hoisted("self");
+        } else if has_self_receiver {
+            self.self_lowering = SelfLowering::Receiver;
+        } else if class_receiver_name.as_deref() == Some("self") {
+            // `@classmethod def m(self)`: `self` is the class param, bound below
+            // as `const self = this` — an ordinary identifier reads that local.
+            self.self_lowering = SelfLowering::Ordinary;
+        } else {
+            // static / classmethod(cls) / non-`self` instance first param: a
+            // fresh `this` frame that does NOT bind `self`. A live outer
+            // receiver survives via `__self`; otherwise `self` stays ordinary.
+            self.cross_self_this_boundary();
+        }
+        if emit_self_alias && !emit_as_constructor {
+            self.write_indent();
+            self.write("const __self = this;\n");
+        }
+
+        // @classmethod: the first param (any name) is the class — JS `this` in a
+        // static method (subclass static dispatch keeps it accurate). Bind it
+        // under its ACTUAL name so `@classmethod def m(self)` resolves `self`.
         let prev_in_classmethod = self.in_classmethod;
-        if is_classmethod {
+        if let Some(rname) = &class_receiver_name {
             self.in_classmethod = true;
             self.write_indent();
-            self.write("const cls = this;\n");
+            self.write(&format!("const {} = this;\n", Self::sanitize_ident(rname)));
         }
         // Round-4 sweep: awaiting is only legal inside async method bodies
         // (async generator methods included).
@@ -8279,6 +12491,18 @@ function pyFormatDynamic(value, specStr) {
                 self.write_indent();
                 self.write("super();\n");
             }
+            // WB-15 (S2): capture the receiver alias AFTER super() — a derived
+            // constructor may not touch `this` before super() — so a nested
+            // `function`/`class` inside the constructor reads the receiver via
+            // `__self` instead of its own rebound `this`.
+            if emit_self_alias {
+                self.write_indent();
+                self.write("const __self = this;\n");
+            }
+            // WB-5: hoist function-scope `let`s AFTER super() (a derived
+            // constructor may not touch anything before super()) so a local
+            // assigned only inside a branch is method-scoped, not block-scoped.
+            self.emit_hoisted_local_decls(body);
             for stmt in body {
                 if super_init_args(stmt).is_some() {
                     continue; // already emitted as the hoisted super(...) call
@@ -8305,6 +12529,12 @@ function pyFormatDynamic(value, specStr) {
                 }
             }
         } else {
+            // WB-5: a method body is a full Python scope — hoist function-scope
+            // `let`s for locals first-assigned inside a branch/loop, exactly as
+            // emit_func_def does, so `if c: x=a else: x=b; return x` no longer
+            // emits a block-scoped `let x` + a bare else-branch `x` (a strict-ESM
+            // ReferenceError).
+            self.emit_hoisted_local_decls(body);
             for stmt in body {
                 self.emit_stmt(stmt);
             }
@@ -8312,6 +12542,8 @@ function pyFormatDynamic(value, specStr) {
 
         self.await_ok = prev_await_ok;
         self.in_classmethod = prev_in_classmethod;
+        self.self_lowering = prev_self_lowering;
+        self.pop_scope();
         self.indent -= 1;
         self.writeln("}");
     }
@@ -8521,46 +12753,27 @@ function pyFormatDynamic(value, specStr) {
         self.write(&format!("const {} = ", stop_t));
         self.emit_expr(stop_arg);
         self.write(";\n");
-        // step (literal 1 when absent)
-        let step_lit: Option<i128> = if args.len() == 3 {
+        // step (literal 1 when absent) — evaluated once, in Python arg order.
+        if args.len() == 3 {
             self.write_indent();
             self.write(&format!("const {} = ", step_t));
             self.emit_expr(&args[2]);
             self.write(";\n");
-            if let ExprKind::IntLiteral(v) = &args[2].kind {
-                Some(*v)
-            } else {
-                None
-            }
-        } else {
-            Some(1)
-        };
-        let step_ref = if args.len() == 3 {
-            step_t.as_str()
-        } else {
-            "1"
-        };
+        }
+        let step_ref = if args.len() == 3 { step_t.as_str() } else { "1" };
 
-        // condition + update over the private counter
-        let (cond, update) = match step_lit {
-            Some(v) if v > 0 => (
-                format!("{} < {}", ri, stop_t),
-                format!("{} += {}", ri, step_ref),
-            ),
-            Some(v) if v < 0 => (
-                format!("{} > {}", ri, stop_t),
-                format!("{} += {}", ri, step_t),
-            ),
-            Some(_) => unreachable!(),
-            None => (
-                format!("({0} > 0 ? {1} < {2} : {1} > {2})", step_t, ri, stop_t),
-                format!("{} += {}", ri, step_t),
-            ),
-        };
+        // ROOT FIX: iterate the shared LAZY `__pyRangeIter` instead of a
+        // hand-rolled value-controlled `i += step` counter. That counter
+        // diverged from pyRange — a BigInt/Number-mix crash, a 2**53
+        // non-progress hang, a rejected `range(True)`. The generator applies
+        // the SAME __pyRangeNorm guards + BigInt/2**53-safe counted stepping and
+        // stays lazy (a huge finite range never materializes). `const` per
+        // iteration matches the for-of binding (correct closure capture).
+        self.need_runtime("__pyRangeIter");
         self.write_indent();
         self.write(&format!(
-            "for (let {} = {}; {}; {}) {{\n",
-            ri, start_t, cond, update
+            "for (const {} of __pyRangeIter({}, {}, {})) {{\n",
+            ri, start_t, stop_t, step_ref
         ));
         self.indent += 1;
         // Copy the counter into the Python loop variable (see doc comment).
@@ -8680,9 +12893,6 @@ function pyFormatDynamic(value, specStr) {
             self.in_lhs_target = was_lhs;
         }
 
-        // Mark for-loop targets as declared in enclosing scope
-        self.declare_target(target);
-
         self.write(" of ");
         // #83: `for k in d` iterates KEYS in Python; Dict-typed iterables
         // get the shape-dispatching pyDictKeys wrap (plain objects aren't
@@ -8703,6 +12913,13 @@ function pyFormatDynamic(value, specStr) {
         } else {
             self.emit_iterable(iter);
         }
+        // #452: mark the target declared only AFTER the iterable is emitted —
+        // Python evaluates the iterable in the ENCLOSING environment before
+        // the target binds, so at module scope `for list in list(xs)` must
+        // lower `list(xs)` to the builtin, not to the not-yet-bound loop
+        // variable (a JS TDZ ReferenceError). The body below still sees the
+        // declaration.
+        self.declare_target(target);
         self.write(") {\n");
         self.indent += 1;
         for stmt in body {
@@ -8728,7 +12945,7 @@ function pyFormatDynamic(value, specStr) {
     /// runtime's class would only shadow it (same rule as except-sites).
     fn import_builtin_exception(&mut self, name: &str) {
         if is_builtin_exception(name) && name != "TypeError" {
-            self.runtime_imports.insert(name.to_string());
+            self.need_runtime(name);
         }
     }
 
@@ -8833,7 +13050,11 @@ function pyFormatDynamic(value, specStr) {
 
                 self.indent += 1;
                 if let Some(name) = &handler.name {
-                    self.writeln(&format!("let {} = __exc;", name));
+                    // SECURITY (#13): sanitize the exception alias — a reserved
+                    // word (`let`, `default`, ...) would emit `let let = __exc`
+                    // (SyntaxError). Body references go through the same
+                    // sanitize_ident, so the rename stays consistent.
+                    self.writeln(&format!("let {} = __exc;", Self::sanitize_ident(name)));
                 }
                 for stmt in &handler.body {
                     self.emit_stmt(stmt);
@@ -8942,7 +13163,7 @@ function pyFormatDynamic(value, specStr) {
                 // matches both the runtime's name-tagged Errors and native
                 // JS TypeErrors).
                 if name != "TypeError" {
-                    self.runtime_imports.insert(name.clone());
+                    self.need_runtime(name);
                 }
                 // A JS TDZ error (`let` read before init) surfaces as a native
                 // ReferenceError; CPython raises UnboundLocalError there and
@@ -9021,18 +13242,27 @@ function pyFormatDynamic(value, specStr) {
         self.write(";\n");
         self.write_indent();
         if let Some(var) = &item.optional_var {
-            self.write("const ");
-            // PBT-2: write position — never guard-wrap a sentinel name here.
-            let was_lhs = self.in_lhs_target;
-            self.in_lhs_target = true;
-            self.emit_expr(var);
-            self.in_lhs_target = was_lhs;
+            // autotester control_structures: the `as` target must ASSIGN, not
+            // re-declare — a second `with A() as x:` (or `with A() as x,
+            // B() as y:` twice) in the same JS block scope emitted a duplicate
+            // `const x` → "Identifier 'x' has already been declared". Stash
+            // __enter__'s result in the per-statement unique temp, then route
+            // the target through emit_assign — the single assignment path
+            // that already handles first-use `let`, rebinding, tuple/list
+            // destructuring, and subscript/attribute targets.
+            let res = format!("{}_r", mgr);
             self.write(&format!(
-                " = ({m} !== null && typeof {m}.{e} === \"function\") ? {aw}{m}.{e}() : {m};\n",
+                "const {r} = ({m} !== null && typeof {m}.{e} === \"function\") ? {aw}{m}.{e}() : {m};\n",
+                r = res,
                 m = mgr,
                 e = enter,
                 aw = aw
             ));
+            let res_expr = Expr {
+                kind: ExprKind::Name(res),
+                span: item.context_expr.span,
+            };
+            self.emit_assign(std::slice::from_ref(var), &res_expr);
         } else {
             self.write(&format!(
                 "if ({m} !== null && typeof {m}.{e} === \"function\") {aw}{m}.{e}();\n",
@@ -9214,6 +13444,7 @@ function pyFormatDynamic(value, specStr) {
                 let is_builtin_ty = matches!(
                     cls.as_str(),
                     "list" | "tuple" | "str" | "int" | "float" | "bool" | "dict" | "set"
+                        | "bytes" | "bytearray"
                 );
                 if is_builtin_ty {
                     self.need_runtime("__pyIsInstance");
@@ -9263,7 +13494,10 @@ function pyFormatDynamic(value, specStr) {
                 if self.is_hoisted(name) {
                     self.writeln(&format!("{} = {};", Self::sanitize_ident(name), subject));
                 } else {
-                    self.writeln(&format!("let {} = {};", name, subject));
+                    // SECURITY (#13): sanitize the capture binding — reserved
+                    // words emitted `let let = ...` (SyntaxError). Matches the
+                    // hoisted branch above and general Name references.
+                    self.writeln(&format!("let {} = {};", Self::sanitize_ident(name), subject));
                     self.declare(name);
                 }
             }
@@ -9316,12 +13550,16 @@ function pyFormatDynamic(value, specStr) {
                     if let ExprKind::StringLiteral(s) = &key.kind {
                         // Map-aware access (round-2): Map-backed PyDicts
                         // read via .get, plain-object dicts via subscript.
+                        // SECURITY (#9): `s` is a source-derived key spliced
+                        // between JS quotes. A `"`/newline/backslash in it broke
+                        // out of the literal; encode it via js_string_literal.
+                        let k = js_string_literal(s);
                         self.emit_pattern_bindings(
                             pat,
                             &format!(
-                                "({subj} instanceof Map ? {subj}.get(\"{k}\") : {subj}[\"{k}\"])",
+                                "({subj} instanceof Map ? {subj}.get({k}) : {subj}[{k}])",
                                 subj = subject,
-                                k = s
+                                k = k
                             ),
                         );
                     }
@@ -9343,7 +13581,8 @@ function pyFormatDynamic(value, specStr) {
                 if self.is_hoisted(name) {
                     self.writeln(&format!("{} = {};", Self::sanitize_ident(name), subject));
                 } else {
-                    self.writeln(&format!("let {} = {};", name, subject));
+                    // SECURITY (#13): sanitize the as-pattern binding.
+                    self.writeln(&format!("let {} = {};", Self::sanitize_ident(name), subject));
                     self.declare(name);
                 }
                 self.emit_pattern_bindings(pattern, subject);
@@ -9401,7 +13640,36 @@ function pyFormatDynamic(value, specStr) {
                     self.write(&n.to_string());
                 }
             }
-            ExprKind::FloatLiteral(n) => self.write(&format!("{}", n)),
+            ExprKind::FloatLiteral(n) => {
+                // Option B (minimal): ONLY an integer-valued float literal
+                // (8.0) boxes — it is otherwise indistinguishable from int 8
+                // at runtime (containers, dynamic contexts). A non-integer
+                // literal (3.14) stays a bare native Number: Number.isInteger
+                // already discriminates it, and native floats keep JS-interop
+                // and arithmetic at full native speed. The boxing decision is
+                // static here; __pyF re-checks only for runtime-computed
+                // values. NaN/inf can't appear as literals (they parse as
+                // names), so `n` is always finite.
+                if n.fract() == 0.0 && n.is_finite() {
+                    self.need_runtime("__pyF");
+                    self.write(&format!("__pyF({})", n));
+                } else {
+                    self.write(&format!("{}", n));
+                }
+            }
+            // autotester byte_arrays: bytes literal -> immutable PyBytes
+            // (Uint8Array subclass) built from the raw byte values.
+            ExprKind::BytesLiteral(bytes) => {
+                self.need_runtime("pyBytes");
+                self.write("pyBytes([");
+                for (i, b) in bytes.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&b.to_string());
+                }
+                self.write("])");
+            }
             // #283: imaginary literal -> runtime complex value `pyComplex(0, n)`.
             // Arithmetic (`3 + 4j`) then flows through pyAdd/pySub/pyMul, which
             // dispatch to PyComplex's __radd__/__add__ etc.
@@ -9439,7 +13707,7 @@ function pyFormatDynamic(value, specStr) {
                             if self.is_definitely_float(e) {
                                 self.need_runtime("pyFormatFloat");
                                 self.write("pyFormatFloat(");
-                                self.emit_expr(e);
+                                self.emit_format_float_arg(e);
                                 self.write(")");
                             } else {
                                 self.need_runtime("pyStr");
@@ -9458,34 +13726,107 @@ function pyFormatDynamic(value, specStr) {
             }
             ExprKind::NoneLiteral => self.write("null"),
             ExprKind::Name(name) => {
+                // autotester properties: inside a post-class attribute value,
+                // a sibling method name is class-local (Python class-body
+                // scoping) — emit it as Cls.prototype.name.
+                if let Some((cls, names)) = &self.class_attr_subst {
+                    if names.contains(name) {
+                        let out = format!("{}.prototype.{}", cls, name);
+                        self.write(&out);
+                        return;
+                    }
+                }
                 if name == "self" {
-                    self.write("this");
+                    // WB-15: ONE predicate decides this — `self_lowering`, set
+                    // from the enclosing method's real receiver structure (see
+                    // `SelfLowering`). `Receiver` → JS `this`; `ReceiverAlias` →
+                    // the `__self` const captured in the enclosing instance
+                    // method (nested `function`/`class`/static rebinds `this`);
+                    // `Ordinary` → the bare identifier `self` (module scope, a
+                    // plain function, a static/classmethod body, or a `self`
+                    // param/const of a nearer scope). Emitting `this` for an
+                    // ordinary `self` produced `export let this = …` (a hard
+                    // syntax error) / bound the call-site receiver instead.
+                    self.write(match self.self_lowering {
+                        SelfLowering::Receiver => "this",
+                        SelfLowering::ReceiverAlias => "__self",
+                        SelfLowering::Ordinary => "self",
+                    });
                 } else {
                     // Synthetic runtime-helper references injected by
                     // earlier lowering passes (e.g. pyFormatSpec from
                     // f-string spec lowering) need to be imported even
                     // though they appear as bare Name nodes in the AST.
-                    if matches!(
-                        name.as_str(),
-                        // pyRepr/pyStr: injected by f-string `!r`/`!s`
-                        // conversions and `{x=}` self-doc (Pythonic-checks).
-                        "pyFormatSpec"
-                            | "pyFormatDynamic"
-                            | "pyNormalizeStyle"
-                            | "pyFixed"
-                            | "pyRepr"
-                            | "pyStr"
-                    ) && !self.is_declared(name)
+                    // #452 family: never in a WRITE/binding position — a
+                    // target named `pyStr` is a user binding, and importing
+                    // the helper would collide with it.
+                    if !self.in_lhs_target
+                        && matches!(
+                            name.as_str(),
+                            // pyRepr/pyStr/pyAscii: injected by f-string
+                            // `!r`/`!s`/`!a` conversions and `{x=}` self-doc
+                            // (Pythonic-checks; !a wired in public #3).
+                            "pyFormatSpec"
+                                | "pyFormatDynamic"
+                                | "pyNormalizeStyle"
+                                | "pyFixed"
+                                | "pyRepr"
+                                | "pyStr"
+                                | "pyAscii"
+                        )
+                        && !self.is_declared(name)
                     {
                         self.need_runtime(name);
+                    }
+                    // autotester docstrings: a bare `__doc__` read is the
+                    // module docstring (None when absent) unless shadowed.
+                    // #452 family: a WRITE target is always the user binding.
+                    if name == "__doc__"
+                        && !self.in_lhs_target
+                        && !self.is_declared_in_any_scope(name)
+                    {
+                        match self.module_doc.clone() {
+                            Some(d) => self.write(&js_string_literal(&d)),
+                            None => self.write("null"),
+                        }
+                        return;
+                    }
+                    // Star-import bindings (`from math import *`): an
+                    // undeclared reference to a bound export resolves to
+                    // `<ns>.<name>`. BEFORE the builtin value mapping —
+                    // CPython's star-import rebinds the namespace, so
+                    // `pow`/`e` mean the module's, not the builtin.
+                    // #452 family: never for a WRITE/binding position — a
+                    // write creates a new local binding, it never assigns
+                    // into the imported namespace.
+                    if !self.in_lhs_target && !self.is_declared_in_any_scope(name) {
+                        if let Some((ns, _)) = self.star_import_bindings.get(name) {
+                            self.write(&format!("{}.{}", ns, name));
+                            return;
+                        }
                     }
                     // #110: Python builtins referenced as VALUES (not
                     // called) — defaultdict(list), starmap(pow),
                     // key=len, map(int, ...). Previously these passed
                     // through as bare JS identifiers → ReferenceError.
-                    // Shadowing (params, locals, imports, user defs)
-                    // wins via the is_declared guard.
-                    if !self.is_declared(name) {
+                    // Shadowing (params, locals, imports, user defs) wins.
+                    // DX-B1: use is_declared_in_any_scope, not is_declared —
+                    // a binding named like a builtin (`set`/`list`/`dict`/`str`/
+                    // …) in an ENCLOSING function scope must shadow the builtin
+                    // when referenced from a nested fn/lambda/method. The
+                    // innermost-only is_declared missed it and mis-lowered
+                    // zustand's canonical `def store(set, get): def inc(): set(…)`
+                    // to `pySetOf` — a silent miscompile (TypeError, zero
+                    // actions). This mirrors the call-form guard below.
+                    // #452 ROOT: never in a WRITE/binding position. A for /
+                    // comprehension target (or any assignment target) named
+                    // `list`/`dict`/… is a USER binding by construction — the
+                    // old unguarded mapping emitted the builtin value as the
+                    // loop variable (`for (const __pyTypeList of …)`) while
+                    // body reads stayed `list` → ReferenceError. Every
+                    // binding position funnels through here with
+                    // `in_lhs_target` set, so this one guard closes the class.
+                    if !self.in_lhs_target && !self.is_declared_in_any_scope(name) {
                         if let Some((js, deps)) = crate::builtins::builtin_value_mapping(name) {
                             for d in deps {
                                 self.need_runtime(d);
@@ -9493,6 +13834,74 @@ function pyFormatDynamic(value, specStr) {
                             self.write(js);
                             return;
                         }
+                    }
+                    // public #3: a KNOWN but unimplemented builtin referenced
+                    // as a VALUE (`f = open`, `print(id)`, `key=hash`) — the
+                    // same compile-error gate as the call form (see
+                    // emit_call). Guards mirror the mapping path above; a
+                    // WRITE target (in_lhs_target) is a user binding, and
+                    // inside a @component an HTML-element-named reference
+                    // (input/map/object) is left to the PSX machinery.
+                    if !self.in_lhs_target
+                        && !self.is_declared_in_any_scope(name)
+                        && !self.star_import_bindings.contains_key(name)
+                        && !self.known_functions.contains(name)
+                        && !self.known_classes.contains(name)
+                        && (!self.in_component || !react::is_html_element(name))
+                        && crate::builtins::unsupported_builtin(name)
+                    {
+                        let diag = crate::builtins::unsupported_builtin_message(name);
+                        self.emit_expr_error(&diag);
+                        return;
+                    }
+                    // #448 (value position): `import_module` lowers to the ES
+                    // dynamic `import(...)` KEYWORD form — it is not a first-class
+                    // JS value, so `f = import_module` / passing it as an arg
+                    // cannot work. The old code emitted a bare `import_module`
+                    // identifier (undefined at runtime, no diagnostic). Covers
+                    // both the bare builtin and a `from importlib import
+                    // import_module [as X]` binding used in value position.
+                    if !self.in_lhs_target
+                        && !self.is_declared_in_any_scope(name)
+                        && (self.import_module_fns.contains(name)
+                            || (name == "import_module"
+                                && matches!(
+                                    crate::builtins::builtin_func_mapping(name),
+                                    Some(crate::builtins::BuiltinMapping::NativeCall(_))
+                                )))
+                    {
+                        self.emit_expr_error(
+                            "`import_module` lowers to the native dynamic `import(...)` form \
+                             and cannot be used as a value — only called directly, e.g. \
+                             `await import_module(\"./mod.js\")`.",
+                        );
+                        return;
+                    }
+                    // #448 CLASS rule: ANY reference to a tracked `import
+                    // importlib [.sub] [as X]` namespace — bare `importlib`,
+                    // `importlib.reload(x)`, `importlib.util.find_spec(...)`,
+                    // `f = importlib.import_module` — is diagnosed. The
+                    // namespace deliberately emits no binding (importlib is not
+                    // a real module in the compiled output), so the old code
+                    // emitted a bare unbound identifier → ReferenceError with
+                    // no diagnostic (worse than pre-fix). The original fix
+                    // diagnosed only the `.import_module` member-call shape;
+                    // this one rule at the NAME, the root of every reference
+                    // form, closes the whole class. A user binding that shadows
+                    // the name (declared) wins, as does a write target.
+                    if !self.in_lhs_target
+                        && self.importlib_namespaces.contains(name)
+                        && !self.is_declared_in_any_scope(name)
+                    {
+                        self.emit_expr_error(&format!(
+                            "`{name}` (importlib) has no runtime binding in the compiled \
+                             output — only `import_module` is supported: use `from importlib \
+                             import import_module` (or the bare `import_module(...)` builtin) \
+                             and call `await import_module(\"./mod.js\")`. Other importlib \
+                             APIs (reload, util, machinery, …) cannot be lowered \
+                             (pythscribe-v3.x).",
+                        ));
+                        return;
                     }
                     // Track-B: a READ of `undefined` that the user never
                     // bound refers to the JS global. sanitize_ident would
@@ -9506,6 +13915,21 @@ function pyFormatDynamic(value, specStr) {
                         self.write("undefined");
                         return;
                     }
+                    // DX-B2 alias-and-rewrite: a module-scope import whose JS
+                    // binding collided with an earlier import's (snake→camel
+                    // convergence) was hoisted under a unique name — rewrite
+                    // its reference sites to that name. Checked BEFORE the
+                    // react_imports camelCase match (the camel form may be
+                    // exactly the colliding name). A FUNCTION-scope binding of
+                    // the same name shadows the module import (Python scoping)
+                    // and skips the rewrite — the pre-pass `scope_bindings`
+                    // makes that check order-independent.
+                    if !self.scope_bindings.iter().skip(1).any(|s| s.contains(name)) {
+                        if let Some(u) = self.import_ref_renames.get(name).cloned() {
+                            self.write(&u);
+                            return;
+                        }
+                    }
                     // Names imported from React-like modules without an
                     // alias were camelCased on the import line. Match
                     // that on the reference side so the JS binding
@@ -9513,28 +13937,81 @@ function pyFormatDynamic(value, specStr) {
                     // use_query; use_query()` emits `import { useQuery }
                     // from "foo"` followed by `use_query()` — the local
                     // binding mismatches and crashes at runtime.
-                    if self.react_imports.contains(name) {
+                    //
+                    // B8(a) CLASS rule: the import→camel rename applies ONLY
+                    // to references that actually resolve to the import. A
+                    // param/local of the SAME Python name in any enclosing
+                    // function scope shadows it (Python scoping), so the
+                    // reference must stay on the Python name — the old
+                    // unguarded rename silently rewrote `def f(create_store):
+                    // return create_store` to return the IMPORT. Same
+                    // predicate as the import_ref_renames guard above.
+                    if self.react_imports.contains(name)
+                        && !self.scope_bindings.iter().skip(1).any(|s| s.contains(name))
+                    {
                         self.write(&react::snake_to_camel(name));
-                    } else if !self.in_lhs_target && self.is_sentinel(name) {
-                        // PBT-2: READ of a sentinel-initialized for-target —
-                        // guard it so a zero-iteration loop raises
-                        // UnboundLocalError/NameError like CPython. Writes
-                        // (in_lhs_target) stay bare so assignments and the
-                        // loop binding itself overwrite the sentinel.
-                        let helper = if self.at_module_scope() {
-                            "__pyChkGlobal"
-                        } else {
-                            "__pyChkLocal"
-                        };
-                        self.need_runtime(helper);
-                        self.write(&format!(
-                            "{}({}, \"{}\")",
-                            helper,
-                            Self::sanitize_ident(name),
-                            name
-                        ));
+                        return;
+                    }
+                    // PBT-2 / #452: READ of a sentinel-initialized for-target
+                    // — guard it so an unbound read raises like CPython, with
+                    // the guard chosen by which SCOPE OWNS the variable (see
+                    // sentinel_read). Writes (in_lhs_target) stay bare so
+                    // assignments and the loop binding itself overwrite the
+                    // sentinel.
+                    let sentinel = if self.in_lhs_target {
+                        None
                     } else {
-                        self.write(&Self::sanitize_ident(name));
+                        self.sentinel_read(name)
+                    };
+                    match sentinel {
+                        Some(SentinelRead::Global) => {
+                            // #452: GLOBAL lookup is CPython's dynamic
+                            // globals → builtins chain — an unbound
+                            // builtin-named global (`for list in list(xs)`
+                            // before/without an iteration, read at module
+                            // scope or from a nested function) resolves to
+                            // the BUILTIN value, it does not raise. Other
+                            // names raise NameError.
+                            if let Some((js, deps)) =
+                                crate::builtins::builtin_value_mapping(name)
+                            {
+                                for d in deps {
+                                    self.need_runtime(d);
+                                }
+                                self.need_runtime("__UNBOUND");
+                                let id = Self::sanitize_ident(name);
+                                self.write(&format!("({id} === __UNBOUND ? {js} : {id})"));
+                            } else {
+                                self.need_runtime("__pyChkGlobal");
+                                self.write(&format!(
+                                    "__pyChkGlobal({}, \"{}\")",
+                                    Self::sanitize_ident(name),
+                                    name
+                                ));
+                            }
+                        }
+                        Some(SentinelRead::Local) => {
+                            self.need_runtime("__pyChkLocal");
+                            self.write(&format!(
+                                "__pyChkLocal({}, \"{}\")",
+                                Self::sanitize_ident(name),
+                                name
+                            ));
+                        }
+                        Some(SentinelRead::Free) => {
+                            // #452 blocker 2: a closure read of an unbound
+                            // ENCLOSING-function local is CPython's
+                            // free-variable NameError — never the raw
+                            // sentinel value, and not UnboundLocalError
+                            // (that belongs to the owning scope itself).
+                            self.need_runtime("__pyChkFree");
+                            self.write(&format!(
+                                "__pyChkFree({}, \"{}\")",
+                                Self::sanitize_ident(name),
+                                name
+                            ));
+                        }
+                        None => self.write(&Self::sanitize_ident(name)),
                     }
                 }
             }
@@ -9593,21 +14070,109 @@ function pyFormatDynamic(value, specStr) {
                     self.write(")");
                     return;
                 }
-                // #266: a dict lookup method read as a VALUE (`g = d.get`,
-                // `key=d.get`, `key=counter.get`) is a BOUND method — bind it to
-                // its receiver so a detached call keeps `this`. Scoped to the
-                // dict-lookup methods (which are the real extract-as-callback
-                // case and don't collide with common data fields / array
-                // methods like `.items`/`.map`); a stdlib module namespace is
-                // excluded (its members are plain functions).
+                // autotester arguments (#203): `x.__class__` is type(x) — the
+                // compiled model has no __class__ property on primitives or
+                // plain-object dicts, so route through the value-aware
+                // runtime type() (whose result carries __name__).
+                if attr == "__class__" && !*optional {
+                    self.need_runtime("pyType");
+                    self.write("pyType(");
+                    self.emit_expr(value);
+                    self.write(")");
+                    return;
+                }
+                // 0.2.2 member-call class fix (VALUE position): a member READ
+                // on a core-React namespace alias (`f = react.create_element`,
+                // `g = react_dom.create_portal`) routes through the SAME
+                // `react::route_namespace_member` rule as the call form. The
+                // old lowering wrapped the raw snake member in pyBoundMethod
+                // (`pyBoundMethod(react, "create_element")` — a dead reference:
+                // the namespace exports only camelCase). ESM namespace members
+                // are plain functions, so no bound-method wrap either: emit the
+                // routed camelCase export, or the removed / wrong-module
+                // compile diagnostic. Write position (in_lhs_target) falls
+                // through — assigning into a frozen ESM namespace is its own
+                // loud runtime TypeError, and an inline throw-expression is not
+                // a valid assignment target.
+                if !self.in_lhs_target {
+                    if let ExprKind::Name(base) = &value.kind {
+                        if let Some(&src) = self.react_namespace_alias_modules.get(base) {
+                            match react::route_namespace_member(src, attr) {
+                                react::MemberRoute::Removed(msg) => {
+                                    self.emit_expr_error(msg);
+                                    return;
+                                }
+                                react::MemberRoute::WrongModule {
+                                    js_name,
+                                    exports_from,
+                                } => {
+                                    self.emit_expr_error(&format!(
+                                        "`{base}.{attr}` — `{js_name}` is exported by \
+                                         \"{}\", not \"{}\": the member access would \
+                                         be `undefined` at runtime. Import it from \
+                                         the right module, or use `from pyths.react \
+                                         import {attr}` (auto-routes to the correct \
+                                         package).",
+                                        exports_from.module(),
+                                        src.module(),
+                                    ));
+                                    return;
+                                }
+                                react::MemberRoute::Routed(js_name) => {
+                                    self.emit_expr(value);
+                                    self.write(if *optional { "?." } else { "." });
+                                    self.write(&js_name);
+                                    return;
+                                }
+                            }
+                        }
+                        // Broader react-ecosystem namespace aliases: same
+                        // snake→camel member transform as the from-import path
+                        // (and as the call form above); plain functions, so no
+                        // pyBoundMethod wrap.
+                        if self.react_lib_module_aliases.contains(base) && attr.contains('_') {
+                            self.emit_expr(value);
+                            self.write(if *optional { "?." } else { "." });
+                            self.write(&react::snake_to_camel(attr));
+                            return;
+                        }
+                    }
+                }
+                // #266 → autotester simple_and_augmented_assignment (root
+                // fix): ANY attribute read in VALUE position (`g = obj.m`,
+                // `key=d.get`, arg positions, container elements) is Python
+                // attribute access — a function attribute is a BOUND method
+                // carrying its receiver (`g = a.f; g()` must keep self).
+                // pyBoundMethod passes data attributes straight through (one
+                // typeof check), synthesizes the dict-method closures, and
+                // raises AttributeError on a None receiver. Excluded:
+                //   - assignment targets (in_lhs_target — write position),
+                //   - method CALLS (emit_call writes the callee itself, so
+                //     `a.m(x)` never reaches this arm),
+                //   - stdlib module namespaces (plain functions),
+                //   - dunder-protocol reads (`__name__` above).
                 if !*optional
-                    && matches!(attr.as_str(), "get" | "setdefault")
+                    && !self.in_lhs_target
+                    && !self.in_call_callee
                     && !matches!(&value.kind, ExprKind::Name(n) if self.module_namespaces.contains(n))
+                    && !matches!(&value.kind, ExprKind::Name(n) if self.asyncio_namespaces.contains(n))
+                    && !attr.starts_with("__")
                 {
                     self.need_runtime("pyBoundMethod");
                     self.write("pyBoundMethod(");
                     self.emit_expr(value);
-                    self.write(&format!(", {:?})", attr));
+                    // Error-kind round 3: a receiver statically proven DICT
+                    // gets the strict flag — at runtime a plain-object dict
+                    // is indistinguishable from a JS-interop object (React
+                    // props), so pyBoundMethod raises AttributeError on an
+                    // absent attribute only when the codegen vouches the
+                    // receiver is a Python dict. Brand-carrying containers
+                    // (Array/Map/Set) raise without the flag.
+                    if matches!(self.infer_type(value), JsInferredType::Dict) {
+                        self.write(&format!(", {:?}, 1)", attr));
+                    } else {
+                        self.write(&format!(", {:?})", attr));
+                    }
                     return;
                 }
                 // `123.foo` is a JS syntax error (the lexer eats `123.`
@@ -9617,7 +14182,17 @@ function pyFormatDynamic(value, specStr) {
                 if needs_paren {
                     self.write("(");
                 }
+                // #452 review blocker 1: the RECEIVER of an attribute STORE
+                // (`obj.attr = v` reaches here with in_lhs_target set) is a
+                // READ context — only the stored attribute name is the write
+                // target. Reset the flag for the receiver and all its
+                // subexpressions (mirrors the Subscript arm), so e.g.
+                // `wrap(list).attr = v` still lowers the builtin-named value
+                // arg / star-import / sentinel reads inside the receiver.
+                let was_lhs = self.in_lhs_target;
+                self.in_lhs_target = false;
                 self.emit_expr(value);
+                self.in_lhs_target = was_lhs;
                 if needs_paren {
                     self.write(")");
                 }
@@ -9787,9 +14362,23 @@ function pyFormatDynamic(value, specStr) {
                 // occupies BODY offsets [js_start, self.output.len()).
                 self.certificate.sites[site_idx].js_end = Some(self.output.len());
             }
-            ExprKind::Slice { .. } => {
-                // Handled in Subscript above
-                self.write("null /* slice */");
+            ExprKind::Slice { lower, upper, step } => {
+                // A slice in VALUE position (an element of a subscript
+                // tuple — `a[1:2:3, 4:5:6]` — or a bare slice object):
+                // a real PySlice with CPython's .indices(len). The direct
+                // `a[i:j:k]` form stays on the pySlice fast path above.
+                self.need_runtime("__pySliceObj");
+                self.write("__pySliceObj(");
+                for (i, part) in [lower, upper, step].iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    match part {
+                        Some(e) => self.emit_expr(e),
+                        None => self.write("null"),
+                    }
+                }
+                self.write(")");
             }
             ExprKind::List(elts) => {
                 self.write("[");
@@ -9838,20 +14427,30 @@ function pyFormatDynamic(value, specStr) {
                 self.write("])");
             }
             ExprKind::ListComp { elt, generators } => {
-                self.emit_list_comprehension(elt, generators);
+                // Issue #438 (case E): a comprehension is its own scope; its
+                // for-targets shadow builtins inside the element/conditions.
+                self.push_scope(Self::comprehension_target_names(generators));
+                self.emit_collect_comprehension(&CompAccum::Element(elt), generators);
+                self.pop_scope();
             }
             ExprKind::DictComp {
                 key,
                 value,
                 generators,
             } => {
+                self.push_scope(Self::comprehension_target_names(generators));
                 self.emit_dict_comprehension(key, value, generators);
+                self.pop_scope();
             }
             ExprKind::SetComp { elt, generators } => {
-                // #297: canonicalizing PySet (see ExprKind::Set).
+                // #297: canonicalizing PySet (see ExprKind::Set). The set
+                // container init is this wrap — the element stream is the
+                // same unified lowering as list comps.
                 self.need_runtime("PySet");
                 self.write("new PySet(");
-                self.emit_list_comprehension(elt, generators);
+                self.push_scope(Self::comprehension_target_names(generators));
+                self.emit_collect_comprehension(&CompAccum::Element(elt), generators);
+                self.pop_scope();
                 self.write(")");
             }
             ExprKind::GeneratorExp { elt, generators } => {
@@ -9859,9 +14458,78 @@ function pyFormatDynamic(value, specStr) {
                 // protocol), not eager arrays — `next(genexp, default)`,
                 // laziness side-effect ordering, and iter() identity all
                 // depend on it.
+                self.push_scope(Self::comprehension_target_names(generators));
                 self.emit_generator_exp(elt, generators);
+                self.pop_scope();
             }
             ExprKind::Lambda { params, body } => {
+                // autotester lambda_functions: a lambda whose signature needs
+                // the varargs keyword channel (`lambda *a, **kw: …`) emits a
+                // BLOCK-body arrow so the prologue has somewhere to run.
+                let needs_kw_block = Self::varargs_kw_split(params).is_some();
+                // A varargs lambda needs calling-convention metadata so
+                // __pyKwArgs routes keywords through the marked carrier —
+                // a lambda has no declaration to hang the post-assignments
+                // on, so wrap the expression in __pyFnMeta.
+                let star = params.iter().position(|p| p.is_args);
+                // S2: ANY varargs lambda needs a block body so the
+                // `*args`-is-a-tuple marker prologue has somewhere to run.
+                let needs_block = needs_kw_block || star.is_some();
+                let needs_meta = star.is_some();
+                let meta_names: String = params
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, p)| !p.is_kwargs && !p.is_args && star.is_none_or(|s| *i < s))
+                    .map(|(_, p)| format!("\"{}\"", p.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                // WB-14: Python evaluates default args ONCE at def-time (frozen);
+                // a bare JS default param `(p = expr) => …` re-evaluates at
+                // CALL-time. Two divergences: (1) a default reading a loop/outer
+                // variable reassigned after the lambda is defined sees the LAST
+                // value, not the def-time snapshot; (2) `lambda x=x` lowers to
+                // `(x = x) =>` whose RHS resolves to the PARAMETER `x` in its own
+                // temporal dead zone → ReferenceError. Fix: hoist each default to
+                // a def-time const via an outer IIFE that captures the
+                // enclosing-scope values once — `((__ld0) => (p = __ld0) => …)(expr)`
+                // — so the value is frozen at def-time and the `x=x`
+                // self-reference is broken (the const captures the OUTER `x`).
+                // `*args`/`**kwargs` never carry defaults, so they're excluded.
+                // An immutable CONSTANT-literal default (`None`, a number, a
+                // string, a bool) is identical whether evaluated at def-time or
+                // call-time and needs no snapshot — leave it a bare JS default
+                // param (keeps `lambda e=None:` event handlers as `(e = null)`).
+                // Only a default that could observe def-time state (a Name that
+                // may be reassigned, a mutable literal, a call, …) is hoisted.
+                let default_params: Vec<&Param> = params
+                    .iter()
+                    .filter(|p| {
+                        !p.is_args
+                            && !p.is_kwargs
+                            && p.default.as_ref().is_some_and(|d| !is_const_literal(d))
+                    })
+                    .collect();
+                let has_defaults = !default_params.is_empty();
+                let saved_default_hoists = self.param_default_hoists.clone();
+                if has_defaults {
+                    self.write("((");
+                    for (k, p) in default_params.iter().enumerate() {
+                        if k > 0 {
+                            self.write(", ");
+                        }
+                        let c = format!("__ld${}", self.default_hoist_counter);
+                        self.default_hoist_counter += 1;
+                        self.write(&c);
+                        // emit_params references this const for the param default
+                        // (instead of re-emitting the call-time expression).
+                        self.param_default_hoists.insert(p.name.clone(), c);
+                    }
+                    self.write(") => ");
+                }
+                if needs_meta {
+                    self.need_runtime("__pyFnMeta");
+                    self.write("__pyFnMeta(");
+                }
                 self.write("(");
                 self.emit_params(params);
                 self.write(") => ");
@@ -9871,14 +14539,67 @@ function pyFormatDynamic(value, specStr) {
                 // Declare the lambda's params in a fresh scope so name-resolution
                 // inside the body sees them — in particular so a param that
                 // shadows a builtin (`lambda set: set(…)`) calls the PARAM, not
-                // the `set()` builtin. Mirrors the def-body scope handling.
-                self.push_scope();
+                // the `set()` builtin. Issue #438: the binding set is the params
+                // plus any walrus targets in the (expression) body.
+                let mut binds: HashSet<String> = params.iter().map(|p| p.name.clone()).collect();
+                Self::collect_walrus_targets(body, &mut binds);
+                self.push_scope(binds);
                 for p in params {
                     self.declare(&p.name);
                 }
-                self.emit_expr(body);
+                // WB-15 (S4): a lambda param named `self` shadows any enclosing
+                // instance-method receiver — inside this arrow `self` is that
+                // ordinary param, not `this`/`__self`. (Arrows otherwise inherit
+                // the enclosing `this`, so a non-`self`-param lambda keeps the
+                // receiver lowering — `lambda x: x + self.k` stays `this.k`.)
+                let prev_self_lowering_lambda = self.self_lowering;
+                if params.iter().any(|p| p.name == "self") {
+                    self.self_lowering = SelfLowering::Ordinary;
+                }
+                if needs_block {
+                    self.write("{\n");
+                    self.indent += 1;
+                    self.emit_varargs_kw_prologue(params, "<lambda>");
+                    self.write_indent();
+                    self.write("return ");
+                    self.emit_expr(body);
+                    self.write(";\n");
+                    self.indent -= 1;
+                    self.write_indent();
+                    self.write("}");
+                } else {
+                    self.emit_expr(body);
+                }
+                if needs_meta {
+                    self.write(&format!(
+                        ", [{}], {}, true)",
+                        meta_names,
+                        if needs_kw_block { "true" } else { "false" }
+                    ));
+                }
+                // Restore before the popped scope / the def-time default IIFE
+                // args (emitted in the ENCLOSING scope below).
+                self.self_lowering = prev_self_lowering_lambda;
                 self.pop_scope();
                 self.await_ok = prev_await_ok;
+                // WB-14: close the def-time IIFE — its arguments are the default
+                // expressions, evaluated ONCE, now in the ENCLOSING scope (the
+                // lambda's param scope has been popped, so `lambda x=x` reads the
+                // OUTER `x`). Restore the hoist map first so the defaults resolve
+                // with the enclosing function's mappings, not the lambda's.
+                if has_defaults {
+                    self.param_default_hoists = saved_default_hoists;
+                    self.write(")(");
+                    for (k, p) in default_params.iter().enumerate() {
+                        if k > 0 {
+                            self.write(", ");
+                        }
+                        self.emit_expr(p.default.as_ref().unwrap());
+                    }
+                    self.write(")");
+                } else {
+                    self.param_default_hoists = saved_default_hoists;
+                }
             }
             ExprKind::IfExpr {
                 test,
@@ -9902,21 +14623,37 @@ function pyFormatDynamic(value, specStr) {
                 self.emit_expr(inner);
             }
             ExprKind::Yield(value) => {
-                self.write("yield");
+                // autotester iterators_and_generators: yield-as-EXPRESSION —
+                // always parenthesized. JS rejects a bare `yield` in most
+                // nested expression positions (`pyAdd(r, yield r)` is a
+                // SyntaxError; `(yield r)` is valid everywhere in a
+                // generator), and `r + (yield r)` is exactly the send()
+                // protocol shape the testlets exercise.
+                self.write("(yield");
                 if let Some(v) = value {
                     self.write(" ");
                     self.emit_expr(v);
                 }
+                self.write(")");
             }
             ExprKind::YieldFrom(inner) => {
-                self.write("yield* ");
+                self.write("(yield* ");
                 self.emit_expr(inner);
+                self.write(")");
             }
             ExprKind::NamedExpr { target, value } => {
                 // Walrus operator: (target = value)
                 // PBT-2: the target is a WRITE position — a sentinel-guarded
                 // name must emit bare (`(i = v)`), not as a __pyChkLocal read
                 // (which would be an invalid JS assignment target).
+                // #443: a walrus target is a non-import rebind — forget any
+                // import identity this scope cached for the name, so a later
+                // re-import re-emits instead of deduping to the walrus value
+                // (`from math import floor; (floor := f); from math import
+                // floor` must restore math.floor).
+                if let ExprKind::Name(n) = &target.kind {
+                    self.invalidate_import_decl(n);
+                }
                 self.write("(");
                 let was_lhs = self.in_lhs_target;
                 self.in_lhs_target = true;
@@ -10001,6 +14738,105 @@ function pyFormatDynamic(value, specStr) {
     fn both_float(&self, left: &Expr, right: &Expr) -> bool {
         matches!(self.infer_type(left), JsInferredType::Float)
             && matches!(self.infer_type(right), JsInferredType::Float)
+    }
+
+    /// Option-B spike: bare float op with box-unwrap (`+`) on both operands
+    /// and a re-box of the result — the float fast path under boxed floats.
+    /// Option B: emit `value` into a NATIVE JS sink position (a JS built-in
+    /// constructor argument, a React `style` value). A boxed (integer-valued)
+    /// float must arrive as a native `Number` there — these sinks dispatch on
+    /// `typeof === "number"` (`Array(n)` length-vs-single-element, React's
+    /// px-append), and `valueOf()` coercion never runs for a typeof check.
+    /// A float LITERAL emits bare (statically known); a statically-`Float`
+    /// expression unwraps through `__pyJs`; an `Unknown` expression is
+    /// wrapped too when `wrap_unknown` (it may hold a runtime-boxed float);
+    /// every other static type can never be boxed and emits plain.
+    fn emit_native_sink_value(&mut self, value: &Expr, wrap_unknown: bool) {
+        if let ExprKind::FloatLiteral(n) = &value.kind {
+            self.write(&format!("({})", n));
+            return;
+        }
+        let t = self.infer_type(value);
+        let needs_unbox = matches!(t, JsInferredType::Float)
+            || (wrap_unknown && matches!(t, JsInferredType::Unknown));
+        if needs_unbox {
+            self.need_runtime("__pyJs");
+            self.write("__pyJs(");
+            self.emit_expr(value);
+            self.write(")");
+        } else {
+            self.emit_expr(value);
+        }
+    }
+
+    /// Option B: a JSX CHILD — a `createElement(tag, props, ...children)`
+    /// positional — is a native React sink: React THROWS on an object child
+    /// ("Objects are not valid as a React child (found: [object Number])"),
+    /// so a boxed integer-valued float must cross as a primitive. ONE rule
+    /// for every child surface (PSX element/fragment children, both factory
+    /// forms): float literals emit bare, statically-Float and Unknown
+    /// expressions unwrap through __pyJs (a non-box passes through
+    /// untouched). The React oracle renders a native number child via JS
+    /// toString (8.0 → "8") — that IS the parity target, so no pyStr here.
+    /// Spread children (`*xs` → `...xs`) pass through verbatim — wrapping a
+    /// spread would be invalid JS; boxed floats INSIDE spread/list children
+    /// remain a documented container-boundary residual.
+    fn emit_jsx_child(&mut self, child: &Expr) {
+        if matches!(child.kind, ExprKind::Starred(_)) {
+            self.emit_expr(child);
+        } else {
+            self.emit_native_sink_value(child, true);
+        }
+    }
+
+    fn emit_binop_bare_float(&mut self, left: &Expr, op: &str, right: &Expr) {
+        self.need_runtime("__pyF");
+        self.write("__pyF(");
+        self.emit_float_operand_unboxed(left);
+        self.write(" ");
+        self.write(op);
+        self.write(" ");
+        self.emit_float_operand_unboxed(right);
+        self.write(")");
+    }
+
+    /// Argument to a `pyFormatFloat(...)` preformat call: the formatter only
+    /// needs the numeric VALUE, so a float literal (or negated float
+    /// literal) emits bare instead of boxing via __pyF just for
+    /// pyFormatFloat to unwrap it again. Non-literal expressions emit
+    /// normally — pyFormatFloat unwraps a boxed argument itself.
+    fn emit_format_float_arg(&mut self, e: &Expr) {
+        match &e.kind {
+            ExprKind::FloatLiteral(n) => self.write(&format!("{}", n)),
+            ExprKind::UnaryOp {
+                op: UnaryOp::Neg,
+                operand,
+            } if matches!(&operand.kind, ExprKind::FloatLiteral(_)) => {
+                if let ExprKind::FloatLiteral(n) = &operand.kind {
+                    self.write(&format!("(-{})", n));
+                }
+            }
+            _ => self.emit_expr(e),
+        }
+    }
+
+    /// A float-typed operand in unboxed (native Number) position: a float
+    /// LITERAL is emitted bare (boxing it just to unwrap it again would
+    /// waste an allocation — the value is statically known); anything else
+    /// unwraps through the value-boundary authority's `__reqNum` — a no-op
+    /// on a native Number, `valueOf()` on a boxed float, and the exact
+    /// int→float coercion on a BigInt (a large int flowing through a
+    /// float-inferred binding made the old bare `(+x)` throw "Cannot
+    /// convert a BigInt value to a number" — the #461 class).
+    fn emit_float_operand_unboxed(&mut self, operand: &Expr) {
+        if let ExprKind::FloatLiteral(n) = &operand.kind {
+            self.write(&format!("({})", n));
+        } else {
+            self.need_runtime("__reqNum");
+            self.write("__reqNum(");
+            self.emit_expr(operand);
+            self.write(")");
+        }
     }
 
     /// Conservative integer interval `[lo, hi]` for `expr`, when it is a
@@ -10099,7 +14935,7 @@ function pyFormatDynamic(value, specStr) {
                     // Fast path: float+float is always Number; provably-
                     // bounded int arithmetic can't overflow 2**53 → bare op.
                     (JsInferredType::Float, JsInferredType::Float) => {
-                        self.emit_binop_bare(left, "+", right)
+                        self.emit_binop_bare_float(left, "+", right)
                     }
                     _ if self.int_arith_provably_safe(left, BinOp::Add, right) => {
                         self.emit_binop_bare(left, "+", right)
@@ -10112,18 +14948,21 @@ function pyFormatDynamic(value, specStr) {
                 }
             }
             BinOp::Sub => {
-                if self.both_float(left, right)
-                    || self.int_arith_provably_safe(left, BinOp::Sub, right)
-                {
+                if self.both_float(left, right) {
+                    self.emit_binop_bare_float(left, "-", right);
+                } else if self.int_arith_provably_safe(left, BinOp::Sub, right) {
                     self.emit_binop_bare(left, "-", right);
                 } else {
                     self.emit_binop_helper("pySub", left, right);
                 }
             }
+            // PEP 465 `a @ b`: pure dunder dispatch (__matmul__/__rmatmul__)
+            // — no builtin operand support, like CPython without numpy.
+            BinOp::MatMul => self.emit_binop_helper("pyMatMul", left, right),
             BinOp::Mul => {
-                if self.both_float(left, right)
-                    || self.int_arith_provably_safe(left, BinOp::Mul, right)
-                {
+                if self.both_float(left, right) {
+                    self.emit_binop_bare_float(left, "*", right);
+                } else if self.int_arith_provably_safe(left, BinOp::Mul, right) {
                     self.emit_binop_bare(left, "*", right);
                 } else {
                     // #319: float-context flag → BigInt*float overflow raises.
@@ -10173,7 +15012,7 @@ function pyFormatDynamic(value, specStr) {
             }
             BinOp::Pow => {
                 if self.both_float(left, right) {
-                    self.emit_binop_bare(left, "**", right);
+                    self.emit_binop_bare_float(left, "**", right);
                 } else {
                     // #319: float-context flag → float ** overflow raises
                     // OverflowError (int ** stays exact BigInt).
@@ -10262,7 +15101,7 @@ function pyFormatDynamic(value, specStr) {
                 // → KEY membership, strings → substring, Set/Map → .has.
                 // Direct `.includes()` only handles arrays + strings and
                 // crashes (TypeError: undefined) on plain objects.
-                self.runtime_imports.insert("pyContains".to_string());
+                self.need_runtime("pyContains");
                 self.write("pyContains(");
                 self.emit_expr(right);
                 self.write(", ");
@@ -10270,7 +15109,7 @@ function pyFormatDynamic(value, specStr) {
                 self.write(")");
             }
             BinOp::NotIn => {
-                self.runtime_imports.insert("pyContains".to_string());
+                self.need_runtime("pyContains");
                 self.write("!pyContains(");
                 self.emit_expr(right);
                 self.write(", ");
@@ -10345,7 +15184,16 @@ function pyFormatDynamic(value, specStr) {
                         BinOp::GtEq => ">=",
                         _ => unreachable!(),
                     };
-                    self.emit_binop_bare(left, op_str, right);
+                    // Option B: a comparison is VALUE-only — a float literal
+                    // operand emits bare (boxing it just for `<`'s ToPrimitive
+                    // to unwrap would allocate per evaluation, e.g. every
+                    // loop iteration of `if x > 1e6:`). A boxed non-literal
+                    // operand still compares correctly via valueOf.
+                    self.write("(");
+                    self.emit_format_float_arg(left);
+                    self.write(&format!(" {} ", op_str));
+                    self.emit_format_float_arg(right);
+                    self.write(")");
                 } else {
                     let helper = match op {
                         BinOp::Lt => "pyLt",
@@ -10391,7 +15239,11 @@ function pyFormatDynamic(value, specStr) {
                 // is false in JS but Python `True == 1` is true (bool ⊂ int).
                 let bool_lit = matches!(&left.kind, ExprKind::BoolLiteral(_))
                     || matches!(&right.kind, ExprKind::BoolLiteral(_));
-                if !(lt.is_scalar() && rt.is_scalar()) || bool_lit {
+                // Option-B spike: a boxed float never `===` anything — route
+                // float-involved equality through pyEq (which unwraps).
+                let float_side =
+                    matches!(lt, JsInferredType::Float) || matches!(rt, JsInferredType::Float);
+                if !(lt.is_scalar() && rt.is_scalar()) || bool_lit || float_side {
                     self.need_runtime("pyEq");
                     self.write("pyEq(");
                     self.emit_expr(left);
@@ -10411,7 +15263,9 @@ function pyFormatDynamic(value, specStr) {
                 let rt = self.infer_type(right);
                 let bool_lit = matches!(&left.kind, ExprKind::BoolLiteral(_))
                     || matches!(&right.kind, ExprKind::BoolLiteral(_));
-                if !(lt.is_scalar() && rt.is_scalar()) || bool_lit {
+                let float_side =
+                    matches!(lt, JsInferredType::Float) || matches!(rt, JsInferredType::Float);
+                if !(lt.is_scalar() && rt.is_scalar()) || bool_lit || float_side {
                     self.need_runtime("pyEq");
                     self.write("(!pyEq(");
                     self.emit_expr(left);
@@ -10433,7 +15287,10 @@ function pyFormatDynamic(value, specStr) {
                     ExprKind::Call {
                         func, args, kwargs, ..
                     } => {
+                        let was_callee = self.in_call_callee;
+                        self.in_call_callee = true;
                         self.emit_expr(func);
+                        self.in_call_callee = was_callee;
                         self.write("(");
                         self.emit_expr(left);
                         for arg in args {
@@ -10472,7 +15329,17 @@ function pyFormatDynamic(value, specStr) {
                 // Without this, `-Decimal('5.5')` fell through to bare
                 // `-x`, which coerces via `valueOf()` to a plain float
                 // and silently loses the Decimal type.
-                if self.infer_type(operand).is_scalar() {
+                if matches!(self.infer_type(operand), JsInferredType::Float) {
+                    // Option-B spike: bare `-` would unwrap the box via
+                    // valueOf and lose the float tag — negate + re-box.
+                    // Authority unwrap (__reqNum): bare `(+x)` threw on a
+                    // BigInt leaking through a float-inferred binding.
+                    self.need_runtime("__pyF");
+                    self.need_runtime("__reqNum");
+                    self.write("__pyF(-__reqNum(");
+                    self.emit_expr(operand);
+                    self.write("))");
+                } else if matches!(self.infer_type(operand), JsInferredType::Primitive) {
                     self.write("(-");
                     self.emit_expr(operand);
                     self.write(")");
@@ -10484,9 +15351,23 @@ function pyFormatDynamic(value, specStr) {
                 }
             }
             UnaryOp::Pos => {
-                self.write("(+");
-                self.emit_expr(operand);
-                self.write(")");
+                if matches!(self.infer_type(operand), JsInferredType::Float) {
+                    // Option-B spike: keep the box through unary plus.
+                    // Authority unwrap (__reqNum) — see UnaryOp::Neg.
+                    self.need_runtime("__pyF");
+                    self.need_runtime("__reqNum");
+                    self.write("__pyF(__reqNum(");
+                    self.emit_expr(operand);
+                    self.write("))");
+                } else {
+                    // Authority: `+int` is the identity at ANY magnitude —
+                    // the old bare `(+x)` threw "Cannot convert a BigInt
+                    // value to a number" on a large int (#38 class).
+                    self.need_runtime("pyPos");
+                    self.write("pyPos(");
+                    self.emit_expr(operand);
+                    self.write(")");
+                }
             }
             UnaryOp::Not => {
                 // #211: `not x` must use Python truthiness. For a scalar
@@ -10496,7 +15377,9 @@ function pyFormatDynamic(value, specStr) {
                 // (`![]` === false), so wrap in pyBool — same conservative
                 // choice as `if x:` / `while x:`. This is why `if not strings:`
                 // guards silently failed on empty inputs (HumanEval /5 /12).
-                if self.infer_type(operand).is_scalar() {
+                if matches!(self.infer_type(operand), JsInferredType::Primitive) {
+                    // Option-B spike: Float excluded — a boxed 0.0 is a JS
+                    // object (always truthy), so `not x` must use pyBool.
                     self.write("(!");
                     self.emit_expr(operand);
                     self.write(")");
@@ -10645,6 +15528,114 @@ function pyFormatDynamic(value, specStr) {
             }
         }
 
+        // B4 → 0.2.2 member-call CLASS rule: a member call on a CORE-React
+        // namespace alias (`import react [as R]` / `import react_dom [as D]` /
+        // `import react_dom.client as C`). The star-namespace import binds the
+        // camelCase exports, so a raw snake member is a silent `undefined`.
+        // The original fix special-cased only `create_element` with ≥2 args —
+        // validating its own shape and leaving every ADJACENT member
+        // (`react.use_state`, `react.clone_element`, `react_dom.create_portal`,
+        // single-arg `create_element`, …) silently dead. Now EVERY member is
+        // routed through ONE rule (`react::route_namespace_member`): removed
+        // check first, then camel-case + module check against the audited
+        // table, or a compile diagnostic. `createElement` additionally gets the
+        // factory props/kwargs transform, identical to the name-bound form.
+        if let ExprKind::Attribute {
+            value,
+            attr,
+            optional: attr_opt,
+        } = &func.kind
+        {
+            if let ExprKind::Name(base) = &value.kind {
+                if let Some(&src) = self.react_namespace_alias_modules.get(base) {
+                    match react::route_namespace_member(src, attr) {
+                        react::MemberRoute::Removed(msg) => {
+                            self.emit_expr_error(msg);
+                            return;
+                        }
+                        react::MemberRoute::WrongModule {
+                            js_name,
+                            exports_from,
+                        } => {
+                            self.emit_expr_error(&format!(
+                                "`{base}.{attr}` — `{js_name}` is exported by \
+                                 \"{}\", not \"{}\": the member access would be \
+                                 `undefined` at runtime. Import it from the right \
+                                 module, or use `from pyths.react import {attr}` \
+                                 (auto-routes to the correct package).",
+                                exports_from.module(),
+                                src.module(),
+                            ));
+                            return;
+                        }
+                        react::MemberRoute::Routed(js_name) => {
+                            if js_name == "createElement"
+                                && !kwargs.is_empty()
+                                && self.react_factory_kwargs_misuse(args, kwargs)
+                            {
+                                return; // diagnostic already emitted
+                            }
+                            self.emit_expr(value);
+                            self.write(if *attr_opt { "?." } else { "." });
+                            self.write(&js_name);
+                            self.write(open_paren);
+                            if js_name == "createElement" {
+                                self.emit_react_factory_args(args, kwargs);
+                            } else {
+                                self.emit_call_args(args, kwargs);
+                            }
+                            self.write(")");
+                            return;
+                        }
+                    }
+                }
+                // Broader react-ecosystem namespace aliases (react_router_dom,
+                // framer_motion, …): no export table to check against, but the
+                // member transform must still MATCH the from-import path
+                // (snake→camel) — `rrd.create_browser_router` binds
+                // `createBrowserRouter`, exactly what `from react_router_dom
+                // import create_browser_router` emits. Identity on
+                // underscore-free names, so camelCase spellings pass through.
+                if self.react_lib_module_aliases.contains(base) && attr.contains('_') {
+                    self.emit_expr(value);
+                    self.write(if *attr_opt { "?." } else { "." });
+                    self.write(&react::snake_to_camel(attr));
+                    self.write(open_paren);
+                    self.emit_call_args(args, kwargs);
+                    self.write(")");
+                    return;
+                }
+            }
+        }
+
+        // #448 (member form): `importlib.import_module(...)` — a member call on
+        // a tracked `import importlib` namespace. importlib is not a real module
+        // here (the namespace emits nothing), so this used to lower to a broken
+        // `importlib.import_module(...)` with no diagnostic. Steer to the
+        // supported forms.
+        if let ExprKind::Attribute {
+            value,
+            attr,
+            optional: false,
+        } = &func.kind
+        {
+            if attr == "import_module" {
+                if let ExprKind::Name(base) = &value.kind {
+                    if self.importlib_namespaces.contains(base)
+                        && !self.is_declared_in_any_scope(base)
+                    {
+                        self.emit_expr_error(
+                            "`importlib.import_module(...)` (member form) is not supported. \
+                             Use `from importlib import import_module` then call \
+                             `import_module(\"./mod.js\")`, or the bare `import_module(...)` \
+                             builtin — both lower to native dynamic `import()`.",
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
         // #260: `set.intersection(a, b)` is the unbound-method form and means
         // `a.intersection(b)` (first arg is `self`). Only when `set`/`frozenset`
         // is the builtin (not a shadowing local variable).
@@ -10684,6 +15675,77 @@ function pyFormatDynamic(value, specStr) {
                 if let Some(cls) = self.class_stack.last().map(|c| c.name.clone()) {
                     self.need_runtime("__pySuper");
                     self.write(&format!("__pySuper({}, this)", Self::sanitize_ident(&cls)));
+                    return;
+                }
+            }
+            // autotester builtin_super: the EXPLICIT two-arg form
+            // `super(C, obj)` maps exactly onto the same MRO helper —
+            // dispatch to the class after C in obj's MRO. Previously fell
+            // through to the reserved-word rename (`super$(...)` →
+            // ReferenceError).
+            if n == "super" && args.len() == 2 && kwargs.is_empty() {
+                self.need_runtime("__pySuper");
+                self.write("__pySuper(");
+                self.emit_expr(&args[0]);
+                self.write(", ");
+                self.emit_expr(&args[1]);
+                self.write(")");
+                return;
+            }
+        }
+
+        // TB-1: a DIRECT call to React's createElement factory
+        // (`h("button", {"on_click": f}, "-")` where `h`/`create_element`/
+        // `createElement` is bound to it). The 2nd positional argument is the
+        // props object — PSX-prop position — so a dict-literal there gets the
+        // snake→camel/kebab prop-name transform (on_click→onClick,
+        // aria_label→aria-label). This is the ONLY dict-literal position the
+        // transform reaches; general dict literals stay verbatim.
+        //
+        // 0.2.2 kwargs class fix: the KEYWORD form (`h("div", on_click=f)`,
+        // PSX-flat-style) used to fall through to generic call emission —
+        // kwargs became a VERBATIM trailing object (`{on_click: f}`, a dead
+        // handler) landing in whatever argument slot came next. Now kwargs are
+        // the props (static keys transformed via the same single
+        // `write_react_prop_key` rule, `**spread` verbatim — the genuine TB-1
+        // dynamic boundary) and positionals after the tag are children, exactly
+        // like flat PSX. Ambiguous/malformed kwarg forms are diagnosed.
+        if !optional {
+            if let ExprKind::Name(name) = &func.kind {
+                if self.react_create_element_fns.contains(name)
+                    && (args.len() >= 2 || !kwargs.is_empty())
+                {
+                    if !kwargs.is_empty() && self.react_factory_kwargs_misuse(args, kwargs) {
+                        return; // diagnostic already emitted
+                    }
+                    let callee = self.resolve_name_ref(name);
+                    self.write(&callee);
+                    self.write("(");
+                    self.emit_react_factory_args(args, kwargs);
+                    self.write(")");
+                    return;
+                }
+            }
+        }
+
+        // NB-1: an UNBOUND HTML/SVG intrinsic-tag name (`div(...)`, `pre(...)`)
+        // used as a CALL OUTSIDE any @psx/@component compiled to a bare
+        // `div(...)` reference — `pyths check` passed clean, then a runtime
+        // ReferenceError. #306's is_unbound_psx_tag only RESCUES the same name
+        // INSIDE a component (→ createElement); OUTSIDE, there is no element
+        // context, so this is a hard compile diagnostic instead of a silent
+        // miscompile. Gated on is_unbound_psx_tag, so a legitimately-BOUND user
+        // symbol named `div` (import/def/local) used outside a component stays a
+        // valid call, and Python builtins / JS globals that happen to be tag
+        // names (`map`/`input`/`object`) keep their normal lowering.
+        if !self.in_component {
+            if let ExprKind::Name(name) = &func.kind {
+                if react::is_html_element(name) && self.is_unbound_psx_tag(name) {
+                    self.emit_expr_error(&format!(
+                        "`{name}` is an intrinsic HTML/SVG element tag, only available inside \
+                         @component/@psx — decorate this function with @psx, or `{name}` is \
+                         undefined here"
+                    ));
                     return;
                 }
             }
@@ -10748,6 +15810,24 @@ function pyFormatDynamic(value, specStr) {
                     }
                     // Fall through to the regular call emission below.
                 } else if self.is_psx_tag_call(name) {
+                    // NB-2: a user BINDING (module-level `def`/`class`, a
+                    // local/param, or an import) whose name is a lowercase HTML
+                    // intrinsic tag is SILENTLY shadowed by the intrinsic here —
+                    // the allowlist check ignores bindings, so `div(...)` always
+                    // lowers to createElement("div") and the user's `div` is
+                    // unreachable, with no error. Intrinsic-wins is correct and
+                    // React-consistent, so we KEEP the lowering — but make the
+                    // shadow LOUD: a hard compile diagnostic. Fires ONLY for an
+                    // allowlist tag with a real user binding; an unbound tag
+                    // (the #306 rescue) and a bound NON-allowlist tag-shaped
+                    // name are both untouched.
+                    if react::is_html_element(name) && self.has_user_binding(name) {
+                        self.record_codegen_error(&format!(
+                            "`{name}` collides with the HTML intrinsic element tag inside \
+                             @component/@psx; your binding of `{name}` is shadowed — rename it \
+                             (or use a Capitalized component name)"
+                        ));
+                    }
                     // DESIGN RULE — builtin ∩ HTML/SVG-element name collision:
                     // inside a @component, a name that is a KNOWN HTML/SVG
                     // element is lowered as that ELEMENT even when it is ALSO a
@@ -10841,7 +15921,13 @@ function pyFormatDynamic(value, specStr) {
         // because JsInferredType::Primitive conflates str (has .length) with
         // int/bool/None (no .length) — we can't safely narrow here.
         if let ExprKind::Name(func_name) = &func.kind {
-            if func_name == "len" && args.len() == 1 && kwargs.is_empty() {
+            // DX-B1: a binding named `len` in any enclosing scope shadows the
+            // builtin — do NOT take the `.length` fast path for it.
+            if func_name == "len"
+                && args.len() == 1
+                && kwargs.is_empty()
+                && !self.is_declared_in_any_scope("len")
+            {
                 let arg_ty = self.infer_type(&args[0]);
                 if matches!(arg_ty, JsInferredType::List | JsInferredType::Tuple) {
                     self.emit_expr(&args[0]);
@@ -10891,7 +15977,7 @@ function pyFormatDynamic(value, specStr) {
             {
                 self.need_runtime("pyFormatFloat");
                 self.write("pyFormatFloat(");
-                self.emit_expr(&args[0]);
+                self.emit_format_float_arg(&args[0]);
                 self.write(")");
                 return;
             }
@@ -10908,7 +15994,7 @@ function pyFormatDynamic(value, specStr) {
                     }
                     if self.is_definitely_float(a) {
                         self.write("pyFormatFloat(");
-                        self.emit_expr(a);
+                        self.emit_format_float_arg(a);
                         self.write(")");
                     } else {
                         self.emit_expr(a);
@@ -10919,23 +16005,26 @@ function pyFormatDynamic(value, specStr) {
             }
         }
 
-        // #225: `eval`/`exec`/`compile` are intentionally unsupported (running
-        // arbitrary Python at runtime has no place in an AOT-compiled, edge-
-        // deployable target). Emit a clear codegen diagnostic instead of the
-        // cryptic `eval$ is not defined` the reserved-word rename produced.
+        // #225 (folded into the public-#3 unified gate below): `eval`/`exec`/
+        // `compile` are intentionally unsupported — they now flow through the
+        // same unimplemented-builtin diagnostic as `open`/`input`/`hash`/...,
+        // which also means a USER binding named `eval` correctly shadows
+        // (the old dedicated branch fired unconditionally).
+        //
+        // public #3: `vars()` with NO arguments is `locals()` — no compiled
+        // equivalent exists. Reject at compile time; the 1-arg instance form
+        // lowers through the pyVars mapping below. A user binding named
+        // `vars` shadows and is untouched.
         if let ExprKind::Name(name) = &func.kind {
-            if matches!(name.as_str(), "eval" | "exec" | "compile") {
-                let diag = format!(
-                    "`{}()` is not supported: PythScribe is an ahead-of-time \
-                     compiler and does not run arbitrary Python at runtime.",
-                    name
+            if name == "vars"
+                && args.is_empty()
+                && kwargs.is_empty()
+                && !self.is_declared_in_any_scope(name)
+            {
+                self.emit_expr_error(
+                    "vars() with no arguments is locals(), which is not \
+                     supported yet (pythscribe-v3.x)",
                 );
-                eprintln!("error: {}", diag);
-                self.codegen_errors.push(diag.clone());
-                self.write(&format!(
-                    "(() => {{ throw new Error({:?}); }})()",
-                    format!("PythScribe: {}", diag)
-                ));
                 return;
             }
         }
@@ -10949,6 +16038,30 @@ function pyFormatDynamic(value, specStr) {
             // idiomatic `create(lambda set: … set(…))`, where the `set` parameter
             // was mis-lowered to the `set()` builtin (`pySetOf`) so store updates
             // silently no-op'd. (Found by the dual-track client-state tests.)
+            // Star-import call form: a bound export CALLED bare resolves to
+            // the module's function/class (classes construct with `new`) —
+            // and suppresses the builtin lowering below (`from math import *`
+            // makes `pow(3, 4.5)` math.pow, like CPython's rebinding).
+            // #448: a name bound via `from importlib import import_module [as X]`
+            // lowers to native dynamic `import(spec)` (unless shadowed by a
+            // local). The bare `import_module` builtin is handled below via
+            // builtin_func_mapping; this covers the aliased form.
+            if !self.is_declared_in_any_scope(name) && self.import_module_fns.contains(name) {
+                self.emit_import_module_call(args, kwargs);
+                return;
+            }
+            if !self.is_declared_in_any_scope(name) {
+                if let Some((ns, is_class)) = self.star_import_bindings.get(name).cloned() {
+                    if is_class {
+                        self.write("new ");
+                    }
+                    self.write(&format!("{}.{}", ns, name));
+                    self.write(open_paren);
+                    self.emit_call_args(args, kwargs);
+                    self.write(")");
+                    return;
+                }
+            }
             if let Some(mapping) =
                 builtin_func_mapping(name).filter(|_| !self.is_declared_in_any_scope(name))
             {
@@ -10979,6 +16092,21 @@ function pyFormatDynamic(value, specStr) {
                         self.write(")");
                         return;
                     }
+                    BuiltinMapping::NativeCall(kw) => {
+                        // #448: native language call form (e.g. dynamic
+                        // `import(spec)`). No runtime helper. The `?.()`
+                        // optional-call form is meaningless for a keyword head,
+                        // so always use a plain `(`.
+                        if name == "import_module" {
+                            self.emit_import_module_call(args, kwargs);
+                            return;
+                        }
+                        self.write(kw);
+                        self.write("(");
+                        self.emit_call_args(args, kwargs);
+                        self.write(")");
+                        return;
+                    }
                     BuiltinMapping::Runtime(helper) => {
                         self.need_runtime(helper);
                         // isinstance(x, list) — builtin TYPE names have no JS
@@ -10993,7 +16121,8 @@ function pyFormatDynamic(value, specStr) {
                                 matches!(&e.kind,
                                 ExprKind::Name(n) if matches!(n.as_str(),
                                     "list" | "tuple" | "str" | "int" | "float"
-                                    | "bool" | "dict" | "set"))
+                                    | "bool" | "dict" | "set"
+                                    | "bytes" | "bytearray"))
                             };
                             let emit_cls = |s: &mut Self, e: &Expr| {
                                 if let ExprKind::Name(n) = &e.kind {
@@ -11034,8 +16163,103 @@ function pyFormatDynamic(value, specStr) {
 
             // Check for React hook mapping (use_state → useState, etc.)
             if let Some(js_name) = react::react_hook_mapping(name) {
+                // WF-1 root fix — the cleanup-effect hooks (useEffect /
+                // useLayoutEffect / useInsertionEffect) store the callback's
+                // return as the effect cleanup and invoke it. React accepts
+                // only `undefined` or a function there; a Python effect ending
+                // in `return None` emits `return null`, which React calls →
+                // "destroy is not a function". Wrap the callback in
+                // `__pyEffect`, which coerces ANY non-function return (null /
+                // None / a number / …) to `undefined`. This is more general
+                // than a codegen `return None` rewrite: it neutralizes every
+                // null/non-function-returning effect body regardless of shape.
+                // Only the FIRST arg (the effect fn) is wrapped; the deps array
+                // is passed through. kwargs never apply to these hooks.
+                if react::is_cleanup_effect_hook(name) && !args.is_empty() && kwargs.is_empty() {
+                    // WF-1 round 2 (spread form): `use_effect(*args)` — the
+                    // compile-time wrap can't reach inside a spread; the old
+                    // emission wrapped the WHOLE spread (`useEffect(
+                    // __pyEffect(...args))`), swallowing the deps array so
+                    // the effect re-ran every render. Route through the
+                    // runtime splitter, which wraps ONLY the resolved first
+                    // argument: `useEffect(...__pyEffectArgs(...args))`.
+                    // Applies whenever ANY positional arg is a spread (the
+                    // first slot's identity is unknowable at compile time).
+                    if args
+                        .iter()
+                        .any(|a| matches!(a.kind, ExprKind::Starred(_)))
+                    {
+                        self.need_runtime("__pyEffectArgs");
+                        self.write(js_name);
+                        self.write(open_paren);
+                        self.write("...__pyEffectArgs(");
+                        self.emit_call_args(args, kwargs);
+                        self.write("))");
+                        return;
+                    }
+                    self.need_runtime("__pyEffect");
+                    self.write(js_name);
+                    self.write(open_paren);
+                    self.write("__pyEffect(");
+                    self.emit_expr(&args[0]);
+                    self.write(")");
+                    for a in &args[1..] {
+                        self.write(", ");
+                        self.emit_expr(a);
+                    }
+                    self.write(")");
+                    return;
+                }
                 self.write(js_name);
                 self.write(open_paren);
+                self.emit_call_args(args, kwargs);
+                self.write(")");
+                return;
+            }
+
+            // public #3 DEEP FIX — the unimplemented-builtin gate. At this
+            // point `name` is called bare and is NOT a local/param/enclosing
+            // binding, NOT a star-import binding, NOT a runtime-mapped
+            // builtin, and NOT a react hook. If it is a KNOWN CPython builtin
+            // with no implementation (open/input/eval/hash/id/...), emitting
+            // it verbatim would reproduce the silent compile-then-
+            // ReferenceError class of public issue #3 — emit a compile error
+            // that fails `pyths compile` AND `pyths check` instead. No false
+            // positives: user bindings/imports are caught by
+            // is_declared_in_any_scope, forward-referenced top-level defs by
+            // known_functions/known_classes (module-wide pre-scan),
+            // star-import rebinds by star_import_bindings, implemented
+            // builtins matched the mapping tables above, and inside a
+            // @component the HTML-element collisions (input/map/object) were
+            // already claimed by the PSX element dispatch.
+            if !self.is_declared_in_any_scope(name)
+                && !self.star_import_bindings.contains_key(name)
+                && !self.known_functions.contains(name)
+                && !self.known_classes.contains(name)
+                && crate::builtins::unsupported_builtin(name)
+            {
+                let diag = crate::builtins::unsupported_builtin_message(name);
+                self.emit_expr_error(&diag);
+                return;
+            }
+        }
+
+        // WB-17: the ES primitive-wrapper globals (Boolean/Number/String/
+        // Symbol/BigInt) are TYPE-CONVERSION functions when called BARE, but
+        // the capitalized-name → `new` heuristic below would box them into
+        // truthy wrapper OBJECTS (`new Boolean("")` is truthy, not `false`;
+        // `typeof new Number("3")` is `"object"`) — and `new Symbol()`/
+        // `new BigInt()` THROW. Emit a BARE call so they coerce to primitives.
+        // Guarded on not-shadowed: a user `class String` (known_classes) or any
+        // local/param binding keeps normal handling. Python's `bool()/int()/
+        // str()` are lowercase and already routed through runtime helpers
+        // (pyBool/pyInt/pyStr) above, so they are unaffected.
+        if let ExprKind::Name(name) = &func.kind {
+            if react::is_js_primitive_wrapper(name)
+                && !self.known_classes.contains(name)
+                && !self.is_declared_in_any_scope(name)
+            {
+                self.write(&format!("{}{}", name, open_paren));
                 self.emit_call_args(args, kwargs);
                 self.write(")");
                 return;
@@ -11057,6 +16281,25 @@ function pyFormatDynamic(value, specStr) {
             {
                 if !kwargs.is_empty() && !optional {
                     self.emit_ctor_kw_call(&Self::sanitize_ident(name), args, kwargs);
+                    return;
+                }
+                // Option B: a JS BUILT-IN constructor (never a compiled
+                // Python class — those are in known_classes, checked first)
+                // is a native sink: unbox float args (`Array(3.0)` must get
+                // a native 3, or the typeof-dispatch builds `[box]` of
+                // length 1 instead of a 3-slot array).
+                if !self.known_classes.contains(name)
+                    && is_js_builtin_ctor(name)
+                    && kwargs.is_empty()
+                {
+                    self.write(&format!("new {}{}", Self::sanitize_ident(name), open_paren));
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.write(", ");
+                        }
+                        self.emit_native_sink_value(arg, true);
+                    }
+                    self.write(")");
                     return;
                 }
                 self.write(&format!("new {}{}", Self::sanitize_ident(name), open_paren));
@@ -11098,13 +16341,36 @@ function pyFormatDynamic(value, specStr) {
                 if let ExprKind::Name(cls_name) = &recv.kind {
                     if self.known_classes.contains(cls_name) {
                         self.need_runtime("__pyClassCall");
-                        self.write(&format!(
-                            "__pyClassCall({}, \"{}\", [",
-                            Self::sanitize_ident(cls_name),
-                            attr
-                        ));
-                        self.emit_call_args(args, kwargs);
-                        self.write("])");
+                        let js_cls = Self::sanitize_ident(cls_name).into_owned();
+                        if kwargs.is_empty() {
+                            self.write(&format!(
+                                "__pyClassCall({}, \"{}\", [",
+                                js_cls, attr
+                            ));
+                            self.emit_call_args(args, kwargs);
+                            self.write("])");
+                        } else {
+                            // Keyword binding for unbound Cls.method(...)
+                            // calls: __pyClassCallKw consults the resolved
+                            // method's __pyparams__/__pykw__ metadata and
+                            // offsets the leading positional self for
+                            // prototype methods (autotester arguments:
+                            // A.__init__(self, y, x, *args, m=n, ...)).
+                            self.need_runtime("__pyClassCallKw");
+                            self.write(&format!(
+                                "__pyClassCallKw({}, \"{}\", [",
+                                js_cls, attr
+                            ));
+                            for (i, a) in args.iter().enumerate() {
+                                if i > 0 {
+                                    self.write(", ");
+                                }
+                                self.emit_expr(a);
+                            }
+                            self.write("], ");
+                            self.emit_kwargs_value(kwargs);
+                            self.write(")");
+                        }
                         return;
                     }
                 }
@@ -11127,8 +16393,15 @@ function pyFormatDynamic(value, specStr) {
             optional: false,
         } = &func.kind
         {
-            if matches!(&value.kind, ExprKind::Name(n) if self.module_namespaces.contains(n))
-                && attr.chars().next().is_some_and(|c| c.is_uppercase())
+            let dt_class_call = matches!(&value.kind, ExprKind::Name(n)
+                    if self.datetime_namespaces.contains(n))
+                && matches!(
+                    attr.as_str(),
+                    "datetime" | "date" | "time" | "timedelta" | "timezone"
+                );
+            if (matches!(&value.kind, ExprKind::Name(n) if self.module_namespaces.contains(n))
+                && attr.chars().next().is_some_and(|c| c.is_uppercase()))
+                || dt_class_call
             {
                 self.write("new ");
                 self.emit_expr(value);
@@ -11139,7 +16412,12 @@ function pyFormatDynamic(value, specStr) {
             }
         }
 
-        if let ExprKind::Attribute { value, attr, .. } = &func.kind {
+        if let ExprKind::Attribute {
+            value,
+            attr,
+            optional: attr_opt,
+        } = &func.kind
+        {
             // #221: a call on a stdlib module namespace (`re.split`, `os.count`)
             // is a module function, not the string/list method with the same
             // name — skip the lowering table and emit it verbatim.
@@ -11147,7 +16425,24 @@ function pyFormatDynamic(value, specStr) {
                 matches!(&value.kind, ExprKind::Name(n) if self.module_namespaces.contains(n));
             if !is_module_call {
                 if let Some(lowering) = method_lowering(attr) {
-                    if self.try_emit_method_lowering(value, attr, args, kwargs, lowering, optional)
+                    // WB-9 CLASS rule: the ATTRIBUTE-level `?.` (`l?.remove(1)`,
+                    // `s?.upper()`) was DISCARDED here — only the call-level
+                    // `optional` (`l.remove?.(1)`) flowed through, so helper
+                    // lowerings ran on a None receiver and inline/rename
+                    // lowerings dropped the short-circuit. Fold both flags into
+                    // ONE `optional` that every lowering path (Rename / Inline /
+                    // Hybrid / Runtime) must honor uniformly.
+                    let opt = optional || *attr_opt;
+                    // F2 root fix: receiver-context + arity dispatch for
+                    // collision-prone container methods. When the receiver is
+                    // proven foreign, or the positional arity is impossible for
+                    // the Python container method (so it cannot BE that method),
+                    // skip the container lowering — which would silently drop or
+                    // corrupt arguments — and fall through to verbatim emission
+                    // that preserves every argument.
+                    if !self.container_dispatch_prefers_verbatim(value, attr, args)
+                        && self
+                            .try_emit_method_lowering(value, attr, args, kwargs, lowering, opt)
                     {
                         return;
                     }
@@ -11165,7 +16460,12 @@ function pyFormatDynamic(value, specStr) {
         // for functions without it (JS interop, components, methods).
         // Attribute callees are excluded — extracting `obj.m` would lose
         // its `this` binding.
-        if !kwargs.is_empty() && !optional && matches!(&func.kind, ExprKind::Name(_)) {
+        if !kwargs.is_empty()
+            && !optional
+            && matches!(&func.kind, ExprKind::Name(_) | ExprKind::Lambda { .. })
+        {
+            // Lambda IIFEs too (autotester arguments): the __pyFnMeta wrapper
+            // carries the lambda's __pyparams__, so keyword binding works.
             self.need_runtime("__pyCallKw");
             self.write("__pyCallKw(");
             self.emit_expr(func);
@@ -11235,6 +16535,101 @@ function pyFormatDynamic(value, specStr) {
             }
         }
 
+        // autotester local_classes: an attribute call whose ATTRIBUTE NAME is
+        // a known class (`a.B(9)` — a nested class reached through an
+        // instance) needs `new` at runtime; route through __pyAttrCall, which
+        // class-detects the attribute value and otherwise applies it with the
+        // receiver. Gated on the attr being a known class name so ordinary
+        // method calls stay on the raw fast path.
+        if let ExprKind::Attribute {
+            value,
+            attr,
+            optional: false,
+        } = &func.kind
+        {
+            if kwargs.is_empty()
+                && self.known_classes.contains(attr)
+                && !matches!(&value.kind, ExprKind::Name(n) if self.known_classes.contains(n)
+                    || self.local_module_imports.contains(n)
+                    || self.module_namespaces.contains(n)
+                    || self.asyncio_namespaces.contains(n))
+            {
+                self.need_runtime("__pyAttrCall");
+                self.write("__pyAttrCall(");
+                self.emit_expr(value);
+                self.write(&format!(", \"{}\", [", attr));
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(a);
+                }
+                self.write("])");
+                return;
+            }
+        }
+
+        // autotester callable_test: a call through a plain VARIABLE may hit
+        // an instance of a class defining __call__ (CPython callable
+        // objects). Route Name callees that are LOCAL VARIABLES (declared,
+        // but not a known def/class) through __pyCall — real functions take
+        // its one-typeof fast path; direct calls to known defs stay raw.
+        // Gated on the module DEFINING a __call__ method somewhere: a
+        // callable-free module (the overwhelmingly common case) keeps raw
+        // calls with zero overhead, and a cross-module callable instance
+        // fails exactly as loudly as before (TypeError), never silently.
+        // #472: a callee whose STATIC type is provably non-callable (a dict/
+        // list/set/tuple/str/int/float local — `d = {"a": 1}; d()`) used to
+        // inline a raw `d(...)` and leak the native JS "d is not a function"
+        // TypeError. Route it through the same __pyCall guard, which raises
+        // CPython's "'dict' object is not callable" via __pyTypeName. The
+        // wrap is semantics-preserving even if inference is stale (a real
+        // function/class takes __pyCall's fast path), and Unknown-typed
+        // callees keep the zero-overhead raw call unless the module defines
+        // a __call__ somewhere (the original gate).
+        let statically_non_callable = matches!(
+            self.infer_type(func),
+            JsInferredType::List
+                | JsInferredType::Dict
+                | JsInferredType::Set
+                | JsInferredType::Tuple
+                | JsInferredType::Primitive
+                | JsInferredType::Float
+        );
+        if let ExprKind::Name(name) = &func.kind {
+            if (self.module_has_dunder_call || statically_non_callable)
+                && self.is_declared_in_any_scope(name)
+                && !self.known_functions.contains(name)
+                && !self.known_classes.contains(name)
+            {
+                self.need_runtime("__pyCall");
+                self.write("__pyCall(");
+                self.emit_expr(func);
+                self.write(", [");
+                self.emit_call_args(args, kwargs);
+                self.write("])");
+                return;
+            }
+        } else if statically_non_callable && !optional {
+            // Error-kind round 3 (corpus deep-close): the same guard for
+            // EXPRESSION callees — `(5)()`, `([1])()`, `({'a': 1})()`,
+            // `d["k"]()` when the subscript's static type is known — which
+            // otherwise emit a raw JS call and leak the native
+            // "... is not a function" TypeError instead of CPython's
+            // "'int' object is not callable". Unknown-typed callees keep the
+            // zero-overhead raw call (documented limitation: an Unknown
+            // non-callable still leaks the JS error); provably-callable
+            // paths (defs, lambdas, attribute methods) never infer as a
+            // container/primitive, so the fast path is untouched.
+            self.need_runtime("__pyCall");
+            self.write("__pyCall(");
+            self.emit_expr(func);
+            self.write(", [");
+            self.emit_call_args(args, kwargs);
+            self.write("])");
+            return;
+        }
+
         // Regular function call. Low-precedence callees (a lambda IIFE
         // `(lambda a: ...)(x)`, a conditional) MUST be parenthesized — an
         // unwrapped arrow in callee position binds the call to its BODY:
@@ -11247,13 +16642,159 @@ function pyFormatDynamic(value, specStr) {
         if needs_parens {
             self.write("(");
         }
+        let was_callee = self.in_call_callee;
+        self.in_call_callee = true;
         self.emit_expr(func);
+        self.in_call_callee = was_callee;
         if needs_parens {
             self.write(")");
         }
         self.write(open_paren);
         self.emit_call_args(args, kwargs);
         self.write(")");
+    }
+
+    /// F2 root fix — receiver-context + arity dispatch for the
+    /// collision-prone container methods (`append`, `extend`, `insert`,
+    /// `remove`, `pop`, `get`, `keys`/`values`/`items`, …). Returns `true`
+    /// when the call MUST be emitted verbatim (skip the container lowering)
+    /// because the receiver cannot be the Python container this method
+    /// belongs to.
+    ///
+    /// The rule is UNIFORM across every arity-gated method (one table in
+    /// `method_table::container_method_arity`), not per-method patches:
+    ///
+    /// 1. Receiver **provably the matching container** (List/Dict/Set/Tuple)
+    ///    → keep the container lowering (current behavior; correct + fast).
+    /// 2. Positional **arity impossible** for the Python container method
+    ///    → verbatim. This is the load-bearing backstop: `FormData().append("k", v)`
+    ///    (2 args) can never be 1-arg `list.append`, so lowering it as a list
+    ///    op silently drops `v`. Fires even when type inference can't identify
+    ///    the receiver.
+    /// 3. Receiver **provably foreign** (a JS/DOM global constructor result:
+    ///    `FormData()`, `Headers()`, `URLSearchParams()`, `Map()`, …) with a
+    ///    valid arity → verbatim (the foreign method wins the name collision).
+    /// 4. Otherwise (unknown receiver, valid arity) → keep the container
+    ///    lowering (backward-compatible for untyped lists; the runtime helper
+    ///    dispatches on receiver shape).
+    fn container_dispatch_prefers_verbatim(
+        &self,
+        receiver: &Expr,
+        attr: &str,
+        args: &[Expr],
+    ) -> bool {
+        let argc = args.len();
+        // WB-3 root fix — `list.sort` is KEYWORD-ONLY in Python:
+        // `sort(*, key=None, reverse=False)`. It takes NO positional
+        // arguments, so `xs.sort(anything_positional)` can never be Python
+        // `list.sort` (`[].sort(f)` is a `TypeError` in CPython). A positional
+        // arg therefore PROVES a JS Array comparator (functools.cmp_to_key
+        // semantics: `cmp(a,b) < 0 → a before b`). Emit it verbatim —
+        // `recv.sort(cmp)` is `Array.prototype.sort(compareFn)`, and Python
+        // lists are backed by JS arrays, so the ordering is correct for lists;
+        // it is equally correct for a user/foreign receiver with its own
+        // `.sort(cmp)`. This overrides the provable-container short-circuit
+        // below (a real list WITH a positional arg is still non-Python), and
+        // it depends only on the positional-arity SIGNAL — no receiver-type
+        // inference, hence no variable-flow residual. The keyword forms
+        // (`key=`, `reverse=`) and the no-arg `xs.sort()` carry zero
+        // positional args and keep the `pyListSort` lowering unchanged.
+        if attr == "sort" && argc >= 1 {
+            return true;
+        }
+        // WB-10 root fix — `str.replace` is an ARG-TYPE-discriminated collision
+        // (same family as WB-3's positional-arity signal). Python `str.replace`
+        // has signature `(old: str, new: str[, count: int])` — it takes ONLY a
+        // string pattern and a string replacement. So a call whose **first arg
+        // is a regex** (`RegExp(...)`) or whose **second arg is a function**
+        // (lambda / a known `def`) can NEVER be Python `str.replace` — in
+        // CPython both raise `TypeError`. Such a call is JS
+        // `String.prototype.replace` (regex + capture groups / `$1` backrefs /
+        // function replacer), so emit it verbatim; `pyStrReplace` would drop the
+        // groups and stringify a function replacer. A plain `s.replace(str, str)`
+        // carries neither signal and keeps the `pyStrReplace` lowering (Python
+        // replace-all semantics — unchanged). Like the `sort` case, this rides
+        // only on the ARGUMENT shape, so it fires regardless of receiver type
+        // (a real Python `str` with a regex arg is still non-Python) and needs
+        // no variable-flow inference.
+        if attr == "replace" && self.replace_args_are_js_only(args) {
+            return true;
+        }
+        let Some(rule) = container_method_arity(attr) else {
+            return false;
+        };
+        // (1) Provably the container this method belongs to → keep lowering.
+        let rt = self.infer_type(receiver);
+        if Self::infer_matches_container(rt, rule.containers) {
+            return false;
+        }
+        // (2) Arity backstop (mandatory): an arg count impossible for the
+        //     Python container method proves the receiver is not it.
+        if !rule.accepts(argc) {
+            return true;
+        }
+        // (3) Provably foreign receiver, valid arity → verbatim.
+        self.is_foreign_receiver(receiver)
+    }
+
+    /// WB-10 — do the arguments of a `.replace(...)` call carry a signal that
+    /// PROVES it is JS `String.prototype.replace`, not Python `str.replace`?
+    ///
+    /// Python `str.replace(old, new[, count])` accepts only string `old`/`new`.
+    /// Two argument shapes are impossible for it (both `TypeError` in CPython),
+    /// so their presence proves the call is the JS regex/callback form:
+    ///   1. the **first arg is a regex** — a `RegExp(...)` constructor call, or
+    ///   2. the **second arg is a function** — a lambda literal, or a bare name
+    ///      that resolves to a known `def`.
+    ///
+    /// Emitted verbatim, these become real `String.prototype.replace` calls that
+    /// honor capture groups / `$1` backrefs / function replacers.
+    fn replace_args_are_js_only(&self, args: &[Expr]) -> bool {
+        // (1) regex first arg: `RegExp(...)` (compiles to `new RegExp(...)`).
+        let regex_first = args.first().is_some_and(|a| {
+            matches!(&a.kind, ExprKind::Call { func, .. }
+                if matches!(&func.kind, ExprKind::Name(n) if n == "RegExp"))
+        });
+        // (2) function second arg: a lambda, or a name that is a known `def`.
+        let fn_second = args.get(1).is_some_and(|a| match &a.kind {
+            ExprKind::Lambda { .. } => true,
+            ExprKind::Name(n) => self.known_functions.contains(n),
+            _ => false,
+        });
+        regex_first || fn_second
+    }
+
+    /// Does the inferred receiver type match any of the container kinds the
+    /// method belongs to? (List↔List, Dict↔Dict, Set↔Set, Tuple↔Tuple.)
+    fn infer_matches_container(rt: JsInferredType, kinds: &[ReceiverKind]) -> bool {
+        kinds.iter().any(|k| {
+            matches!(
+                (k, rt),
+                (ReceiverKind::List, JsInferredType::List)
+                    | (ReceiverKind::Dict, JsInferredType::Dict)
+                    | (ReceiverKind::Set, JsInferredType::Set)
+                    | (ReceiverKind::Tuple, JsInferredType::Tuple)
+            )
+        })
+    }
+
+    /// Is the receiver PROVABLY a foreign (non-Python) object — so a
+    /// colliding container-method name is really the foreign method and must
+    /// be emitted verbatim? Conservative and sound: only a direct call to a
+    /// recognized JS/DOM global constructor (`FormData()`, `Headers()`,
+    /// `URLSearchParams()`, `Map()`, `URL()`, …; see
+    /// `react::is_builtin_constructor`) qualifies. A user `class` shadowing
+    /// such a name is a real class instance, handled elsewhere — excluded.
+    fn is_foreign_receiver(&self, receiver: &Expr) -> bool {
+        match &receiver.kind {
+            ExprKind::Call { func, .. } => matches!(
+                &func.kind,
+                ExprKind::Name(n)
+                    if react::is_builtin_constructor(n)
+                        && !self.known_classes.contains(n)
+            ),
+            _ => false,
+        }
     }
 
     /// Attempt to emit a Python→JS method lowering. Returns `true` on success.
@@ -11287,10 +16828,41 @@ function pyFormatDynamic(value, specStr) {
                 if spec.needs_simple_receiver() && !is_simple_receiver(receiver) {
                     return false;
                 }
+                // WB-9: an optional-chained receiver must short-circuit the
+                // WHOLE inline form (`s?.strip()` → undefined when s is
+                // None), exactly like emit_runtime_method's guard. The spec
+                // is emitted against a temp binding inside the same guard
+                // arrow; emission is buffered first so an arity-rejecting
+                // spec can still fall back cleanly to verbatim.
+                if optional || Self::receiver_may_short_circuit(receiver) {
+                    let n = self.default_hoist_counter;
+                    self.default_hoist_counter += 1;
+                    let t = format!("__optrecv{}", n);
+                    let tmp_recv = Expr {
+                        kind: ExprKind::Name(t.clone()),
+                        span: receiver.span,
+                    };
+                    let saved = std::mem::take(&mut self.output);
+                    let ok = self.emit_inline_spec(&tmp_recv, args, spec);
+                    let inner = std::mem::replace(&mut self.output, saved);
+                    if !ok {
+                        return false;
+                    }
+                    self.write(&format!("(({t}) => {t} == null ? undefined : "));
+                    self.write(&inner);
+                    self.write(")(");
+                    self.emit_expr(receiver);
+                    self.write(")");
+                    return true;
+                }
                 self.emit_inline_spec(receiver, args, spec)
             }
             MethodLowering::Hybrid { inline, runtime } => {
-                if is_simple_receiver(receiver)
+                // WB-9: with an optional-chained receiver, skip the inline
+                // form — the runtime path below carries the uniform
+                // null-guard (emit_runtime_method).
+                if !optional
+                    && is_simple_receiver(receiver)
                     && self.hybrid_inline_applies(inline, receiver)
                     && self.emit_inline_spec(receiver, args, inline)
                 {
@@ -11299,10 +16871,10 @@ function pyFormatDynamic(value, specStr) {
                 // Complex receiver, type-inapplicable inline, OR inline form
                 // rejected the args (e.g., wrong arity) — delegate to the
                 // runtime helper.
-                self.emit_runtime_method(runtime, receiver, args, kwargs)
+                self.emit_runtime_method(runtime, receiver, args, kwargs, optional)
             }
             MethodLowering::Runtime { helper, .. } => {
-                self.emit_runtime_method(helper, receiver, args, kwargs)
+                self.emit_runtime_method(helper, receiver, args, kwargs, optional)
             }
             MethodLowering::Unsupported(reason) => {
                 // Record a codegen-time diagnostic *and* emit a JS expression
@@ -11351,14 +16923,46 @@ function pyFormatDynamic(value, specStr) {
 
     /// Emit a runtime-helper method call: `pyHelper(receiver, ...args)`.
     /// Records the helper as needed so it appears in the runtime imports.
+    ///
+    /// WB-9 root fix: when the method is reached via optional chaining, the
+    /// helper must NOT be invoked on a null/undefined receiver. Native
+    /// method calls (`el?.classList.add(x)`) short-circuit to `undefined`;
+    /// but a helper lowering (`el?.classList.remove(x)` → `pyRemove(...)`)
+    /// only guards the *receiver argument* — `pyRemove(el?.classList, x)`
+    /// still calls `pyRemove(undefined, x)` unconditionally and throws.
+    /// This is the ONE place every container-method shim (pyRemove/pyAppend/
+    /// pyPop/pyIndex/pyUpdate/…) is emitted for the Runtime + Hybrid-runtime
+    /// paths, so guarding here fixes the whole class in one site. The guard
+    /// temp-binds the emitted receiver once (via an arrow IIFE — strict-mode
+    /// safe, unlike a bare `(__t = …)`) and short-circuits the whole call:
+    /// `((__t) => __t == null ? undefined : H(__t, args))(<recv>)`.
+    ///
+    /// `optional` covers a method-level `?.` (`el?.remove(x)`); the spine
+    /// check covers a receiver that itself short-circuits (`el?.classList`,
+    /// where the `.remove` call node carries `optional: false`).
     fn emit_runtime_method(
         &mut self,
         helper: &str,
         receiver: &Expr,
         args: &[Expr],
         kwargs: &[Keyword],
+        optional: bool,
     ) -> bool {
         self.need_runtime(helper);
+        if optional || Self::receiver_may_short_circuit(receiver) {
+            let n = self.default_hoist_counter;
+            self.default_hoist_counter += 1;
+            let t = format!("__optrecv{}", n);
+            self.write(&format!("(({t}) => {t} == null ? undefined : {helper}({t}"));
+            if !args.is_empty() || !kwargs.is_empty() {
+                self.write(", ");
+            }
+            self.emit_call_args(args, kwargs);
+            self.write("))(");
+            self.emit_expr(receiver);
+            self.write(")");
+            return true;
+        }
         self.write(helper);
         self.write("(");
         self.emit_expr(receiver);
@@ -11372,6 +16976,27 @@ function pyFormatDynamic(value, specStr) {
         self.emit_call_args(args, kwargs);
         self.write(")");
         true
+    }
+
+    /// True iff `expr`, when emitted, may evaluate to `undefined` via an
+    /// optional-chaining (`?.`) short-circuit somewhere in its member/call
+    /// spine. JS propagates a `?.` short-circuit to the end of the chain, so
+    /// a helper-lowered method whose receiver is such a chain
+    /// (`el?.classList.remove(x)`) must be guarded rather than called on the
+    /// short-circuited `undefined`. Only the spine (member/subscript/call
+    /// left-hand side) is inspected — arguments (`foo(a?.b).remove(x)`) do
+    /// not make the *receiver* short-circuit, since `foo` runs regardless.
+    fn receiver_may_short_circuit(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Attribute { value, optional, .. }
+            | ExprKind::Subscript { value, optional, .. } => {
+                *optional || Self::receiver_may_short_circuit(value)
+            }
+            ExprKind::Call { func, optional, .. } => {
+                *optional || Self::receiver_may_short_circuit(func)
+            }
+            _ => false,
+        }
     }
 
     /// Emit an inline JS form for a method call. Returns `false` if the
@@ -11645,6 +17270,20 @@ function pyFormatDynamic(value, specStr) {
         self.write("))");
     }
 
+    /// R6: render an object-literal KEY for a kwarg/prop name proto-safely.
+    /// The literal `__proto__: v` syntax invokes the inherited prototype setter
+    /// (reparenting the object before any helper can copy the key); a COMPUTED
+    /// key `["__proto__"]: v` creates a real own data property instead. Every
+    /// object-literal that is built from a source-controlled name must route
+    /// its key through here.
+    fn obj_key(name: &str) -> String {
+        if name == "__proto__" {
+            "[\"__proto__\"]".to_string()
+        } else {
+            name.to_string()
+        }
+    }
+
     /// The keyword-arguments value passed to __pyCallKw: a plain object
     /// literal when only named kwargs are present; a Map-aware
     /// pyDictMerge of in-order parts when any `**spread` participates
@@ -11658,7 +17297,7 @@ function pyFormatDynamic(value, specStr) {
                     self.write(", ");
                 }
                 if let Some(name) = &kw.name {
-                    self.write(&format!("{}: ", name));
+                    self.write(&format!("{}: ", Self::obj_key(name)));
                 }
                 self.emit_expr(&kw.value);
             }
@@ -11682,7 +17321,7 @@ function pyFormatDynamic(value, specStr) {
                     } else {
                         self.write(", ");
                     }
-                    self.write(&format!("{}: ", name));
+                    self.write(&format!("{}: ", Self::obj_key(name)));
                     self.emit_expr(&kw.value);
                 }
                 None => {
@@ -11724,7 +17363,7 @@ function pyFormatDynamic(value, specStr) {
                     self.write(", ");
                 }
                 if let Some(name) = &kw.name {
-                    self.write(&format!("{}: ", name));
+                    self.write(&format!("{}: ", Self::obj_key(name)));
                 } else {
                     // `**spread` — previously emitted the bare value
                     // (object-shorthand `{kw}`); spread its entries.
@@ -11792,7 +17431,12 @@ function pyFormatDynamic(value, specStr) {
                     // `data-id`) — those aren't valid JS identifiers
                     // unquoted in object literals, so wrap them in
                     // quotes. camelCase / single-word props stay bare.
-                    if is_valid_js_identifier(&js_prop) {
+                    if js_prop == "__proto__" {
+                        // R6: even a QUOTED `"__proto__":` key triggers the
+                        // prototype setter in an object literal — only a
+                        // computed key creates a real own prop.
+                        self.write("[\"__proto__\"]: ");
+                    } else if is_valid_js_identifier(&js_prop) {
                         self.write(&format!("{}: ", js_prop));
                     } else {
                         self.write(&format!("\"{}\": ", js_prop));
@@ -11810,26 +17454,10 @@ function pyFormatDynamic(value, specStr) {
                     //     can do the conversion. We don't know what
                     //     keys the value has at codegen time.
                     if convert_props && name == "style" {
-                        match &kw.value.kind {
-                            ExprKind::Dict { items } => {
-                                self.emit_style_dict(items);
-                                continue;
-                            }
-                            // Skip the wrap if the receiver is itself a
-                            // call to pyNormalizeStyle (idempotent).
-                            ExprKind::Call { func, .. } if matches!(&func.kind, ExprKind::Name(n) if n == "pyNormalizeStyle") =>
-                            {
-                                self.emit_expr(&kw.value);
-                                continue;
-                            }
-                            _ => {
-                                self.need_runtime("pyNormalizeStyle");
-                                self.write("pyNormalizeStyle(");
-                                self.emit_expr(&kw.value);
-                                self.write(")");
-                                continue;
-                            }
-                        }
+                        // Item 4 (0.2.2 hold): ONE style-value rule shared
+                        // with the createElement-factory paths.
+                        self.emit_react_style_value(&kw.value);
+                        continue;
                     }
                     // #122: the Python loop-capture idiom in an event-
                     // handler prop. `lambda i=i: f(i)` compiled faithfully
@@ -11845,7 +17473,18 @@ function pyFormatDynamic(value, specStr) {
                     if name.starts_with("on") && self.try_emit_capture_lambda(&kw.value) {
                         continue;
                     }
-                    self.emit_expr(&kw.value);
+                    // Option B: EVERY prop value on an HTML/library tag is a
+                    // native React sink — float-typed AND Unknown-typed
+                    // values unwrap through __pyJs (uniform with style and
+                    // JSX children; a non-box passes through untouched, so
+                    // handlers/strings/objects are unaffected). A USER
+                    // @component (convert_props == false) is Python land:
+                    // its float props keep the box for fidelity.
+                    if convert_props {
+                        self.emit_native_sink_value(&kw.value, true);
+                    } else {
+                        self.emit_expr(&kw.value);
+                    }
                 } else {
                     // **kwargs spread
                     self.write("...");
@@ -11855,7 +17494,8 @@ function pyFormatDynamic(value, specStr) {
             self.write("}");
         }
 
-        // Children from positional args
+        // Children from positional args — every child is a native React
+        // sink (Option B: boxed floats unbox via emit_jsx_child).
         for arg in args {
             self.write(", ");
             match &arg.kind {
@@ -11871,15 +17511,45 @@ function pyFormatDynamic(value, specStr) {
                             continue;
                         }
                     }
-                    self.emit_expr(arg);
+                    self.emit_jsx_child(arg);
                 }
                 _ => {
-                    self.emit_expr(arg);
+                    self.emit_jsx_child(arg);
                 }
             }
         }
 
         self.write(")");
+    }
+
+    /// Emit the VALUE of a `style` prop — ONE rule for EVERY surface that
+    /// carries React props (PSX kwargs on HTML/library tags, the
+    /// createElement-factory keyword form, and the factory's 2nd-positional
+    /// props dict). Item 4 of the 0.2.2 hold: only the PSX kwargs path used
+    /// to apply it, so `create_element("div", {"style": {"font_size": 12}})`
+    /// kept `font_size` and React silently dropped the property.
+    ///
+    ///   - Dict literal → snake→camel each CSS key at compile time
+    ///     (`emit_style_dict`; free, readable JS).
+    ///   - An existing `pyNormalizeStyle(...)` call → pass through
+    ///     (idempotent).
+    ///   - Anything dynamic (variable, function call, …) → wrap in
+    ///     `pyNormalizeStyle()` so the runtime converts the keys.
+    fn emit_react_style_value(&mut self, value: &Expr) {
+        match &value.kind {
+            ExprKind::Dict { items } => self.emit_style_dict(items),
+            ExprKind::Call { func, .. }
+                if matches!(&func.kind, ExprKind::Name(n) if n == "pyNormalizeStyle") =>
+            {
+                self.emit_expr(value);
+            }
+            _ => {
+                self.need_runtime("pyNormalizeStyle");
+                self.write("pyNormalizeStyle(");
+                self.emit_expr(value);
+                self.write(")");
+            }
+        }
     }
 
     /// Emit a Dict literal as a React `style={{...}}` object — every
@@ -11912,7 +17582,9 @@ function pyFormatDynamic(value, specStr) {
                             self.write("]: ");
                         }
                     }
-                    self.emit_expr(value);
+                    // Option B: style values feed React's px-append typeof
+                    // check — a boxed 10.0 must arrive as a native 10.
+                    self.emit_native_sink_value(value, true);
                 }
             }
         }
@@ -11936,10 +17608,10 @@ function pyFormatDynamic(value, specStr) {
                             continue;
                         }
                     }
-                    self.emit_expr(child);
+                    self.emit_jsx_child(child);
                 }
                 _ => {
-                    self.emit_expr(child);
+                    self.emit_jsx_child(child);
                 }
             }
         }
@@ -12029,21 +17701,50 @@ function pyFormatDynamic(value, specStr) {
         }
     }
 
-    fn emit_list_comprehension(&mut self, elt: &Expr, generators: &[Comprehension]) {
-        // [expr for x in xs if cond] → xs.filter(x => cond).map(x => expr)
-        // For multiple generators, async-for, or complex cases, use an
-        // IIFE with loops. `.filter().map()` doesn't support async
-        // iteration cleanly, so async-for must take the loop path.
-        // A walrus anywhere in the element/conditions also forces the
-        // loop path (see expr_contains_walrus).
+    /// UNIFIED comprehension lowering for the COLLECTING forms (list / set /
+    /// dict), modeled on CPython's desugaring: every comprehension form —
+    /// list/set/dict/genexp, sync AND async — compiles to the SAME
+    /// nested-loop scope function, differing ONLY in the accumulate op
+    /// (`CompAccum`), the container init (applied by the caller: `new
+    /// PySet(...)` / `new PyDict(...)` / `Object.fromEntries(...)`), and
+    /// whether each level's iteration is awaited (`gen.is_async`, decided
+    /// per level inside `emit_comp_loops`). Genexps share the SAME loop
+    /// emitter via `emit_generator_exp` (accumulate op = `yield`).
+    ///
+    /// This is the class-level fix for the recurring "feature bolted onto
+    /// some per-form emitters but not others" bug (#454: the dict emitter
+    /// had no async arm; #463: only the genexp emitter needed eager
+    /// iter-timing and drifted): there are no per-form emitters left to
+    /// drift — a form CANNOT miss an arm because the arms live in exactly
+    /// one place.
+    ///
+    /// Fast path: `[expr for x in xs if cond]` → `xs.filter(x => cond)
+    /// .map(x => expr)` for the sync, single-generator, ≤1-condition,
+    /// no-walrus case (dict comps map to `[k, v]` pairs). `.filter().map()`
+    /// doesn't support async iteration, so ANY async level forces the loop
+    /// path; a walrus anywhere forces it too (see expr_contains_walrus).
+    fn emit_collect_comprehension(&mut self, accum: &CompAccum, generators: &[Comprehension]) {
         let any_async = generators.iter().any(|g| g.is_async);
-        let has_walrus = Self::expr_contains_walrus(elt)
+        let has_walrus = accum.exprs().iter().any(|e| Self::expr_contains_walrus(e))
             || generators
                 .iter()
                 .any(|g| g.ifs.iter().any(Self::expr_contains_walrus));
         if !any_async && !has_walrus && generators.len() == 1 && generators[0].ifs.len() <= 1 {
             let gen = &generators[0];
+            // Review edge: the leftmost iterable is evaluated in the ENCLOSING
+            // scope (before the target binds), so emit it with the
+            // comprehension's target scope temporarily lifted — `[list for list
+            // in list([[1],[2]])]`'s receiver `list(...)` must lower to the
+            // builtin, not resolve to the not-yet-bound target. The caller
+            // pushed the (empty-but-for-targets) comprehension scope and nothing
+            // has been emitted into it yet, so pop it, emit the iterable in the
+            // enclosing scope, then re-push it for the `.filter`/`.map` arrows.
+            self.pop_scope();
             self.emit_iterable_as_array(&gen.iter);
+            self.push_scope(Self::comprehension_target_names(generators));
+            // WB-15 (S5): iterable above stayed enclosing; target+cond+elt below
+            // treat a `self` for-target as the ordinary comprehension variable.
+            let cprev = self.enter_comp_self_shadow(generators);
             if !gen.ifs.is_empty() {
                 self.write(".filter((");
                 self.emit_for_target(&gen.target);
@@ -12054,11 +17755,24 @@ function pyFormatDynamic(value, specStr) {
             self.write(".map((");
             self.emit_for_target(&gen.target);
             self.write(") => ");
-            self.emit_expr(elt);
+            match accum {
+                CompAccum::Element(e) => self.emit_expr(e),
+                CompAccum::Pair(k, v) => {
+                    self.write("[");
+                    self.emit_expr(k);
+                    self.write(", ");
+                    self.emit_expr(v);
+                    self.write("]");
+                }
+                CompAccum::Yield(_) => {
+                    unreachable!("genexps lower through emit_generator_exp")
+                }
+            }
             self.write(")");
+            self.self_lowering = cprev;
         } else {
-            // Complex comprehension — use IIFE with loops. Async-for
-            // requires `async` on the IIFE so `await` inside it works.
+            // Loop path — IIFE with the unified nested loops. ANY async
+            // level requires `async` on the IIFE so `for await` works.
             // Round-4 sweep: the async IIFE returns a Promise — await it
             // in place when awaiting is legal here (async def body /
             // module top level), otherwise the caller gets the Promise
@@ -12067,13 +17781,33 @@ function pyFormatDynamic(value, specStr) {
             if wrap_await {
                 self.write("(await ");
             }
+            // #453: mint guaranteed-fresh names for the IIFE's internal
+            // temporaries — a user binding named `__comp_it`/`__result`
+            // referenced in the element/conditions must keep resolving to
+            // the USER name (see fresh_temp).
+            let it = self.fresh_temp("__comp_it");
+            let res = self.fresh_temp("__result");
+            // B3: the OUTERMOST iterable is passed in as the IIFE arg
+            // (emitted below in the ENCLOSING scope, after the shadow restores),
+            // so a receiver-reading outer iterable keeps `this`. `idx == 0`
+            // consumes the param instead of inlining `generators[0].iter`.
             if any_async {
-                self.write("(async () => { const __result = []; ");
+                self.write(&format!("(async ({it}) => {{ const {res} = []; "));
             } else {
-                self.write("(() => { const __result = []; ");
+                self.write(&format!("(({it}) => {{ const {res} = []; "));
             }
-            self.emit_comprehension_loops(elt, generators, 0);
-            self.write(" return __result; })()");
+            let cprev = self.enter_comp_self_shadow(generators);
+            self.emit_comp_loops(accum, generators, 0, &it, Some(&res));
+            self.self_lowering = cprev;
+            self.write(&format!(" return {res}; }})("));
+            // #452: the outermost iterable is evaluated in the ENCLOSING scope
+            // — lift the comprehension's target scope (same as the fast path)
+            // so `[x for list in list(xs) …]`'s `list(...)` lowers to the
+            // builtin, never to the not-yet-bound target.
+            self.pop_scope();
+            self.emit_outer_comp_iterable(generators);
+            self.push_scope(Self::comprehension_target_names(generators));
+            self.write(")");
             if wrap_await {
                 self.write(")");
             }
@@ -12083,108 +17817,116 @@ function pyFormatDynamic(value, specStr) {
     /// #155: generator expressions compile to a lazy JS generator IIFE:
     ///
     ///   (function* (__gen_it) { for (const x of __gen_it) { if (c) { yield e; } } })
-    ///       .call(this, XS)
+    ///       .call(this, __pyEagerIter(XS))
     ///
     /// Design notes:
-    /// - The OUTERMOST iterable is evaluated eagerly at creation time and
-    ///   passed as the IIFE argument — CPython calls iter(outermost) when
-    ///   the genexp object is built; inner iterables/conditions/element
-    ///   stay lazy (evaluated during consumption).
+    /// - #463: CPython acquires `iter(outermost)` when the genexp object is
+    ///   CREATED — dis shows GET_ITER (GET_AITER for async) running before
+    ///   the genexp function is even called — which is observable with a
+    ///   side-effecting or throwing `__iter__`. `__pyEagerIter` /
+    ///   `__pyEagerAIter` perform exactly that creation-time acquisition;
+    ///   the generator body consumes the already-acquired iterator. Inner
+    ///   iterables/conditions/element stay lazy (evaluated during
+    ///   consumption), also matching CPython.
     /// - `.call(this, ...)` instead of a plain call: `self` inside method
     ///   bodies is rewritten to `this`, and a bare `function*` would
     ///   shadow it. At module top level `this` is undefined in ESM, which
     ///   is harmless.
     /// - Async genexps become `async function*` (an async-generator
-    ///   object, consumable with `async for` / for-await), with the
-    ///   Python-protocol bridge applied to each async source.
+    ///   object, consumable with `async for` / for-await).
     /// - Walrus targets keep working: they're hoisted as `let` in the
     ///   enclosing function scope (PEP 572) and simply assigned from
     ///   inside the generator body on consumption — which is also
     ///   CPython's (lazy) binding timing.
+    ///
+    /// The loop nest is the SAME `emit_comp_loops` all other forms use —
+    /// only the accumulate op (`yield`) and the container (a generator
+    /// object instead of an array) differ. See emit_collect_comprehension.
     fn emit_generator_exp(&mut self, elt: &Expr, generators: &[Comprehension]) {
         let any_async = generators.iter().any(|g| g.is_async);
+        // #453: fresh internal iterator-parameter name (see fresh_temp) — a
+        // user binding named `__gen_it` read in the element/conditions must
+        // not be shadowed by the IIFE parameter.
+        let git = self.fresh_temp("__gen_it");
         if any_async {
-            self.write("(async function* (__gen_it) { ");
+            self.write(&format!("(async function* ({git}) {{ "));
         } else {
-            self.write("(function* (__gen_it) { ");
+            self.write(&format!("(function* ({git}) {{ "));
         }
-        self.emit_genexp_loops(elt, generators, 0);
+        // WB-15 (S5): a `self` for-target shadows the receiver inside the loop
+        // body; the OUTERMOST iterable (the `.call(this, …)` arg below) stays in
+        // the enclosing scope. (A non-shadowing genexp keeps `self`→`this`, which
+        // resolves through the explicit `.call(this, …)` receiver.)
+        let cprev = self.enter_comp_self_shadow(generators);
+        self.emit_comp_loops(&CompAccum::Yield(elt), generators, 0, &git, None);
+        self.self_lowering = cprev;
         self.write("}).call(this, ");
+        // #452: the outermost iterable is evaluated in the ENCLOSING scope —
+        // lift the genexp's target scope so a target name referenced there
+        // (`(x for list in list(xs))`) resolves to the enclosing binding /
+        // builtin, never to the not-yet-bound loop variable.
+        self.pop_scope();
+        // #463: eager creation-time iterator acquisition (see doc above).
         let first = &generators[0];
         if first.is_async {
-            // #239: async iterable — raw expr through __pyAsyncIter, not the
-            // sync pyForIter/pyDictKeys wrap.
-            self.need_runtime("__pyAsyncIter");
-            self.write("__pyAsyncIter(");
-            self.emit_expr(&first.iter);
-            self.write(")");
+            self.need_runtime("__pyEagerAIter");
+            self.write("__pyEagerAIter(");
         } else {
-            self.emit_iterable(&first.iter);
+            self.need_runtime("__pyEagerIter");
+            self.write("__pyEagerIter(");
         }
+        self.emit_expr(&first.iter);
+        self.write(")");
+        self.push_scope(Self::comprehension_target_names(generators));
         self.write(")");
     }
 
-    /// Loop-nest body for emit_generator_exp. Identical shape to
-    /// emit_comprehension_loops except the innermost statement is `yield`
-    /// (not `__result.push`) and the outermost source is the pre-evaluated
-    /// `__gen_it` parameter.
-    fn emit_genexp_loops(&mut self, elt: &Expr, generators: &[Comprehension], idx: usize) {
+    /// THE ONE comprehension loop-nest emitter — list, set, dict, AND
+    /// genexp, sync AND async, all flow through here (the CPython-desugaring
+    /// model: identical nested loops, parameterized accumulate op). Each
+    /// level independently decides `for` vs `for await` (PEP 530 mixed
+    /// levels work); the innermost statement is `accum`'s op.
+    ///
+    /// A new comprehension feature lands HERE — once — and every form ×
+    /// async-ness gets it; there is no second copy to forget.
+    fn emit_comp_loops(
+        &mut self,
+        accum: &CompAccum,
+        generators: &[Comprehension],
+        idx: usize,
+        outer_it: &str,
+        result: Option<&str>,
+    ) {
         if idx >= generators.len() {
-            self.write("yield ");
-            self.emit_expr(elt);
-            self.write("; ");
-            return;
-        }
-
-        let gen = &generators[idx];
-        if gen.is_async {
-            self.write("for await (const ");
-        } else {
-            self.write("for (const ");
-        }
-        self.emit_for_target(&gen.target);
-        self.write(" of ");
-        if idx == 0 {
-            // Outermost iterable was evaluated at creation time and passed
-            // as the IIFE argument (already async-bridged if needed).
-            self.write("__gen_it");
-        } else if gen.is_async {
-            self.need_runtime("__pyAsyncIter");
-            self.write("__pyAsyncIter(");
-            self.emit_iterable(&gen.iter);
-            self.write(")");
-        } else {
-            self.emit_iterable(&gen.iter);
-        }
-        self.write(") { ");
-
-        for cond in &gen.ifs {
-            self.write("if (");
-            self.emit_expr(cond);
-            self.write(") { ");
-        }
-
-        self.emit_genexp_loops(elt, generators, idx + 1);
-
-        for _ in &gen.ifs {
-            self.write("} ");
-        }
-        self.write("} ");
-    }
-
-    fn emit_comprehension_loops(&mut self, elt: &Expr, generators: &[Comprehension], idx: usize) {
-        if idx >= generators.len() {
-            self.write("__result.push(");
-            self.emit_expr(elt);
-            self.write("); ");
+            match accum {
+                CompAccum::Element(e) => {
+                    self.write(result.expect("collect forms carry a result array"));
+                    self.write(".push(");
+                    self.emit_expr(e);
+                    self.write("); ");
+                }
+                CompAccum::Pair(k, v) => {
+                    self.write(result.expect("collect forms carry a result array"));
+                    self.write(".push([");
+                    self.emit_expr(k);
+                    self.write(", ");
+                    self.emit_expr(v);
+                    self.write("]); ");
+                }
+                CompAccum::Yield(e) => {
+                    self.write("yield ");
+                    self.emit_expr(e);
+                    self.write("; ");
+                }
+            }
             return;
         }
 
         let gen = &generators[idx];
         // `async for x in xs` (PEP 530) lowers to `for await (const x
         // of xs)`. The surrounding context must itself be async — the
-        // user is responsible for putting the comprehension inside an
-        // `async def`.
+        // collect IIFE / genexp wrapper is emitted `async` whenever any
+        // level is async.
         if gen.is_async {
             self.write("for await (const ");
         } else {
@@ -12192,12 +17934,24 @@ function pyFormatDynamic(value, specStr) {
         }
         self.emit_for_target(&gen.target);
         self.write(" of ");
-        // Round-4 sweep: bridge Python-protocol async iterables (see
-        // emit_for's async arm).
-        if gen.is_async {
+        // B3: the OUTERMOST iterable (`idx == 0`) was evaluated in the ENCLOSING
+        // scope and passed in as `__comp_it`/`__gen_it` (already
+        // protocol-bridged); consume it here so a receiver-reading outer
+        // iterable is not lowered under the `self`-shadow. Inner iterables
+        // reference the comprehension variables and stay inline (correctly
+        // under the shadow).
+        if idx == 0 {
+            self.write(outer_it);
+        } else if gen.is_async {
+            // #239 / matrix fix: an async iterable is bridged by
+            // __pyAsyncIter on the RAW expression — same policy as
+            // emit_for's async arm. It is never a dict, so it must NOT go
+            // through emit_iterable's sync pyForIter/pyDictKeys wrapping
+            // (that wrap turned a Python-protocol `__aiter__` class into
+            // its attribute keys).
             self.need_runtime("__pyAsyncIter");
             self.write("__pyAsyncIter(");
-            self.emit_iterable(&gen.iter);
+            self.emit_expr(&gen.iter);
             self.write(")");
         } else {
             self.emit_iterable(&gen.iter);
@@ -12210,7 +17964,7 @@ function pyFormatDynamic(value, specStr) {
             self.write(") { ");
         }
 
-        self.emit_comprehension_loops(elt, generators, idx + 1);
+        self.emit_comp_loops(accum, generators, idx + 1, outer_it, result);
 
         for _ in &gen.ifs {
             self.write("} ");
@@ -12362,11 +18116,19 @@ function pyFormatDynamic(value, specStr) {
                             self.write("[\"__proto__\"]: ");
                         }
                         ExprKind::StringLiteral(s) => {
-                            // Transform known React prop names (on_click → onClick, etc.)
-                            let js_key = react::react_prop_mapping(s)
-                                .map(|m| m.to_string())
-                                .unwrap_or_else(|| escape_js_string(s));
-                            self.write(&format!("\"{}\": ", js_key));
+                            // TB-1 root fix: a PLAIN (non-PSX) dict literal emits
+                            // its keys VERBATIM, always. The snake→camel/kebab PSX
+                            // prop-name transform (item_id→itemId, on_click→onClick,
+                            // aria_label→aria-label) is correct ONLY when emitting a
+                            // createElement/PSX prop NAME — gated on `convert_props`
+                            // in emit_psx_element (and emit_style_dict for `style`).
+                            // Leaking it into general dict-literal keys mangled the
+                            // stored key while the subscript READ (`d["item_id"]`)
+                            // stayed verbatim — an asymmetric silent KeyError. Same
+                            // naming-soundness family as the intrinsic-tag rule / F2
+                            // / #420: the transform is scoped to PSX-prop position by
+                            // construction, never to dict keys.
+                            self.write(&format!("\"{}\": ", escape_js_string(s)));
                         }
                         _ => {
                             self.write("[");
@@ -12379,6 +18141,247 @@ function pyFormatDynamic(value, specStr) {
             }
         }
         self.write("})");
+    }
+
+    /// TB-1: emit a DIRECT React createElement-factory call
+    /// (`h(tag, props, ...children)`). Only the props argument (index 1) is in
+    /// PSX-prop position, so a dict literal there gets the prop-name transform;
+    /// the tag and every child are emitted verbatim. The caller has checked
+    /// `args.len() >= 2`, no kwargs, and not optional.
+    /// Resolve a Name in callee position to the JS binding it was imported
+    /// under — the SAME resolution the bare-Name reference path uses
+    /// (emit_expr): a DX-B2 alias-and-rewrite rename wins first, then an
+    /// unaliased React-module import is snake→camel'd (`create_element` →
+    /// `createElement`), otherwise the sanitized identifier. Factored out so
+    /// `emit_create_element_call` writes the REAL binding rather than the raw
+    /// Python name — B3: `from react import create_element` binds
+    /// `createElement`, so a `create_element(...)` call must emit
+    /// `createElement(...)`, not a load-time-undefined `create_element(...)`.
+    fn resolve_name_ref(&self, name: &str) -> String {
+        if !self.scope_bindings.iter().skip(1).any(|s| s.contains(name)) {
+            if let Some(u) = self.import_ref_renames.get(name) {
+                return u.clone();
+            }
+        }
+        // B8(a): same binding-aware guard as emit_expr's Name branch — the
+        // camel rename never captures a name shadowed by a param/local.
+        if self.react_imports.contains(name)
+            && !self.scope_bindings.iter().skip(1).any(|s| s.contains(name))
+        {
+            return react::snake_to_camel(name);
+        }
+        Self::sanitize_ident(name).into_owned()
+    }
+
+    /// #448: emit the native dynamic `import(spec)` for a bare / aliased
+    /// `import_module(...)` call. The `package=` kwarg (CPython's relative-import
+    /// anchor) has no native `import()` equivalent — `import()`'s optional 2nd
+    /// argument is an import-attributes object, NOT a package anchor — so a
+    /// `package=` (or any) kwarg is diagnosed rather than silently mis-emitted
+    /// as `import(spec, {package: ...})`.
+    fn emit_import_module_call(&mut self, args: &[Expr], kwargs: &[Keyword]) {
+        if !kwargs.is_empty() {
+            self.emit_expr_error(
+                "`import_module(...)` does not support keyword arguments (e.g. `package=`): \
+                 it lowers to the native dynamic `import()`, which has no relative-import \
+                 anchor. Pass one fully-resolved specifier as the only argument.",
+            );
+            return;
+        }
+        self.write("import(");
+        self.emit_call_args(args, kwargs);
+        self.write(")");
+    }
+
+    /// THE single prop-key transform for the createElement factory-call
+    /// surface (0.2.2 kwargs class fix): every statically-known props key —
+    /// a string-literal dict key in the positional form OR a keyword name in
+    /// the kwargs form — goes through this ONE rule (`react_prop_mapping`,
+    /// verbatim fallback, `__proto__` computed-key guard). Two emission
+    /// surfaces, one transform: the forms cannot drift apart.
+    fn write_react_prop_key(&mut self, key: &str) {
+        if key == "__proto__" {
+            // R6: even a QUOTED `"__proto__":` key triggers the prototype
+            // setter in an object literal — only a computed key creates a
+            // real own prop.
+            self.write("[\"__proto__\"]: ");
+        } else {
+            // Quote every key (matches the prior props emission
+            // byte-for-byte; kebab keys like `aria-label` require quoting
+            // regardless).
+            let js_key = react::react_prop_mapping(key)
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| escape_js_string(key));
+            self.write(&format!("\"{}\": ", js_key));
+        }
+    }
+
+    /// Diagnose the malformed/ambiguous KEYWORD forms of a createElement
+    /// factory call BEFORE any output is written. Returns true when a
+    /// diagnostic was emitted (the caller must return).
+    ///
+    /// * no positional tag at all (`h(on_click=1)`) — createElement needs a
+    ///   tag/component first argument;
+    /// * a positional dict literal alongside kwargs (`h("div", {...},
+    ///   on_click=1)`) — two competing props objects; silently picking one
+    ///   would drop the other.
+    fn react_factory_kwargs_misuse(&mut self, args: &[Expr], kwargs: &[Keyword]) -> bool {
+        debug_assert!(!kwargs.is_empty());
+        if args.is_empty() {
+            self.emit_expr_error(
+                "createElement needs a tag or component as its first positional \
+                 argument — keyword props alone (`create_element(on_click=...)`) \
+                 have nothing to attach to.",
+            );
+            return true;
+        }
+        if args[1..]
+            .iter()
+            .any(|a| matches!(a.kind, ExprKind::Dict { .. }))
+        {
+            self.emit_expr_error(
+                "ambiguous createElement call: pass props EITHER as the 2nd \
+                 positional dict (`create_element(tag, {\"on_click\": f}, \
+                 *children)`) OR as keywords (`create_element(tag, *children, \
+                 on_click=f)`), not both — a dict literal is not a valid React \
+                 child, so mixing the forms would silently drop one props set.",
+            );
+            return true;
+        }
+        false
+    }
+
+    /// Emit the ARGUMENT LIST (no surrounding parens) of a createElement
+    /// factory call — ONE uniform rule for every surface that reaches the
+    /// factory (name-bound `h(...)` / `create_element(...)`, and the
+    /// namespace-member `react.create_element(...)` route):
+    ///
+    /// * positional form (no kwargs): args[1] is the props slot →
+    ///   `emit_react_props_arg`;
+    /// * keyword form (PSX-flat-style): kwargs are the props — static keys
+    ///   transformed via `write_react_prop_key`, `**spread` entries verbatim
+    ///   (the genuine TB-1 dynamic boundary) — and positionals after the tag
+    ///   are children, emitted after the props object (React's
+    ///   `createElement(type, props, ...children)` shape).
+    ///
+    /// Callers must run `react_factory_kwargs_misuse` first when kwargs are
+    /// present (it diagnoses before any output is written).
+    fn emit_react_factory_args(&mut self, args: &[Expr], kwargs: &[Keyword]) {
+        if kwargs.is_empty() {
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                if i == 1 {
+                    self.emit_react_props_arg(arg);
+                } else if i >= 2 {
+                    // Option B: factory children are native React sinks.
+                    self.emit_jsx_child(arg);
+                } else {
+                    self.emit_expr(arg);
+                }
+            }
+            return;
+        }
+        // tag
+        self.emit_expr(&args[0]);
+        // props from kwargs
+        self.write(", {");
+        for (i, kw) in kwargs.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            match &kw.name {
+                Some(name) => {
+                    self.write_react_prop_key(name);
+                    if name == "style" {
+                        // Item 4: same style-value rule as PSX props.
+                        self.emit_react_style_value(&kw.value);
+                    } else {
+                        // Option B: same native-sink unbox as PSX props.
+                        self.emit_native_sink_value(&kw.value, true);
+                    }
+                }
+                None => {
+                    // `**spread` — dynamic, stays verbatim (TB-1 boundary).
+                    self.write("...");
+                    self.emit_expr(&kw.value);
+                }
+            }
+        }
+        self.write("}");
+        // children: the remaining positionals (native React sinks).
+        for child in &args[1..] {
+            self.write(", ");
+            self.emit_jsx_child(child);
+        }
+    }
+
+    /// Emit a React createElement props argument (the 2nd POSITIONAL). A dict
+    /// literal whose non-spread keys are all provably strings is PSX-prop
+    /// position: its string-LITERAL keys get the snake→camel/kebab prop-name
+    /// transform (`react_prop_mapping`: on_click→onClick,
+    /// aria_label→aria-label) via the single `write_react_prop_key` rule.
+    /// Dynamic keys (f-strings / `str(...)`) stay computed, and `**spread`
+    /// entries are emitted verbatim as object spreads — 0.2.2 class fix: a
+    /// spread BESIDE literal keys (`{"on_click": f, **base}`) no longer
+    /// disables the transform for the static keys (that shape used to emit
+    /// the whole dict verbatim → dead handler). A dict with NO static
+    /// string-literal keys at all — spread-only, computed-only, a variable,
+    /// `None` — has nothing statically transformable and is emitted verbatim
+    /// (the genuine TB-1 dynamic boundary).
+    fn emit_react_props_arg(&mut self, arg: &Expr) {
+        if let ExprKind::Dict { items } = &arg.kind {
+            let has_static_key = items.iter().any(|i| {
+                matches!(i, DictItem::KeyValue { key, .. } if Self::key_provably_string(key))
+            });
+            let all_props_shaped = items.iter().all(|i| match i {
+                DictItem::Spread(_) => true,
+                DictItem::KeyValue { key, .. } => Self::key_provably_string(key),
+            });
+            if has_static_key && all_props_shaped {
+                self.write("({");
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    match item {
+                        DictItem::Spread(value) => {
+                            self.write("...");
+                            self.emit_expr(value);
+                        }
+                        DictItem::KeyValue { key, value } => {
+                            let mut is_style = false;
+                            match &key.kind {
+                                ExprKind::StringLiteral(s) => {
+                                    let s = s.clone();
+                                    is_style = s == "style";
+                                    self.write_react_prop_key(&s);
+                                }
+                                _ => {
+                                    self.write("[");
+                                    self.emit_expr(key);
+                                    self.write("]: ");
+                                }
+                            }
+                            if is_style {
+                                // Item 4: the factory's 2nd-positional props
+                                // dict gets the same style-value rule as PSX
+                                // props (nested CSS keys snake→camel'd).
+                                self.emit_react_style_value(value);
+                            } else {
+                                // Option B: same native-sink unbox as PSX
+                                // props (boxed floats never reach React).
+                                self.emit_native_sink_value(value, true);
+                            }
+                        }
+                    }
+                }
+                self.write("})");
+                return;
+            }
+        }
+        self.emit_expr(arg);
     }
 
     /// Map-backed dict emission for key runs with any non-string key
@@ -12415,17 +18418,27 @@ function pyFormatDynamic(value, specStr) {
                 self.emit_expr(iter);
                 self.write(")");
             }
+            // Provably-iterable statics keep the raw for..of fast path.
+            JsInferredType::List | JsInferredType::Set | JsInferredType::Tuple => {
+                self.emit_expr(iter)
+            }
             // #239: an UNKNOWN operand (e.g. an untyped dict parameter) may be a
             // plain-object dict (not JS-iterable) or a Map/Counter (whose for..of
             // yields entries, not keys). Route through pyForIter, which iterates
             // dict keys and passes lists/tuples/sets/strings/generators through.
-            JsInferredType::Unknown => {
+            //
+            // #473: Primitive/Float take the SAME guard — a statically-numeric
+            // local (`n = 5; for y in n:`) used to inline a raw `for..of` and
+            // leak the native JS "n is not iterable" TypeError; pyForIter
+            // raises CPython's "'int' object is not iterable" instead. The
+            // one iterable Primitive (str) passes through pyForIter untouched
+            // (one call at loop setup, not per iteration).
+            JsInferredType::Unknown | JsInferredType::Primitive | JsInferredType::Float => {
                 self.need_runtime("pyForIter");
                 self.write("pyForIter(");
                 self.emit_expr(iter);
                 self.write(")");
             }
-            _ => self.emit_expr(iter),
         }
     }
 
@@ -12458,82 +18471,48 @@ function pyFormatDynamic(value, specStr) {
     fn emit_dict_comprehension(&mut self, key: &Expr, value: &Expr, generators: &[Comprehension]) {
         // #83: string-keyed comprehensions keep the plain-object shape;
         // any other key expression builds a Map-backed PyDict from the
-        // same [key, value] pair stream.
+        // same [key, value] pair stream. The container init is the ONLY
+        // dict-specific part — the pair stream itself comes from the
+        // unified lowering (CompAccum::Pair), so async arms / eval-order
+        // / naming hygiene can never diverge from the other forms (#454).
         if Self::key_provably_string(key) {
             self.write("Object.fromEntries(");
         } else {
             self.need_runtime("PyDict");
             self.write("new PyDict(");
         }
-        // Reuse list comprehension to generate [key, value] pairs. A walrus
-        // in the key/value/conditions forces the single-pass loop path
-        // (see expr_contains_walrus).
-        let has_walrus = Self::expr_contains_walrus(key)
-            || Self::expr_contains_walrus(value)
-            || generators
-                .iter()
-                .any(|g| g.ifs.iter().any(Self::expr_contains_walrus));
-        if !has_walrus && generators.len() == 1 && generators[0].ifs.len() <= 1 {
-            let gen = &generators[0];
-            self.emit_iterable_as_array(&gen.iter);
-            if !gen.ifs.is_empty() {
-                self.write(".filter((");
-                self.emit_for_target(&gen.target);
-                self.write(") => ");
-                self.emit_expr(&gen.ifs[0]);
-                self.write(")");
-            }
-            self.write(".map((");
-            self.emit_for_target(&gen.target);
-            self.write(") => [");
-            self.emit_expr(key);
-            self.write(", ");
-            self.emit_expr(value);
-            self.write("])");
-        } else {
-            self.write("(() => { const __result = []; ");
-            // Use dict-specific loop emission
-            self.emit_dict_comprehension_loops(key, value, generators, 0);
-            self.write(" return __result; })()");
-        }
+        self.emit_collect_comprehension(&CompAccum::Pair(key, value), generators);
         self.write(")");
     }
+}
 
-    fn emit_dict_comprehension_loops(
-        &mut self,
-        key: &Expr,
-        value: &Expr,
-        generators: &[Comprehension],
-        idx: usize,
-    ) {
-        if idx >= generators.len() {
-            self.write("__result.push([");
-            self.emit_expr(key);
-            self.write(", ");
-            self.emit_expr(value);
-            self.write("]); ");
-            return;
+/// CPython desugars EVERY comprehension form — list/set/dict/genexp, sync
+/// AND async — to the SAME nested-loop scope function; the forms differ
+/// ONLY in the accumulate op (append / add / `__setitem__` / yield), the
+/// container init, and per-level awaited-ness. This enum IS the accumulate
+/// parameterization; `emit_comp_loops` is the single consumer. The
+/// per-form-emitter era repeatedly left a feature off one form (#454: no
+/// async arm on the dict path; #463: genexp iter-timing) — with the ops
+/// centralized here, a left-out arm is structurally impossible.
+enum CompAccum<'a> {
+    /// list/set comprehensions: `__result.push(elt)` (set callers wrap the
+    /// finished array in `new PySet(...)`).
+    Element(&'a Expr),
+    /// dict comprehensions: `__result.push([key, value])` — a pair stream
+    /// the caller feeds to `new PyDict(...)` / `Object.fromEntries(...)`.
+    Pair(&'a Expr, &'a Expr),
+    /// generator expressions: `yield elt` (no result array).
+    Yield(&'a Expr),
+}
+
+impl<'a> CompAccum<'a> {
+    /// The value expressions the op accumulates — the walrus-detection
+    /// surface (a `:=` in any of them forces the loop path).
+    fn exprs(&self) -> Vec<&'a Expr> {
+        match self {
+            CompAccum::Element(e) | CompAccum::Yield(e) => vec![e],
+            CompAccum::Pair(k, v) => vec![k, v],
         }
-
-        let gen = &generators[idx];
-        self.write("for (const ");
-        self.emit_for_target(&gen.target);
-        self.write(" of ");
-        self.emit_iterable(&gen.iter);
-        self.write(") { ");
-
-        for cond in &gen.ifs {
-            self.write("if (");
-            self.emit_expr(cond);
-            self.write(") { ");
-        }
-
-        self.emit_dict_comprehension_loops(key, value, generators, idx + 1);
-
-        for _ in &gen.ifs {
-            self.write("} ");
-        }
-        self.write("} ");
     }
 }
 
@@ -12551,6 +18530,7 @@ fn aug_assign_op_str(op: &AugAssignOp) -> &'static str {
         AugAssignOp::BitXor => "^=",
         AugAssignOp::ShiftLeft => "<<=",
         AugAssignOp::ShiftRight => ">>=",
+        AugAssignOp::MatMul => "/* @= */",
     }
 }
 
@@ -12563,51 +18543,13 @@ fn aug_assign_op_str(op: &AugAssignOp) -> &'static str {
 /// element allowlist FIRST inside components — longstanding, documented
 /// behavior this list does not change.
 fn is_python_builtin_name(name: &str) -> bool {
+    // public #3: derived from the ONE canonical builtin-name list (plus the
+    // mapping tables and the site-customization aliases exit/quit) instead
+    // of a third hand-maintained enumeration that could drift.
     crate::builtins::builtin_func_mapping(name).is_some()
         || crate::builtins::builtin_value_mapping(name).is_some()
-        || matches!(
-            name,
-            "getattr"
-                | "setattr"
-                | "hasattr"
-                | "delattr"
-                | "callable"
-                | "vars"
-                | "globals"
-                | "locals"
-                | "id"
-                | "hash"
-                | "format"
-                | "frozenset"
-                | "bytes"
-                | "bytearray"
-                | "memoryview"
-                | "complex"
-                | "object"
-                | "open"
-                | "eval"
-                | "exec"
-                | "compile"
-                | "dir"
-                | "issubclass"
-                | "isinstance"
-                | "aiter"
-                | "anext"
-                | "super"
-                | "breakpoint"
-                | "exit"
-                | "quit"
-                | "pow"
-                | "slice"
-                | "staticmethod"
-                | "classmethod"
-                | "property"
-                | "help"
-                | "hex"
-                | "oct"
-                | "bin"
-                | "ascii"
-        )
+        || crate::builtins::CPYTHON_BUILTIN_FUNCTIONS.contains(&name)
+        || matches!(name, "exit" | "quit")
 }
 
 /// #306 follow-up (FlameReact f015/f062 regression): all-lowercase JS/browser
@@ -12619,6 +18561,69 @@ fn is_python_builtin_name(name: &str) -> bool {
 /// explodes). None of these names is an HTML element, so guarding them costs
 /// nothing. camelCase globals (setTimeout, parseInt, requestAnimationFrame,
 /// structuredClone, ...) never match the tag shape and need no entry.
+/// Option B: JS BUILT-IN constructors reachable through the capitalized-name
+/// `new` heuristic. Calls to these are JS-interop by definition (they are
+/// never compiled Python classes), so float arguments unbox to native
+/// Numbers at the call boundary — several of them dispatch on
+/// `typeof === "number"` (`Array(n)`, the TypedArray length-vs-iterable
+/// overloads). A user class with one of these names would shadow the global
+/// anyway and lands in `known_classes`, which is checked FIRST.
+fn is_js_builtin_ctor(name: &str) -> bool {
+    matches!(
+        name,
+        "Array"
+            | "Date"
+            | "RegExp"
+            | "Error"
+            | "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "Promise"
+            | "Proxy"
+            | "DataView"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+            | "URL"
+            | "URLSearchParams"
+            | "Blob"
+            | "File"
+            | "FormData"
+            | "Headers"
+            | "Request"
+            | "Response"
+            | "WebSocket"
+            | "XMLHttpRequest"
+            | "EventSource"
+            | "Event"
+            | "CustomEvent"
+            | "AbortController"
+            | "TextEncoder"
+            | "TextDecoder"
+            | "Image"
+            | "Audio"
+            | "Option"
+            | "Worker"
+            | "MessageChannel"
+            | "IntersectionObserver"
+            | "MutationObserver"
+            | "ResizeObserver"
+            | "Notification"
+            | "Intl"
+    )
+}
+
 fn is_js_global_callable(name: &str) -> bool {
     matches!(
         name,
@@ -13041,7 +19046,60 @@ fn stmt_contains_yield(stmt: &Stmt) -> bool {
 }
 
 fn expr_contains_yield(expr: &Expr) -> bool {
-    matches!(&expr.kind, ExprKind::Yield(_) | ExprKind::YieldFrom(_))
+    // autotester iterators_and_generators: recursive — `r = r + (yield r)`
+    // buries the Yield inside a BinOp, and the old top-level-only match left
+    // the emitted function a NON-generator (bare `yield` → SyntaxError).
+    // Lambdas/comprehensions are their own scopes and are not descended into.
+    match &expr.kind {
+        ExprKind::Yield(_) | ExprKind::YieldFrom(_) => true,
+        ExprKind::BinOp { left, right, .. } => {
+            expr_contains_yield(left) || expr_contains_yield(right)
+        }
+        ExprKind::UnaryOp { operand, .. } => expr_contains_yield(operand),
+        ExprKind::Compare { left, comparisons } => {
+            expr_contains_yield(left) || comparisons.iter().any(|(_, e)| expr_contains_yield(e))
+        }
+        ExprKind::Call {
+            func, args, kwargs, ..
+        } => {
+            expr_contains_yield(func)
+                || args.iter().any(expr_contains_yield)
+                || kwargs.iter().any(|k| expr_contains_yield(&k.value))
+        }
+        ExprKind::IfExpr {
+            test,
+            body,
+            else_body,
+        } => {
+            expr_contains_yield(test)
+                || expr_contains_yield(body)
+                || expr_contains_yield(else_body)
+        }
+        ExprKind::Tuple(elts) | ExprKind::List(elts) | ExprKind::Set(elts) => {
+            elts.iter().any(expr_contains_yield)
+        }
+        ExprKind::Dict { items } => items.iter().any(|item| match item {
+            DictItem::KeyValue { key, value } => {
+                expr_contains_yield(key) || expr_contains_yield(value)
+            }
+            DictItem::Spread(e) => expr_contains_yield(e),
+        }),
+        ExprKind::Subscript { value, index, .. } => {
+            expr_contains_yield(value) || expr_contains_yield(index)
+        }
+        ExprKind::Attribute { value, .. } => expr_contains_yield(value),
+        ExprKind::Starred(e) | ExprKind::Await(e) => expr_contains_yield(e),
+        ExprKind::NamedExpr { value, .. } => expr_contains_yield(value),
+        ExprKind::FString { parts } => parts.iter().any(|p| match p {
+            FStringPart::Expr(e) => expr_contains_yield(e),
+            _ => false,
+        }),
+        ExprKind::Slice { lower, upper, step } => [lower, upper, step]
+            .into_iter()
+            .flatten()
+            .any(|e| expr_contains_yield(e)),
+        _ => false,
+    }
 }
 
 /// Check if a module path is a React or Next.js module where
@@ -13064,7 +19122,73 @@ const STDLIB_MODULES: &[&str] = &[
     "heapq",
     "bisect",
     "sys",
+    "cmath",
+    "unicodedata",
 ];
+
+/// Embedded stdlib shim sources: the build-time export surface for
+/// star-import binding (`from math import *` binds every export). Parsed
+/// from the SAME canonical files the runtime package ships, so the bound
+/// name set can never drift from what the module actually exports.
+const STDLIB_JS_SOURCES: &[(&str, &str)] = &[
+    ("math", include_str!("../../../runtime/src/stdlib/math.js")),
+    ("json", include_str!("../../../runtime/src/stdlib/json.js")),
+    ("itertools", include_str!("../../../runtime/src/stdlib/itertools.js")),
+    ("functools", include_str!("../../../runtime/src/stdlib/functools.js")),
+    ("collections", include_str!("../../../runtime/src/stdlib/collections.js")),
+    ("random", include_str!("../../../runtime/src/stdlib/random.js")),
+    ("datetime", include_str!("../../../runtime/src/stdlib/datetime.js")),
+    ("re", include_str!("../../../runtime/src/stdlib/re.js")),
+    ("decimal", include_str!("../../../runtime/src/stdlib/decimal.js")),
+    ("fractions", include_str!("../../../runtime/src/stdlib/fractions.js")),
+    ("operator", include_str!("../../../runtime/src/stdlib/operator.js")),
+    ("copy", include_str!("../../../runtime/src/stdlib/copy.js")),
+    ("string", include_str!("../../../runtime/src/stdlib/string.js")),
+    ("heapq", include_str!("../../../runtime/src/stdlib/heapq.js")),
+    ("bisect", include_str!("../../../runtime/src/stdlib/bisect.js")),
+    ("sys", include_str!("../../../runtime/src/stdlib/sys.js")),
+    ("cmath", include_str!("../../../runtime/src/stdlib/cmath.js")),
+    ("unicodedata", include_str!("../../../runtime/src/stdlib/unicodedata.js")),
+];
+
+/// Export names of a stdlib shim: `(name, is_class)` for every column-0
+/// `export function`/`function*`/`class`/`const`/`let` declaration. Private
+/// helpers (leading `_`) are not exported by these shims, but filter them
+/// anyway — CPython's `import *` skips underscore names.
+fn stdlib_export_names(module: &str) -> Option<Vec<(String, bool)>> {
+    let src = STDLIB_JS_SOURCES
+        .iter()
+        .find(|(m, _)| *m == module)
+        .map(|(_, s)| *s)?;
+    let mut out = Vec::new();
+    for line in src.lines() {
+        let Some(rest) = line.strip_prefix("export ") else {
+            continue;
+        };
+        let (rest, is_class) = match rest.strip_prefix("class ") {
+            Some(r) => (r, true),
+            None => {
+                let r = rest
+                    .strip_prefix("function* ")
+                    .or_else(|| rest.strip_prefix("function "))
+                    .or_else(|| rest.strip_prefix("const "))
+                    .or_else(|| rest.strip_prefix("let "));
+                match r {
+                    Some(r) => (r, false),
+                    None => continue, // `export { … }` re-exports etc.
+                }
+            }
+        };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
+            .collect();
+        if !name.is_empty() && !name.starts_with('_') {
+            out.push((name, is_class));
+        }
+    }
+    Some(out)
+}
 
 /// Known PythScribe web modules (pyths.fetch, pyths.storage, pyths.router)
 /// Note: pyths.dom maps to pyths-runtime/dom (top-level, not web/)
@@ -13202,6 +19326,7 @@ fn builtin_exception_descendants(name: &str) -> &'static [&'static str] {
         // name itself. `Exception`/`BaseException` never reach here — they are
         // handled as unconditional catch-alls by the caller.
         "ValueError" => &["ValueError"],
+        "AssertionError" => &["AssertionError"],
         "TypeError" => &["TypeError"],
         "IndexError" => &["IndexError"],
         "KeyError" => &["KeyError"],
@@ -13216,35 +19341,306 @@ fn builtin_exception_descendants(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// delta4 — the CHECKED MANIFEST of every runtime symbol the codegen can
+/// emit an `import { ... } from "pyths-runtime"` / `"pyths-runtime/core"`
+/// line for. Single source of truth for the export-surface drift guard:
+///
+///   * `need_runtime` (the SOLE write path into `runtime_imports`)
+///     debug_asserts that every registered name is listed here — so any new
+///     emitter helper that is not added to this list panics across the debug
+///     test suite.
+///   * cli_test.rs `runtime_export_surface_covers_all_emittable_symbols`
+///     imports BOTH package entry points (runtime/src/index.js AND the
+///     `--target worker` entry runtime/src/core.js) under node and fails if
+///     any name here is missing from either — so a manifest entry cannot
+///     land until both entries actually export it.
+///
+/// Keep the list sorted. It may be a small SUPERSET of what the emitter can
+/// currently produce (supersets only cost an extra export check); it must
+/// never be a subset.
+/// Test-only surface for the inline-vs-package runtime PARITY GATE
+/// (`tests/inline_runtime_parity.rs`): build the inline runtime text for an
+/// arbitrary needed set, exactly as `pyths run`/`bundle` would embed it.
+#[doc(hidden)]
+pub fn inline_runtime_for_test(names: &[&str]) -> String {
+    let needed: HashSet<String> = names.iter().map(|s| s.to_string()).collect();
+    JsCodegen::emit_inline_runtime(&needed)
+}
+
+pub const EMITTABLE_RUNTIME_SYMBOLS: &[&str] = &[
+    "ArithmeticError",
+    "AssertionError",
+    "AttributeError",
+    "BaseException",
+    "Exception",
+    "IndexError",
+    "KeyError",
+    "LookupError",
+    "NameError",
+    "NotImplementedError",
+    "OverflowError",
+    "PyDict",
+    "PyObject",
+    "PySet",
+    "RuntimeError",
+    "StopAsyncIteration",
+    "StopIteration",
+    "TypeError",
+    "UnboundLocalError",
+    "ValueError",
+    "ZeroDivisionError",
+    "__UNBOUND",
+    "__pyAsyncIter",
+    "__pyAttrCall",
+    "__pyCall",
+    "__pyCallKw",
+    "__pyChkFree",
+    "__pyChkGlobal",
+    "__pyChkLocal",
+    "__pyClass",
+    "__pyClassAttr",
+    "__pyClassCall",
+    "__pyClassCallKw",
+    "__pyDecorateClassMethod",
+    "__pyDecorateMethod",
+    "__pyEagerAIter",
+    "__pyEagerIter",
+    "__pyEffect",
+    "__pyEffectArgs",
+    "__pyF",
+    "__pyFnMeta",
+    "__pyIsInstance",
+    "__pyIsSubclass",
+    "__pyJs",
+    "__pyKwArgs",
+    "__pyKwPop",
+    "__pyMarkTuple",
+    "__pyNoExtraKw",
+    "__pyRangeIter",
+    "__pySliceObj",
+    "__pySuper",
+    "__pyTakeKw",
+    "__pyTypeBool",
+    "__pyTypeBytearray",
+    "__pyTypeBytes",
+    "__pyTypeDict",
+    "__pyTypeFloat",
+    "__pyTypeFrozenset",
+    "__pyTypeInt",
+    "__pyTypeList",
+    "__pyTypeObject",
+    "__pyTypeSet",
+    "__pyTypeStr",
+    "__pyTypeTuple",
+    "__reqNum",
+    "pyAbs",
+    "pyAdd",
+    "pyAll",
+    "pyAnd",
+    "pyAny",
+    "pyAppend",
+    "pyAscii",
+    "pyBin",
+    "pyBitAnd",
+    "pyBitNot",
+    "pyBitOr",
+    "pyBitXor",
+    "pyBool",
+    "pyBoundMethod",
+    "pyBytearrayOf",
+    "pyBytes",
+    "pyBytesOf",
+    "pyCallable",
+    "pyChr",
+    "pyClear",
+    "pyComplex",
+    "pyComplexOf",
+    "pyConjugate",
+    "pyContains",
+    "pyCopy",
+    "pyCount",
+    "pyDelItem",
+    "pyDelSlice",
+    "pyDelattr",
+    "pyDict",
+    "pyDictFromkeys",
+    "pyDictGet",
+    "pyDictItems",
+    "pyDictKeys",
+    "pyDictMerge",
+    "pyDictPopitem",
+    "pyDictSetdefault",
+    "pyDictValues",
+    "pyDir",
+    "pyDiscard",
+    "pyDiv",
+    "pyDivmod",
+    "pyEnumerate",
+    "pyEq",
+    "pyExtend",
+    "pyFind",
+    "pyFixed",
+    "pyFloat",
+    "pyFloorDiv",
+    "pyForIter",
+    "pyFormat",
+    "pyFormatDynamic",
+    "pyFormatFloat",
+    "pyFormatSpec",
+    "pyFrozensetOf",
+    "pyGe",
+    "pyGenClose",
+    "pyGenSend",
+    "pyGenThrow",
+    "pyGetItem",
+    "pyGetattr",
+    "pyGt",
+    "pyHasattr",
+    "pyHex",
+    "pyIAdd",
+    "pyIBitAnd",
+    "pyIBitOr",
+    "pyIBitXor",
+    "pyIMatMul",
+    "pyIMul",
+    "pyISub",
+    "pyIndex",
+    "pyInsert",
+    "pyInt",
+    "pyIter",
+    "pyLe",
+    "pyLen",
+    "pyListOf",
+    "pyListSort",
+    "pyLt",
+    "pyMap",
+    "pyMatMul",
+    "pyMax",
+    "pyMin",
+    "pyMod",
+    "pyMul",
+    "pyNe",
+    "pyNeg",
+    "pyNext",
+    "pyNormalizeStyle",
+    "pyOct",
+    "pyOr",
+    "pyOrd",
+    "pyPop",
+    "pyPos",
+    "pyPow",
+    "pyPowBuiltin",
+    "pyPrint",
+    "pyProperty",
+    "pyRange",
+    "pyRemove",
+    "pyRepr",
+    "pyReversed",
+    "pyRound",
+    "pySeq",
+    "pySetDifference",
+    "pySetDifferenceUpdate",
+    "pySetIntersection",
+    "pySetIntersectionUpdate",
+    "pySetIsdisjoint",
+    "pySetIssubset",
+    "pySetIssuperset",
+    "pySetItem",
+    "pySetOf",
+    "pySetSlice",
+    "pySetSymmetricDifference",
+    "pySetSymmetricDifferenceUpdate",
+    "pySetUnion",
+    "pySetattr",
+    "pyShiftLeft",
+    "pyShiftRight",
+    "pySlice",
+    "pySliceOf",
+    "pySorted",
+    "pyStr",
+    "pyStrCapitalize",
+    "pyStrCenter",
+    "pyStrEndswith",
+    "pyStrExpandtabs",
+    "pyStrFormat",
+    "pyStrIsidentifier",
+    "pyStrIslower",
+    "pyStrIsprintable",
+    "pyStrIstitle",
+    "pyStrIsupper",
+    "pyStrJoin",
+    "pyStrLjust",
+    "pyStrLstrip",
+    "pyStrPartition",
+    "pyStrReplace",
+    "pyStrReplaceSmart",
+    "pyStrRfind",
+    "pyStrRindex",
+    "pyStrRjust",
+    "pyStrRpartition",
+    "pyStrRsplit",
+    "pyStrRstrip",
+    "pyStrSplit",
+    "pyStrSplitlines",
+    "pyStrStartswith",
+    "pyStrStrip",
+    "pyStrSwapcase",
+    "pyStrTitle",
+    "pyStrTranslate",
+    "pySub",
+    "pySum",
+    "pyTuple",
+    "pyTupleOf",
+    "pyType",
+    "pyUpdate",
+    "pyVars",
+    "pyZip",
+];
+
+/// Every Python builtin exception class the codegen understands — the ONE
+/// list behind `is_builtin_exception`. Round-6 delta: the class-base path
+/// (`class E(TypeError)`) auto-imports ANY of these names, TypeError
+/// included (only the raise-/except-site paths skip TypeError, to avoid
+/// shadowing the JS global for no gain), so EVERY name here must be in
+/// EMITTABLE_RUNTIME_SYMBOLS — enforced by
+/// `tests::manifest_covers_all_builtin_exceptions` below, which makes the
+/// exception-base drift (TypeError was emittable but unmanifested)
+/// structurally unrepeatable.
+const BUILTIN_EXCEPTIONS: &[&str] = &[
+    // autotester exceptions: BaseException is subclassable/raisable as the
+    // real hierarchy root (`class Table(BaseException)`); `except
+    // BaseException` stays the unconditional catch-all path.
+    "AssertionError",
+    "BaseException",
+    "Exception",
+    "ValueError",
+    "IndexError",
+    "KeyError",
+    "AttributeError",
+    "StopIteration",
+    "ZeroDivisionError",
+    // Batch G: TypeError (thrown by pyOrd et al. as a name-tagged
+    // Error) and OverflowError (pyInt on float('inf')) need
+    // name-based except matching too.
+    "TypeError",
+    "OverflowError",
+    // Round-4 sweep: the runtime grew CPython's hierarchy classes
+    // (LookupError/ArithmeticError bases, RuntimeError,
+    // NotImplementedError, StopAsyncIteration) — raise/except sites
+    // need their auto-imports too.
+    "RuntimeError",
+    "NotImplementedError",
+    "LookupError",
+    "ArithmeticError",
+    "StopAsyncIteration",
+    // PBT-2: zero-iteration for-loop target reads raise these; the
+    // runtime grew the classes, so raise/except sites auto-import.
+    "NameError",
+    "UnboundLocalError",
+];
+
 fn is_builtin_exception(name: &str) -> bool {
-    matches!(
-        name,
-        "Exception"
-            | "ValueError"
-            | "IndexError"
-            | "KeyError"
-            | "AttributeError"
-            | "StopIteration"
-            | "ZeroDivisionError"
-            // Batch G: TypeError (thrown by pyOrd et al. as a name-tagged
-            // Error) and OverflowError (pyInt on float('inf')) need
-            // name-based except matching too.
-            | "TypeError"
-            | "OverflowError"
-            // Round-4 sweep: the runtime grew CPython's hierarchy classes
-            // (LookupError/ArithmeticError bases, RuntimeError,
-            // NotImplementedError, StopAsyncIteration) — raise/except sites
-            // need their auto-imports too.
-            | "RuntimeError"
-            | "NotImplementedError"
-            | "LookupError"
-            | "ArithmeticError"
-            | "StopAsyncIteration"
-            // PBT-2: zero-iteration for-loop target reads raise these; the
-            // runtime grew the classes, so raise/except sites auto-import.
-            | "NameError"
-            | "UnboundLocalError"
-    )
+    BUILTIN_EXCEPTIONS.contains(&name)
 }
 
 fn resolve_module_path(module: &str) -> String {
@@ -13330,6 +19726,26 @@ fn resolve_module_path(module: &str) -> String {
 /// packages where the conventions don't apply, users should write
 /// imports with explicit JS-style names (`from at_some.lib import x`)
 /// and the resolver will pass them through unchanged.
+/// Whether a BARE (level-0) `from <module> import ...` names a recognized
+/// EXTERNAL package rather than a sibling project `.ps` module. External =
+/// the React/Next ecosystem, a PythScribe stdlib module, asyncio, the
+/// `pyths`/`pyths.*` meta modules, a scoped `at_<org>.<pkg>` npm package, or
+/// a name explicitly mapped in `NPM_MODULE_MAPPINGS`. Everything else that is
+/// imported bare is assumed to be a local sibling module (WB-8): its classes
+/// take the cooperative PyObject/`__pyClass` path so cross-module `super()`
+/// works, exactly as a relative import already does (#300). External bases
+/// (React.Component, stdlib containers, npm classes) keep native `extends` +
+/// a native constructor.
+fn is_external_pkg_module(module: &str) -> bool {
+    is_react_or_next_module(module)
+        || STDLIB_MODULES.contains(&module)
+        || module == "asyncio"
+        || module == "pyths"
+        || module.starts_with("pyths.")
+        || module.starts_with("at_")
+        || NPM_MODULE_MAPPINGS.iter().any(|(py, _)| *py == module)
+}
+
 fn is_react_or_next_module(module: &str) -> bool {
     matches!(
         module,
@@ -13390,6 +19806,35 @@ fn is_react_or_next_module(module: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Round-6 delta drift guard: EVERY builtin exception class is emittable
+    /// as a class BASE (`class E(TypeError)` auto-imports it), so the checked
+    /// manifest must contain the WHOLE list — TypeError was emittable but
+    /// unmanifested, panicking the debug drift-assert. One list, one test:
+    /// adding an exception to BUILTIN_EXCEPTIONS without adding it to
+    /// EMITTABLE_RUNTIME_SYMBOLS (and thus to both package entry points, via
+    /// the cli export-surface gate) fails right here.
+    #[test]
+    fn manifest_covers_all_builtin_exceptions() {
+        let missing: Vec<&&str> = BUILTIN_EXCEPTIONS
+            .iter()
+            .filter(|n| !EMITTABLE_RUNTIME_SYMBOLS.contains(*n))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "builtin exception classes emittable as class bases but missing              from EMITTABLE_RUNTIME_SYMBOLS: {missing:?}"
+        );
+    }
+
+    /// The manifest must stay sorted (binary-searchable, mergeable, and the
+    /// doc comment promises it).
+    #[test]
+    fn manifest_is_sorted_and_deduped() {
+        let mut sorted = EMITTABLE_RUNTIME_SYMBOLS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(EMITTABLE_RUNTIME_SYMBOLS, &sorted[..], "manifest must be sorted + deduped");
+    }
+
     fn compile(source: &str) -> String {
         let module = pyths_parser::parse(source).expect("Parse failed");
         let mut gen = JsCodegen::new();
@@ -13439,6 +19884,48 @@ mod tests {
         assert!(
             !jr.contains("pyForIter"),
             "range loop should not be wrapped:\n{jr}"
+        );
+    }
+
+    // #473: a statically-NON-iterable local (`n = 5; for y in n:`) must take
+    // the pyForIter guard too — the raw `for..of` leaked the native JS
+    // "n is not iterable" TypeError instead of CPython's
+    // "'int' object is not iterable".
+    #[test]
+    fn test_for_over_primitive_local_uses_pyforiter() {
+        let ji = compile("n = 5\nfor y in n:\n    print(y)");
+        assert!(
+            ji.contains("of pyForIter(n)"),
+            "numeric-local loop must route through pyForIter:\n{ji}"
+        );
+        let jf = compile("x = 2.5\nfor y in x:\n    print(y)");
+        assert!(
+            jf.contains("of pyForIter(x)"),
+            "float-local loop must route through pyForIter:\n{jf}"
+        );
+    }
+
+    // #472: calling a local whose static type is provably non-callable
+    // (`d = {"a": 1}; d()`) must route through __pyCall so the failure is
+    // CPython's "'dict' object is not callable", not the native JS
+    // "d is not a function". A known def keeps the raw direct call.
+    #[test]
+    fn test_call_on_non_callable_local_uses_pycall() {
+        let jd = compile("d = {\"a\": 1}\nd()");
+        assert!(
+            jd.contains("__pyCall(d, ["),
+            "dict-local call must route through __pyCall:\n{jd}"
+        );
+        let jn = compile("n = 5\nn()");
+        assert!(
+            jn.contains("__pyCall(n, ["),
+            "int-local call must route through __pyCall:\n{jn}"
+        );
+        // a known def stays a raw direct call (no wrap)
+        let jf = compile("def f():\n    return 1\nf()");
+        assert!(
+            !jf.contains("__pyCall("),
+            "known-def call must stay raw:\n{jf}"
         );
     }
 
@@ -13740,23 +20227,32 @@ mod tests {
 
     // #201: `import` inside a function body must be hoisted to module scope —
     // ES `import` is legal only at the top level, so emitting it inline in the
-    // function produced a Node `SyntaxError`. The local name binding is
-    // preserved (module scope is a superset of the function scope).
+    // function produced a Node `SyntaxError`. Round-4 (findings 2 & 3): a
+    // function-local import is genuinely function-local, so the module-top
+    // `import` is hoisted under a UNIQUE name and the local name is bound in
+    // the body via `let <name> = <unique>` — never leaked as a bare module
+    // binding.
     #[test]
     fn test_function_local_import_hoisted_to_module_scope() {
         let js =
             compile("def f():\n    import random\n    return random.randint(0, 5)\nprint(f())");
-        // The import is emitted, but at the module top — not inside `f`.
+        // The actual `import` is hoisted to the module top under a unique name.
         assert!(
-            js.contains("import * as random from \"pyths-runtime/stdlib/random\";"),
-            "import missing:\n{}",
+            js.contains("import * as __pyimp_random_0 from \"pyths-runtime/stdlib/random\";"),
+            "hoisted unique import missing:\n{}",
             js,
         );
-        let import_at = js.find("import * as random").expect("no random import");
+        let import_at = js.find("import * as __pyimp_random_0").expect("no random import");
         let fn_at = js.find("function f(").expect("no function f");
         assert!(
             import_at < fn_at,
             "function-local import was not hoisted above `function f`:\n{}",
+            js,
+        );
+        // The local name is bound INSIDE the function body (not at module top).
+        assert!(
+            js.contains("let random = __pyimp_random_0;"),
+            "function-local `random` binding missing:\n{}",
             js,
         );
     }
@@ -13909,8 +20405,12 @@ mod tests {
         let js = compile_inline(
             "ok = 0\ntry:\n    _r = 10.0 ** 400\nexcept Exception as e:\n    ok = 1\nprint(ok)",
         );
+        // Option B: the float literal operand carries its box (__pyF(10) —
+        // the runtime discriminates float-ness by brand) AND the static
+        // float-context flag is still passed (belt: a BigInt right operand
+        // must coerce-or-overflow on the float path).
         assert!(
-            js.contains("pyPow(10, 400, true)"),
+            js.contains("pyPow(__pyF(10), 400, true)"),
             "float-ctx flag missing on pyPow:\n{}",
             js
         );
@@ -13920,8 +20420,8 @@ mod tests {
             js
         );
         assert!(
-            js.contains("!Number.isSafeInteger(x)"),
-            "inline __isFloat not widened:\n{}",
+            js.contains("(typeof x === \"number\" && !Number.isInteger(x))"),
+            "inline __isFloat must be the authority classifier (brand or non-integer Number):\n{}",
             js
         );
     }
@@ -13967,14 +20467,17 @@ mod tests {
     }
 
     // #322: `None + x` (e.g. a defaulted dict.get feeding arithmetic) must
-    // raise TypeError, not coerce to NaN. The inline arithmetic block carries
-    // the same None guard the package operators.js does (both runtimes fixed).
+    // raise TypeError, not coerce to NaN. E2 (#466): the None guard is now
+    // subsumed by the binary-op operand-type authority (__binOpTypeError) —
+    // the inline arithmetic block carries the same authority the package
+    // operators.js does (both runtimes fixed), and pyAdd's fall-through
+    // terminates in it instead of a raw JS `a + b`.
     #[test]
     fn test_inline_arith_none_guard_present() {
         let js = compile_inline("v = {}\nprint(repr(v.get(5) + 1))");
         assert!(
-            js.contains("function __arithNoneGuard("),
-            "None guard missing:\n{}",
+            js.contains("function __binOpTypeError("),
+            "operand-type authority missing:\n{}",
             js
         );
         assert!(
@@ -13983,8 +20486,8 @@ mod tests {
             js
         );
         assert!(
-            js.contains("__arithNoneGuard(\"+\", a, b)"),
-            "pyAdd guard call missing"
+            js.contains("__binOpTypeError(\"+\", a, b)"),
+            "pyAdd authority call missing"
         );
     }
 
@@ -14414,6 +20917,181 @@ mod tests {
         assert!(
             !js.contains("let super "),
             "unsanitized `super` binding is illegal JS: {js}"
+        );
+    }
+
+    #[test]
+    fn round3_range_for_uses_shared_lazy_iter() {
+        // ROOT FIX: the optimized for-range lowering iterates the SHARED lazy
+        // __pyRangeIter (same guards as pyRange, BigInt/2**53-safe), NOT a
+        // hand-rolled value-controlled `i += step` counter.
+        let js = compile("step = 0\nfor i in range(1, 0, step):\n    print(i)");
+        assert!(js.contains("of __pyRangeIter("), "range-for must iterate __pyRangeIter:\n{js}");
+        assert!(!js.contains("+= step") && !js.contains("__pyRangeArgs"),
+            "no hand-rolled counter / old guard:\n{js}");
+        // inline mode must also inline the shared iterator + normalizer.
+        let ji = compile_inline("for i in range(3):\n    print(i)");
+        assert!(ji.contains("function* __pyRangeIter("), "inlined iterator missing:\n{ji}");
+        assert!(ji.contains("function __pyRangeNorm("), "shared normalizer missing:\n{ji}");
+    }
+
+    #[test]
+    fn round2_kwargs_proto_uses_computed_key() {
+        // R6: a `__proto__` kwarg must emit a COMPUTED key, never the literal
+        // `__proto__:` / `"__proto__":` (both invoke the prototype setter).
+        let js = compile("def f(**kw):\n    return kw\nf(__proto__=1)");
+        assert!(js.contains("[\"__proto__\"]:"), "computed proto key missing:\n{js}");
+        assert!(
+            !js.contains("{__proto__:") && !js.contains(" __proto__: "),
+            "unsafe literal proto key emitted:\n{js}"
+        );
+    }
+
+    // ── Multi-file BUG #1: `from . import <submodule>` ─────────────────────
+    // The old lowering emitted `import { a } from "./"` — asking the package
+    // index to provide ITSELF a named export `a` (guaranteed ESM link error)
+    // — and `a.X` mis-lowered through pyBoundMethod. Root fix: a MODULE-
+    // NAMESPACE import of the submodule file, with the binding tracked in
+    // `module_namespaces` so member access is a direct property read.
+    #[test]
+    fn test_from_dot_submodule_is_namespace_import() {
+        let js = compile("from . import a\nprint(a.X)\nprint(a.f())\ng = a.X");
+        assert!(
+            js.contains("import * as a from \"./a\";"),
+            "must namespace-import the submodule file:\n{js}"
+        );
+        assert!(
+            !js.contains("from \"./\""),
+            "self-referential package-index import must be gone:\n{js}"
+        );
+        assert!(
+            js.contains("pyPrint(a.X)") && js.contains("pyPrint(a.f())"),
+            "member access on the module namespace must be direct:\n{js}"
+        );
+        assert!(
+            !js.contains("pyBoundMethod(a,"),
+            "module-namespace member reads must not pyBoundMethod-wrap:\n{js}"
+        );
+    }
+
+    #[test]
+    fn test_from_dot_submodule_alias_capitalized_and_levels() {
+        // Aliased form binds the alias.
+        let js = compile("from . import a as mod_a\nprint(mod_a.X)");
+        assert!(
+            js.contains("import * as mod_a from \"./a\";"),
+            "aliased submodule import:\n{js}"
+        );
+        // A capitalized member CALL on the namespace is a cross-module class
+        // instantiation → `new` (same rule as stdlib module namespaces).
+        let jc = compile("from . import shapes\ns = shapes.Shape(1)");
+        assert!(
+            jc.contains("new shapes.Shape(1)"),
+            "capitalized member call must `new`:\n{jc}"
+        );
+        // `from .. import x` climbs one package level.
+        let j2 = compile("from .. import util\nprint(util.V)");
+        assert!(
+            j2.contains("import * as util from \"./../util\";"),
+            "level-2 submodule specifier:\n{j2}"
+        );
+    }
+
+    #[test]
+    fn test_from_pkg_named_symbol_import_unchanged() {
+        // The WORKING named-reexport form (`from .impl import work` — a
+        // SYMBOL of impl) must stay a named import, not become a namespace.
+        let js = compile("from .impl import work\nwork()");
+        assert!(
+            js.contains("import { work } from \"./impl\";"),
+            "named relative symbol import must stay named:\n{js}"
+        );
+    }
+
+    // ── FIX 2: package-index SYMBOL import (sentinel module ".") ───────────
+    // `from . import CONST` where CONST is a symbol of the package __init__
+    // (no submodule file) is rewritten by the CLI pre-pass to the sentinel
+    // module "." — which must lower to a NAMED import from the index
+    // specifier, the correct pre-BUG#1 behavior for this half of the
+    // ambiguous form. The sentinel is unreachable from the parser (leading
+    // dots parse into `level`), so the AST is built by hand here.
+    #[test]
+    fn test_index_symbol_sentinel_lowers_to_named_index_import() {
+        use pyths_syntax::ast::{ImportAlias, Module, Stmt, StmtKind};
+        use pyths_syntax::span::Span;
+        let module = Module {
+            body: vec![Stmt::new(
+                StmtKind::ImportFrom {
+                    module: ".".to_string(),
+                    names: vec![ImportAlias {
+                        name: "CONST".to_string(),
+                        alias: None,
+                    }],
+                    level: 1,
+                },
+                Span::new(0, 0),
+            )],
+            span: Span::new(0, 0),
+        };
+        let mut gen = JsCodegen::new();
+        gen.emit_module(&module);
+        let js = gen.finish();
+        assert!(
+            js.contains("import { CONST } from \"./\";"),
+            "sentinel \".\" must be a named import from the package index:\n{js}"
+        );
+        assert!(
+            !js.contains("import * as CONST"),
+            "index SYMBOL must not become a submodule namespace import:\n{js}"
+        );
+    }
+
+    // ── FIX 1(b): module-level tuple/list-unpack targets EXPORT ────────────
+    // `x, y = 1, 2` at module level binds ordinary Python module globals —
+    // they must export exactly like plain assignments (B-015) and AnnAssign.
+    // This was the one binding form the export model missed: per-module
+    // consumers link-failed and bundles silently bound `undefined`.
+    #[test]
+    fn test_module_level_unpack_targets_export() {
+        let js = compile("x, y = 1, 2\n[p, q] = [3, 4]");
+        for n in ["x", "y", "p", "q"] {
+            assert!(
+                js.contains(&format!("export let {};", n)),
+                "module-level unpack target `{n}` must export:\n{js}"
+            );
+        }
+        // Function-local unpack stays local — no export inside a body.
+        let jf = compile("def g():\n    a, b = 1, 2\n    return a + b");
+        assert!(
+            !jf.contains("export let a"),
+            "function-local unpack must NOT export:\n{jf}"
+        );
+    }
+
+    // ── Multi-file BUG #2 backstop: unexpanded relative star is LOUD ───────
+    // The CLI expands `from .mod import *` from the sibling source
+    // (commands::relstar). If a caller bypasses that pass, codegen must be a
+    // hard error — the old behavior emitted NOTHING (silent miscompile:
+    // clean compile, bare ReferenceError at runtime).
+    #[test]
+    fn test_relative_star_unexpanded_is_hard_error() {
+        let module = pyths_parser::parse("from .impl import *\nprint(Y)").expect("Parse failed");
+        let mut gen = JsCodegen::new();
+        gen.emit_module(&module);
+        let errors = gen.take_errors();
+        let js = gen.finish();
+        assert!(
+            !errors.is_empty(),
+            "unexpanded relative star must record a codegen error"
+        );
+        assert!(
+            errors[0].contains("from .impl import *"),
+            "error must name the import: {}",
+            errors[0]
+        );
+        assert!(
+            js.contains("throw new Error"),
+            "emitted artifact must fail loud, not silently drop the import:\n{js}"
         );
     }
 }

@@ -56,3 +56,5 @@ export function attrgetter(...names) {
     }
     return (obj) => pyTuple(...names.map((n) => get(obj, n)));
 }
+
+//# sourceMappingURL=operator.js.map

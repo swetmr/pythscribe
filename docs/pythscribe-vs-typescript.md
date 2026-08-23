@@ -36,6 +36,12 @@ The 2015-era top-10 predates the defects that bite modern **text- and data-heavy
 | **Strings index by UTF-16 code unit** | `"💩".length === 2`; `"💩"[0]` is `'\uD83D'` — a lone high surrogate, *half a character*; every `.length`, `[i]`, and slice corrupts astral text | code points: `len("💩") == 1`, `"💩"[0] == "💩"`, slices split on characters | ✓ wave 11 `preservationS11` + `utf16_astral_strict` |
 | **`[]` and `{}` are truthy** | `if ([]) { … }` **runs** the branch; `if ({})` too — a naively-ported guard inverts | Python falsy: `if []:` / `if {}:` **skip** — empty containers are falsy | ✓ `pyBool_iff_not_falsy` |
 | **No floor division; sign-of-dividend `%`** | no `//`; `7/2 === 3.5`; `%` truncates toward zero (`-7 % 2 === -1`) | `7 // 2 == 3`, `-7 // 2 == -4` (floors); `%` takes the divisor's sign (`-7 % 2 == 1`) | ✓ preservation seed + waves (`jsFdiv_eq_fdiv`) |
+| **`**` / `Math.pow` on ints returns float** | `2 ** 60` and `Math.pow(2,60)` are IEEE-754 floats — lossy past 2⁵³ | exact integer power: `3 ** 35` is exact | ✓ wave 14 `preservationPow` |
+| **Bitwise truncates to 32 bits** (`~`, `&`, `|`, `^` via ToInt32) | `-1 & x` and friends wrap to `[-2³¹, 2³¹)` — wrong for any `x ≥ 2³¹` | infinite two's-complement: `-1 & x == x`, `x ^ -1 == ~x` for all `x` | ✓ wave 17 `preservationNb` |
+
+**Verified against CPython, not (yet) Lean-proved** — the same behavior, a weaker word, said honestly: `[1,10,2].sort()` is JS-lexicographic `[1,10,2]` vs Python numeric `[1,2,10]`; **chained comparison** `1 < x < 10` means what Python means (JS silently parses `(1 < x) < 10`); `NaN` propagation vs a raised `TypeError`/`ValueError`; `==` coercion (`0 == ""`, `[] == ![]`) vs Python value-equality. Each is exercised by the 1,376-case CPython differential corpus — verified on every build, but a differential, not a theorem.
+
+**Beyond the runtime footguns — three things TypeScript *structurally* can't do**, because TS is a type layer that erases, not a semantics: (1) **runtime data is unchecked** — `await res.json() as User` is a lie the compiler believes, and TS's answer is a *separate* runtime validator (Zod/valibot) that gives real runtime errors but is opt-in, per-boundary, and a second schema hand-synced to the type; PythScribe doesn't validate wire *shape* either, but a wrong-shaped value fails **loud at the first operation** (`TypeError`/`KeyError`) instead of silently propagating `undefined`/`NaN`, with no schema to write or sync; (2) **`any` is contagious and invisible** — one `any` from an untyped dependency silently disables downstream checking, with no gradient; PythScribe's fidelity is not opt-out per call site; (3) **one binary vs the toolchain** — `pyths` replaces `tsconfig` + bundler + transpiler + ESM/CJS-interop modes. (Two we do *not* claim: TS's strict null-checking is genuinely good, and modern JS date handling has moved past `Date`.)
 
 ### Strings are the sharpest one
 
@@ -60,6 +66,39 @@ if xs:  ...   # PythScribe/Python: SKIPS (empty list is falsy)
 ```
 
 A guard ported by hand inverts its control flow. PythScribe compiles `if xs:` to Python's falsy rule, proven by `pyBool_iff_not_falsy` (`{}`→False included, closing the #211/#272 class).
+
+### Found in the wild: arithmetic on a missing value
+
+A concrete case the workflow benchmark surfaced while porting a real canvas game. The code did
+`particle.length * factor`, and on one code path a particle was constructed without a `length`
+field:
+
+```python
+# One path leaves `particle` without a `length`:
+speed = particle.length * factor
+```
+
+- **TypeScript / JS:** `undefined * factor` → **`NaN`**, silently. The `NaN` propagates through the
+  physics loop, nothing throws, and the symptom (a frozen sprite) shows up far from the cause — a
+  classic multi-hour hunt, and exactly the *runtime-silent* class TypeScript erases its types before
+  it could help with.
+- **PythScribe:** `None * factor` → **`TypeError`** (CPython-faithful), raised **at the operation**,
+  with a trace pointing straight at the missing field. The bug surfaces immediately.
+
+This is table row 6 (silent `undefined`/`NaN`) in its **arithmetic** form. The indexing form
+(`IndexError`/`KeyError`) is the familiar one, but arithmetic-on-missing bites just as often in
+numeric, graphics, and LLM-generated code — and it's the case where "the syntax is readable for
+review, the semantics are faithful enough to *trust* the generated code" pays off literally: pyths
+turned a silent JS bug loud.
+
+The same benchmark also confirmed the **flagship indexing case in a real port** (WB-13): `arr[i]`
+out of bounds → **`IndexError`** (verified vs CPython — `list index out of range`), where JS silently
+returns `undefined` and lets it propagate. That's the `xs[10]` row above — surfaced by real ported
+code, not a synthetic example.
+
+### Division stays Pythonic (a faithfulness point, verified against CPython)
+
+`/` is **true division** and always yields a float — `50 / 2` is `25.0` (not `25`), and `str`/f-string render it `"25.0"`; `//` is **floor division** — `50 // 2` is `25`. JavaScript/TypeScript have a single `/` and **no int/float distinction**, so `50 / 2` is `25` — a naive transpile silently changes both the value's *type* and its *rendered form*. PythScribe preserves Python's `/` vs `//` split (`pyDiv` → float, `pyFloorDiv` → int), verified to match CPython (`50/2 → 25.0`, `50//2 → 25`, `10/4 → 2.5`). *This one is faithfulness, not a caught bug: it's a place a JS-habituated reader might expect `25` — write `//` or `int(...)` if you want the integer.*
 
 ## The verified core: each deviation is a theorem, not just a test
 

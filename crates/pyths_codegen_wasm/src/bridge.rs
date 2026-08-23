@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use crate::types::WasmType;
 use crate::WasmExportInfo;
@@ -57,6 +58,111 @@ fn math_import_js(name: &str) -> Option<&'static str> {
         "fabs" => "Math.abs",
         _ => return None,
     })
+}
+
+// ── SECURITY: source-derived text serializers (Codex-Security scan 2026-08-12) ──
+//
+// The bridge interpolates two classes of source/output-derived text into the
+// emitted JS: the artifact filename (findings #4 — into a `new URL('...')`
+// string) and WASM function parameter names (finding #13 — into JS binding
+// positions). Route both through these encoders so a hostile filename or a
+// reserved-word parameter cannot break out of its syntactic context. Mirrors
+// the codegen_js `escape_js_string` / `sanitize_ident` "one safe API" — the
+// crate boundary forces a local copy; keep the two in sync.
+
+/// Escape a string for inclusion in a JS **single-quoted** literal (the form
+/// the WASM loaders use for `new URL('<file>', import.meta.url)`). Every
+/// character that could terminate the literal, inject a line terminator, or
+/// smuggle a control code is escaped, so the argument stays exactly one string.
+fn escape_js_single_quoted(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Wrap a filename in a single-quoted JS string literal with escapes applied.
+fn js_single_quoted(s: &str) -> String {
+    format!("'{}'", escape_js_single_quoted(s))
+}
+
+/// JS reserved / contextual / strict-mode-reserved words that are ALSO legal
+/// Python/WASM parameter identifiers, so a `def f(default, new): ...` compiled
+/// to WASM would emit `export function f(default, new)` — a SyntaxError.
+/// Mirrors codegen_js `is_js_reserved_word`.
+fn is_js_reserved_word(s: &str) -> bool {
+    matches!(
+        s,
+        "let"
+            | "const"
+            | "var"
+            | "new"
+            | "function"
+            | "this"
+            | "typeof"
+            | "delete"
+            | "void"
+            | "switch"
+            | "case"
+            | "default"
+            | "catch"
+            | "do"
+            | "enum"
+            | "export"
+            | "extends"
+            | "instanceof"
+            | "throw"
+            | "static"
+            | "debugger"
+            | "null"
+            | "true"
+            | "false"
+            | "undefined"
+            | "NaN"
+            | "Infinity"
+            | "arguments"
+            | "eval"
+            | "await"
+            | "yield"
+            | "super"
+            | "implements"
+            | "interface"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "finally"
+            | "in"
+            | "of"
+            | "import"
+    )
+}
+
+/// Sanitize a WASM parameter name for a JS **binding** position. A reserved
+/// word gets a deterministic `$` suffix; because the mapping is a pure function
+/// of the name, the declaration and every reference in the wrapper rename
+/// identically. The Python names are preserved verbatim in `__pyparams__`
+/// (used by the runtime for keyword-argument binding), so the external contract
+/// is unchanged — only the local JS binding is renamed.
+fn sanitize_js_param(name: &str) -> String {
+    if is_js_reserved_word(name) {
+        format!("{}$", name)
+    } else {
+        name.to_string()
+    }
 }
 
 /// Render the `imports` JS object that gets passed to `WebAssembly.instantiate`.
@@ -287,6 +393,40 @@ pub fn generate_bridge_for_target(
         "const __i64ToJs = (v) => (v >= -9007199254740991n && v <= 9007199254740991n ? Number(v) : v);\n",
     );
 
+    // Option B (minimal): an f64 WASM result is a Python float — box it,
+    // IFF integer-valued, with a glue-local brand class (duck-typed
+    // __pyfloat__, recognized by the runtime's repr/arith/eq paths) so a
+    // whole-valued result (12.0) keeps its float identity; a non-integer
+    // result (3.14) is already unambiguous and stays a native Number.
+    // Extends Number, so native JS numeric APIs coerce via [[NumberData]].
+    if exports
+        .iter()
+        .any(|e| matches!(e.return_type, Some(WasmType::F64)))
+    {
+        out.push_str(
+            "class __PyFloatW extends Number { get __pyfloat__() { return true; } }\n\
+             const __f64Box = (v) => (Number.isInteger(v) ? new __PyFloatW(v) : v);\n",
+        );
+    }
+
+    // #465: f64 ARG boundary — glue-local mirror of the runtime value-boundary
+    // authority __reqNum (runtime/src/operators.js) on the BigInt branch. A
+    // hybrid large int (BigInt past 2**53) entering a float parameter converts
+    // with the standard int→float rule; a BigInt beyond IEEE-754 double range
+    // raises OverflowError ("int too large to convert to float", CPython
+    // float(10**400)) instead of silently crossing as Infinity. This is NOT a
+    // marshalling FAULT: the pure-JS twin raises the SAME OverflowError via
+    // __reqNum, so the #364 ladder correctly propagates it (plain Error, not
+    // RangeError), identically with and without twins.
+    if exports
+        .iter()
+        .any(|e| e.params.iter().any(|(_, ty)| matches!(ty, WasmType::F64)))
+    {
+        out.push_str(
+            "const __f64Arg = (v) => { if (typeof v !== \"bigint\") return v; const n = Number(v); if (Number.isFinite(n)) return n; const e = new Error(\"int too large to convert to float\"); e.name = \"OverflowError\"; throw e; };\n",
+        );
+    }
+
     // #358: i64-exactness machinery. `__i64Oob` guards call boundaries —
     // a BigInt argument outside i64 would be silently wrapped by the
     // JS↔WASM conversion, so such calls never reach WASM at all.
@@ -311,7 +451,12 @@ pub fn generate_bridge_for_target(
             out.push_str(l);
             out.push('\n');
         }
-        let names: Vec<&str> = exports.iter().map(|e| e.name.as_str()).collect();
+        // #439: the spliced twins were emitted by codegen_js, which sanitizes a
+        // reserved-word function name (`default` → `default$`). The `__jsfb`
+        // object shorthand must key on that SAME sanitized name, or `return {
+        // default }` references an undeclared `default` (the twin is `function
+        // default$`) — a ReferenceError that breaks every fallback.
+        let names: Vec<String> = exports.iter().map(|e| sanitize_js_param(&e.name)).collect();
         out.push_str(&format!("return {{ {} }};\n}})();\n", names.join(", ")));
     }
 
@@ -339,10 +484,30 @@ pub fn generate_bridge_for_target(
     // Export wrapper functions with type conversions
     for export in exports {
         out.push('\n');
-        let params_str: Vec<&str> = export.params.iter().map(|(n, _)| n.as_str()).collect();
+        // SECURITY (#13): a WASM param may be a legal Python identifier that is
+        // a JS reserved word (`default`, `new`, `in`, ...). Emitting it raw in a
+        // binding position produces `export function f(default, new)` — invalid
+        // JS. Sanitize once here and use the sanitized name at EVERY JS binding
+        // and reference site below; the original Python names are preserved in
+        // `__pyparams__` (the keyword-binding contract) verbatim.
+        let js_names: Vec<String> = export
+            .params
+            .iter()
+            .map(|(n, _)| sanitize_js_param(n))
+            .collect();
+        let params_str: Vec<&str> = js_names.iter().map(|s| s.as_str()).collect();
+        // #439: the exported wrapper's own NAME can also be a JS reserved word
+        // (`def default(...)` → `export function default` is a SyntaxError).
+        // Sanitize it at every JS binding/reference site — the wrapper decl, the
+        // `__jsfb.<fn>` twin dispatch, and the `<fn>.__pyparams__` attach — so it
+        // coordinates with codegen_js (which imports it under the same `default$`)
+        // and with the `__jsfb` object built above. The WASM binary export is a
+        // STRING keyed by the raw Python name, so `__wasm.<raw>` (a legal
+        // property access, reserved words allowed after `.`) stays unsanitized.
+        let js_export = sanitize_js_param(&export.name);
         out.push_str(&format!(
             "export function {}({}) {{\n",
-            export.name,
+            js_export,
             params_str.join(", ")
         ));
 
@@ -352,11 +517,15 @@ pub fn generate_bridge_for_target(
 
         // #358: boundary guard — BigInt args beyond i64 would wrap in the
         // JS→WASM conversion itself; reroute (or reject) before the call.
+        // SECURITY (#13): reference the sanitized JS binding names, not the raw
+        // Python names, so a reserved-word i64 param resolves to its `$`-suffixed
+        // local rather than an undefined/invalid identifier.
         let i64_params: Vec<&str> = export
             .params
             .iter()
-            .filter(|(_, ty)| matches!(ty, WasmType::I64))
-            .map(|(n, _)| n.as_str())
+            .zip(js_names.iter())
+            .filter(|((_, ty), _)| matches!(ty, WasmType::I64))
+            .map(|(_, js)| js.as_str())
             .collect();
         if has_ovf && !i64_params.is_empty() {
             let cond = i64_params
@@ -368,7 +537,7 @@ pub fn generate_bridge_for_target(
                 core.push_str(&format!(
                     "  if ({}) return __jsfb.{}({});\n",
                     cond,
-                    export.name,
+                    js_export,
                     params_str.join(", ")
                 ));
             } else {
@@ -379,11 +548,14 @@ pub fn generate_bridge_for_target(
             }
         }
 
-        // Build the call arguments with type conversions
+        // Build the call arguments with type conversions. SECURITY (#13): pass
+        // the sanitized JS binding name into the conversion so every reference
+        // matches the (possibly `$`-suffixed) parameter declaration.
         let converted_args: Vec<String> = export
             .params
             .iter()
-            .map(|(name, ty)| convert_js_to_wasm(name, ty))
+            .zip(js_names.iter())
+            .map(|((_, ty), js)| convert_js_to_wasm(js, ty))
             .collect();
 
         let call_expr = format!("__wasm.{}({})", export.name, converted_args.join(", "));
@@ -405,7 +577,7 @@ pub fn generate_bridge_for_target(
                 body.push_str(&format!(
                     "{}  return __jsfb.{}({});\n",
                     indent,
-                    export.name,
+                    js_export,
                     params_str.join(", ")
                 ));
             } else {
@@ -474,7 +646,7 @@ pub fn generate_bridge_for_target(
             out.push_str(&core);
             out.push_str(&format!(
                 "  }} catch (__e) {{\n    if (__isWasmFault(__e)) return __jsfb.{}({});\n    throw __e;\n  }}\n",
-                export.name,
+                js_export,
                 params_str.join(", ")
             ));
         } else {
@@ -497,7 +669,7 @@ pub fn generate_bridge_for_target(
                 .map(|(n, _)| format!("{:?}", n))
                 .collect::<Vec<_>>()
                 .join(", ");
-            out.push_str(&format!("{}.__pyparams__ = [{}];\n", export.name, names));
+            out.push_str(&format!("{}.__pyparams__ = [{}];\n", js_export, names));
         }
     }
 
@@ -524,9 +696,12 @@ fn emit_loader_browser(
 ) {
     out.push_str("const __wasm = await (async () => {\n");
     out.push_str(&render_imports_object(math_imports, needs_dicts));
+    // SECURITY (#4): `wasm_filename` is output-stem-derived. A `'` or newline
+    // in it would break out of the single-quoted URL argument and inject JS at
+    // module scope. Serialize it as a JS single-quoted string literal.
     out.push_str(&format!(
-        "  const url = new URL('{}', import.meta.url);\n",
-        wasm_filename
+        "  const url = new URL({}, import.meta.url);\n",
+        js_single_quoted(wasm_filename)
     ));
     // Node path: detect via process.versions.node, dynamic-import node:fs.
     out.push_str("  const isNode = typeof globalThis.process !== 'undefined'\n");
@@ -593,9 +768,12 @@ fn emit_loader_wasi(
     out.push_str("  });\n");
     out.push_str(&render_imports_object(math_imports, needs_dicts));
     out.push_str("  imports.wasi_snapshot_preview1 = wasi.wasiImport;\n");
+    // SECURITY (#4): `wasm_filename` is output-stem-derived. A `'` or newline
+    // in it would break out of the single-quoted URL argument and inject JS at
+    // module scope. Serialize it as a JS single-quoted string literal.
     out.push_str(&format!(
-        "  const url = new URL('{}', import.meta.url);\n",
-        wasm_filename
+        "  const url = new URL({}, import.meta.url);\n",
+        js_single_quoted(wasm_filename)
     ));
     out.push_str("  const bytes = await readFile(fileURLToPath(url));\n");
     out.push_str("  const instance = (await WebAssembly.instantiate(bytes, imports)).instance;\n");
@@ -612,9 +790,12 @@ fn emit_loader_deno(
 ) {
     out.push_str("const __wasm = await (async () => {\n");
     out.push_str(&render_imports_object(math_imports, needs_dicts));
+    // SECURITY (#4): `wasm_filename` is output-stem-derived. A `'` or newline
+    // in it would break out of the single-quoted URL argument and inject JS at
+    // module scope. Serialize it as a JS single-quoted string literal.
     out.push_str(&format!(
-        "  const url = new URL('{}', import.meta.url);\n",
-        wasm_filename
+        "  const url = new URL({}, import.meta.url);\n",
+        js_single_quoted(wasm_filename)
     ));
     out.push_str("  const bytes = await Deno.readFile(url);\n");
     out.push_str("  return (await WebAssembly.instantiate(bytes, imports)).instance.exports;\n");
@@ -652,10 +833,13 @@ pub fn append_workers_fetch_handler(out: &mut String, exports: &[WasmExportInfo]
             })
             .collect();
         let comma = if i + 1 < exports.len() { "," } else { "" };
+        // #439: the route KEY keeps the raw Python name (a legal object key /
+        // HTTP path), but the CALL targets the exported wrapper, whose name is
+        // reserved-word-sanitized above (`default` → `default$`).
         out.push_str(&format!(
             "        {}: () => {}({}){}\n",
             e.name,
-            e.name,
+            sanitize_js_param(&e.name),
             names.join(", "),
             comma
         ));
@@ -748,7 +932,19 @@ fn emit_list_helpers(out: &mut String) {
     out.push_str("  for (let i = 0; i < n; i++) {\n");
     out.push_str("    const off = ptr + 8 + i * esize;\n");
     out.push_str("    if (kind === 'f64') view.setFloat64(off, arr[i], true);\n");
-    out.push_str("    else if (kind === 'i64') view.setBigInt64(off, typeof arr[i] === 'bigint' ? arr[i] : BigInt(Math.trunc(arr[i])), true);\n");
+    // i64 elements: `DataView.setBigInt64` silently wraps mod 2**64 (ES
+    // ToBigInt64), so an element past i64 would cross the boundary as a
+    // silently WRONG value — the same hazard `__i64Oob` guards for scalar
+    // args, which the pre-guard marshaller missed (PoC: pick([2**63+7])
+    // returned -9223372036854775801). Guard here and throw RangeError: a
+    // boundary marshalling fault, so the #364 fallback ladder transparently
+    // re-runs the call on the exact JS twin (js+wasm), and edge targets
+    // fail loud — never a wrapped element.
+    out.push_str("    else if (kind === 'i64') {\n");
+    out.push_str("      const b = typeof arr[i] === 'bigint' ? arr[i] : BigInt(Math.trunc(arr[i]));\n");
+    out.push_str("      if (b > 9223372036854775807n || b < -9223372036854775808n) throw new RangeError('OverflowError: list element exceeds the i64 range of the WASM fast path');\n");
+    out.push_str("      view.setBigInt64(off, b, true);\n");
+    out.push_str("    }\n");
     out.push_str("    else view.setInt32(off, arr[i] | 0, true);\n");
     out.push_str("  }\n");
     out.push_str("  return ptr;\n");
@@ -769,6 +965,258 @@ fn emit_list_helpers(out: &mut String) {
     out.push_str("}\n");
 }
 
+// ---------------------------------------------------------------------------
+// Marshalling decision table — the Rust<->Lean binding surface for the
+// JS<->WASM VALUE boundary (mirrors cert.rs's `admission_table()` +
+// verification/wasm-admission-table.txt; committed fixture:
+// verification/marshalling-table.txt).
+//
+// Three row kinds, all DERIVED from the shipping code, never restated:
+//   `arg <shape> -> <bit> ; <expr>` — <bit> = pyths_hir::is_numeric_kernel_param
+//       (the #364 boundary admission for params), <expr> = the LITERAL JS
+//       conversion `convert_js_to_wasm("x", ..)` emits for the lowered type
+//       (`-` when `to_wasm_type` = None: no representation, nothing to marshal).
+//   `ret <shape> -> <bit> ; <expr>` — <bit> = pyths_hir::is_scalar_wasm_return
+//       (#364 scalar-return restriction), <expr> = `convert_wasm_to_js("x", ..)`.
+//   `fault <event> <mode> -> <action>` — the overflow/failure DISPOSITIONS of
+//       the boundary, derived by generating REAL probe bridges (twins /
+//       no-twins) via `generate_bridge` and locating the discriminating
+//       emitted snippet; every derivation panics loudly if the shipped
+//       emitter no longer contains the snippet it keys on, so a changed
+//       disposition cannot silently keep its old row.
+//
+// The committed fixture is compared against this from Rust
+// (`cargo test marshalling_table_matches_committed_fixture`) AND from Lean
+// (`lake exe expanddiff --check-marshalling-table`); either side changing a
+// conversion or disposition breaks its own gate. Every `arg` row with bit=1
+// also finitely witnesses `marshal_param_admitted_sound` (admitted params
+// marshal ONLY through the value-exact numeric converters — see the Lean
+// MarshalTable section and the `admitted_arg_rows_use_exact_marshallers`
+// test below).
+// ---------------------------------------------------------------------------
+
+/// The boundary-type shape alphabet, in table order. Chosen to hit EVERY match
+/// arm of `convert_js_to_wasm` / `convert_wasm_to_js` / `list_elem_kind`
+/// (i64 / f64 / i32 / str-ptr / list of every leaf incl. the ptr-elem and
+/// nested-list i32 kinds / dict / tuple / closure with and without a return
+/// value), every arm of `is_numeric_kernel_param`, and every arm of
+/// `is_scalar_wasm_return` (incl. the void-return `none`/`void` rows).
+fn marshalling_alphabet() -> Vec<(String, pyths_types::types::Type)> {
+    use pyths_types::types::Type;
+    let leaves = vec![
+        ("int", Type::Int),
+        ("float", Type::Float),
+        ("bool", Type::Bool),
+        ("str", Type::Str),
+        ("none", Type::NoneType),
+        ("any", Type::Any),
+        ("void", Type::Void),
+        ("named", Type::Named("T".to_string())),
+    ];
+    let mut shapes: Vec<(String, Type)> = leaves
+        .iter()
+        .map(|(n, t)| (n.to_string(), t.clone()))
+        .collect();
+    for (n, t) in &leaves {
+        shapes.push((format!("list<{n}>"), Type::List(Box::new(t.clone()))));
+    }
+    shapes.push((
+        "list<list<int>>".to_string(),
+        Type::List(Box::new(Type::List(Box::new(Type::Int)))),
+    ));
+    shapes.push(("set<int>".to_string(), Type::Set(Box::new(Type::Int))));
+    shapes.push((
+        "opt<int>".to_string(),
+        Type::Optional(Box::new(Type::Int)),
+    ));
+    shapes.push((
+        "dict<str,int>".to_string(),
+        Type::Dict(Box::new(Type::Str), Box::new(Type::Int)),
+    ));
+    shapes.push((
+        "tuple<int,float>".to_string(),
+        Type::Tuple(vec![Type::Int, Type::Float]),
+    ));
+    shapes.push((
+        "callable<int,int>".to_string(),
+        Type::Callable(vec![Type::Int], Box::new(Type::Int)),
+    ));
+    shapes.push((
+        "callable<int,none>".to_string(),
+        Type::Callable(vec![Type::Int], Box::new(Type::NoneType)),
+    ));
+    shapes
+}
+
+fn bit(b: bool) -> char {
+    if b {
+        '1'
+    } else {
+        '0'
+    }
+}
+
+/// Find the discriminating snippet for a fault row, or panic loudly: a table
+/// derivation must never fabricate a disposition the emitter no longer ships.
+fn derived(glue: &str, snippet: &str, event: &str, action: &'static str) -> &'static str {
+    assert!(
+        glue.contains(snippet),
+        "marshalling_table: shipped bridge no longer contains the snippet \
+         deriving `fault {event} -> {action}`:\n  {snippet}\nregenerate the \
+         disposition rows from the current emitter",
+        event = event,
+        action = action,
+        snippet = snippet,
+    );
+    action
+}
+
+/// The full JS<->WASM marshalling decision table. Byte-identical to the Lean
+/// `marshallingTable` (same shape alphabet, same row format).
+pub fn marshalling_table() -> String {
+    use crate::types::to_wasm_type;
+    use pyths_hir::{is_numeric_kernel_param, is_scalar_wasm_return};
+
+    let mut out = String::new();
+
+    // Section 1: per-shape conversion rows (arg + ret per shape).
+    for (name, ty) in marshalling_alphabet() {
+        let arg_expr = match to_wasm_type(&ty) {
+            Some(w) => convert_js_to_wasm("x", &w),
+            None => "-".to_string(),
+        };
+        let ret_expr = match to_wasm_type(&ty) {
+            Some(w) => convert_wasm_to_js("x", &w),
+            None => "-".to_string(),
+        };
+        let _ = writeln!(
+            out,
+            "arg {} -> {} ; {}",
+            name,
+            bit(is_numeric_kernel_param(&ty)),
+            arg_expr
+        );
+        let _ = writeln!(
+            out,
+            "ret {} -> {} ; {}",
+            name,
+            bit(is_scalar_wasm_return(&ty)),
+            ret_expr
+        );
+    }
+
+    // Section 2: overflow/failure dispositions, derived from REAL probe
+    // bridges. probe(x: i64) -> i64 and plist(xs: list[i64]) -> i64 exercise
+    // the scalar guard, the element guard, the __ovf check and the ladder.
+    let exports = vec![
+        WasmExportInfo {
+            name: "probe".to_string(),
+            params: vec![("x".to_string(), WasmType::I64)],
+            return_type: Some(WasmType::I64),
+        },
+        WasmExportInfo {
+            name: "plist".to_string(),
+            params: vec![("xs".to_string(), WasmType::PtrList(Box::new(WasmType::I64)))],
+            return_type: Some(WasmType::I64),
+        },
+    ];
+    let twins_src = "export function probe(x) { return x; }\nexport function plist(xs) { return xs[0]; }";
+    let empty_exc = BTreeMap::new();
+    let math = BTreeSet::new();
+    let twins = generate_bridge(
+        "m.wasm", &exports, &math, false, true, &empty_exc, false, true, Some(twins_src),
+    );
+    let notwins =
+        generate_bridge("m.wasm", &exports, &math, false, true, &empty_exc, false, true, None);
+
+    // The shipped fault predicate — asserted VERBATIM so the `py-exception ->
+    // propagate` row (derived from what the predicate does NOT match) cannot
+    // survive a predicate change.
+    let fault_pred = "const __isWasmFault = (e) => (typeof WebAssembly !== \"undefined\" && e instanceof WebAssembly.RuntimeError) || e instanceof RangeError;";
+    let elem_guard = "throw new RangeError('OverflowError: list element exceeds the i64 range of the WASM fast path');";
+
+    let mut fr = |event: &str, mode: &str, action: &str| {
+        let _ = writeln!(out, "fault {} {} -> {}", event, mode, action);
+    };
+
+    // i64-arg-oob: BigInt arg beyond i64 would wrap in the JS->WASM conversion.
+    fr(
+        "i64-arg-oob",
+        "twins",
+        derived(&twins, "if (__i64Oob(x)) return __jsfb.probe(x);", "i64-arg-oob twins", "reroute-twin"),
+    );
+    fr(
+        "i64-arg-oob",
+        "notwins",
+        derived(&notwins, "if (__i64Oob(x)) throw new RangeError(", "i64-arg-oob notwins", "throw-range"),
+    );
+    // list-elem-i64-oob: element guard throws RangeError; the ladder (twins)
+    // classifies RangeError a fault and re-runs on the twin; no ladder (edge)
+    // -> the RangeError propagates loud.
+    assert!(
+        notwins.contains(elem_guard) && !notwins.contains("__isWasmFault"),
+        "marshalling_table: no-twins bridge must guard i64 elements and have no fault ladder"
+    );
+    fr("list-elem-i64-oob", "twins", {
+        derived(&twins, elem_guard, "list-elem-i64-oob twins (guard)", "reroute-twin");
+        derived(
+            &twins,
+            "if (__isWasmFault(__e)) return __jsfb.plist(xs);",
+            "list-elem-i64-oob twins (ladder)",
+            "reroute-twin",
+        )
+    });
+    fr("list-elem-i64-oob", "notwins", "throw-range");
+    // ovf-flag: the sticky i64-exactness flag set by in-WASM arithmetic.
+    fr(
+        "ovf-flag",
+        "twins",
+        derived(
+            &twins,
+            "if (__wasm.__ovf.value) {\n    __wasm.__ovf.value = 0;\n    __wasm.__err_code.value = 0;\n    return __jsfb.probe(x);",
+            "ovf-flag twins",
+            "reroute-twin",
+        ),
+    );
+    fr(
+        "ovf-flag",
+        "notwins",
+        derived(
+            &notwins,
+            "throw new Error(\"OverflowError: integer result exceeds the i64 range",
+            "ovf-flag notwins",
+            "throw-overflow",
+        ),
+    );
+    // wasm-trap: any WebAssembly.RuntimeError (OOB memory access, unreachable,
+    // div-by-zero, ...). Twins: the ladder re-runs on the twin. No twins: no
+    // ladder, the trap propagates loud.
+    fr("wasm-trap", "twins", {
+        derived(&twins, fault_pred, "wasm-trap twins (predicate)", "reroute-twin");
+        derived(
+            &twins,
+            "if (__isWasmFault(__e)) return __jsfb.probe(x);",
+            "wasm-trap twins (ladder)",
+            "reroute-twin",
+        )
+    });
+    fr("wasm-trap", "notwins", "propagate-trap");
+    // py-exception: a deliberate Python exception dispatched by __check_err is
+    // a plain Error with a .name — NOT matched by the (verbatim-asserted)
+    // fault predicate, so the catch rethrows it unchanged in both modes.
+    fr("py-exception", "twins", {
+        derived(&twins, fault_pred, "py-exception twins (predicate)", "propagate-py");
+        derived(&twins, "throw __e;", "py-exception twins (rethrow)", "propagate-py")
+    });
+    fr(
+        "py-exception",
+        "notwins",
+        derived(&notwins, "function __check_err()", "py-exception notwins", "propagate-py"),
+    );
+
+    out
+}
+
 /// Convert a JS argument to the WASM parameter type.
 fn convert_js_to_wasm(name: &str, ty: &WasmType) -> String {
     match ty {
@@ -779,7 +1227,16 @@ fn convert_js_to_wasm(name: &str, ty: &WasmType) -> String {
             "(typeof {n} === \"bigint\" ? {n} : BigInt(Math.trunc({n})))",
             n = name
         ),
-        WasmType::F64 => name.to_string(),
+        // f64 params take a native double. A large-int arg arrives as a
+        // BigInt (the hybrid int form past 2**53) — ToNumber at the WASM
+        // JS-API boundary THROWS on BigInt, so __f64Arg coerces it explicitly
+        // with the standard int→float conversion. #465: the overflow branch
+        // now MATCHES the runtime authority __reqNum — a BigInt beyond double
+        // range raises OverflowError ("int too large to convert to float",
+        // CPython float(10**400)) instead of silently passing Infinity. A
+        // native Number (incl. a boxed __PyFloatW, which ToNumber unwraps via
+        // [[NumberData]]) still passes through untouched. #38/#461/#465.
+        WasmType::F64 => format!("__f64Arg({n})", n = name),
         WasmType::I32 => format!("{} ? 1 : 0", name),
         WasmType::Ptr => format!("__str_to_wasm({})", name),
         WasmType::PtrList(inner) => {
@@ -800,7 +1257,7 @@ fn convert_wasm_to_js(expr: &str, ty: &WasmType) -> String {
         // with bare Number() there would silently lose precision and defeat
         // the arbitrary-precision guarantee for WASM-routed functions.
         WasmType::I64 => format!("__i64ToJs({})", expr),
-        WasmType::F64 => expr.to_string(),
+        WasmType::F64 => format!("__f64Box({})", expr),
         WasmType::I32 => format!("Boolean({})", expr),
         WasmType::Ptr => format!("__str_from_wasm({})", expr),
         WasmType::PtrList(inner) => {

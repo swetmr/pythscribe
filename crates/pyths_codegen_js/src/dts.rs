@@ -198,12 +198,18 @@ impl DtsGenerator {
                     .iter()
                     .any(|d| matches!(&d.kind, ExprKind::Name(n) if n == "component"));
                 if is_component {
-                    // Emit as function returning JSX.Element
+                    // Emit as function returning JSX.Element. The declaration
+                    // MUST match the JS calling convention: React calls a
+                    // `@component` with a SINGLE props object and the JS emitter
+                    // destructures it (`function ZipList({names, nums} = {})`),
+                    // so the `.d.ts` takes one props object — NOT positional
+                    // params (WB-19; TS2786 for any component with >=2 params,
+                    // and prop-name-unsound even at arity 1).
                     self.write_indent();
                     self.output.push_str("export declare function ");
                     self.output.push_str(name);
                     self.output.push('(');
-                    self.emit_params(params);
+                    self.emit_component_params(params);
                     self.output.push_str("): JSX.Element;\n");
                 } else {
                     self.emit_func_decl(name, params, return_type.as_ref(), *is_async, true);
@@ -261,6 +267,77 @@ impl DtsGenerator {
                 }
             }
         }
+    }
+
+    /// Emit the parameter list of a `@component` declaration as the SINGLE
+    /// props object that the JS emitter actually produces, so the `.d.ts`
+    /// signature is callable exactly the way React (and the emitted JS) calls
+    /// the component: `Component({ prop, ... })`. Mirrors
+    /// `emit.rs::emit_func_def`'s `@component` props convention (WB-19).
+    ///
+    /// Scope note: this is ONLY for `@component`. `@psx` helpers keep positional
+    /// params in the JS (the props-destructure in `emit.rs` is gated on
+    /// `is_component`, not `is_psx`), so their positional declaration — emitted
+    /// via the ordinary `emit_func_decl` path — already matches and is left
+    /// unchanged.
+    fn emit_component_params(&mut self, params: &[Param]) {
+        let effective: Vec<&Param> = params
+            .iter()
+            .filter(|p| p.name != "self" && p.name != "cls")
+            .collect();
+        // 0 params → `()` (React calls `Component()`); already JSX-valid.
+        if effective.is_empty() {
+            return;
+        }
+        // Whole-props form: a single `**kwargs` param, or a single no-default
+        // param literally named `props`, binds the WHOLE props object in the JS
+        // (`function C(props)` / `function C(kwargs = {})`) — one object
+        // argument, not a destructure. The existing single-param declaration
+        // (`props: any` / `kwargs: Record<string, any>`) is already JSX-callable,
+        // so keep it.
+        let whole_props_object = effective.len() == 1
+            && !effective[0].is_args
+            && effective[0].default.is_none()
+            && (effective[0].is_kwargs || effective[0].name == "props");
+        if whole_props_object {
+            self.emit_params(params);
+            return;
+        }
+        // Otherwise the JS destructures the props object
+        // (`function C({a, b, ...rest} = {})`). Declare ONE props object whose
+        // members are the named params (each `name: any` — pyths is dynamically
+        // typed; a defaulted prop becomes optional `name?`), and a trailing
+        // `**rest` becomes an open index signature.
+        self.output.push_str("props: { ");
+        let mut first = true;
+        let mut has_rest = false;
+        for param in &effective {
+            if param.is_args {
+                // `*args` is not a member of the destructured props object
+                // (the JS emitter drops it from the pattern too).
+                continue;
+            }
+            if param.is_kwargs {
+                has_rest = true;
+                continue;
+            }
+            if !first {
+                self.output.push_str("; ");
+            }
+            first = false;
+            self.output.push_str(&param.name);
+            if param.default.is_some() {
+                self.output.push('?');
+            }
+            self.output.push_str(": any");
+        }
+        if has_rest {
+            if !first {
+                self.output.push_str("; ");
+            }
+            self.output.push_str("[key: string]: any");
+        }
+        self.output.push_str(" }");
     }
 
     fn resolve_return_type(return_type: Option<&Expr>) -> TsType {

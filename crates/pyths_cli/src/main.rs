@@ -74,12 +74,25 @@ enum Commands {
         #[arg(long)]
         timings: bool,
 
-        /// Emit TypeScript declaration file (.d.ts)
+        /// Emit TypeScript declaration file (.d.ts). Declarations are now
+        /// emitted BY DEFAULT for file builds, so this flag is a redundant
+        /// explicit-on (kept so existing scripts don't break); use --no-dts
+        /// to suppress.
         #[arg(long)]
         dts: bool,
 
-        /// Compilation target. One of:
-        ///   js        — JavaScript only (default)
+        /// Suppress the default TypeScript declaration (.d.ts) emission.
+        /// Declarations are emitted by default whenever a `.js` module file
+        /// is written (never for --stdout).
+        #[arg(long)]
+        no_dts: bool,
+
+        /// Compilation target. When omitted, the compiler routes
+        /// automatically: numeric-kernel functions go to WASM with
+        /// transparent glue, everything else stays JavaScript
+        /// (`js+wasm` semantics — zero config). Pass an explicit target to
+        /// pin placement instead. One of:
+        ///   js        — JavaScript only
         ///   worker    — JS with runtime imports from pyths-runtime/core
         ///               (DOM-free, Cloudflare Worker / edge-safe; B-030 follow-up D)
         ///   wasm      — WASM only
@@ -87,8 +100,8 @@ enum Commands {
         ///   wasm-edge — Cloudflare Workers (base64-embedded WASM)
         ///   wasi      — WASI (Node.js node:wasi)
         ///   deno      — Deno (Deno.readFile loader)
-        #[arg(long, default_value = "js")]
-        target: String,
+        #[arg(long)]
+        target: Option<String>,
 
         /// Watch the source file and recompile on change. Combines well with
         /// the incremental cache: subsequent compiles after no-op edits are
@@ -215,6 +228,21 @@ enum Commands {
         /// Minify the output
         #[arg(long)]
         minify: bool,
+
+        /// Emit a `<bundle>.js.map` alongside the bundle: user code maps to
+        /// its `.ps` sources; the runtime/glue sections are ignore-listed
+        /// (`ignoreList` + `x_google_ignoreList`) so DevTools step-into stays
+        /// in `.ps` code. Not combinable with --minify.
+        #[arg(long)]
+        sourcemap: bool,
+
+        /// Omit `sourcesContent` from the emitted bundle `.js.map` (A17 parity
+        /// with `compile`): the map still resolves generated positions to their
+        /// `.ps` sources, but the original source text is not inlined —
+        /// recommended for production/edge bundles where the `.map` may ship.
+        /// Only meaningful with `--sourcemap`.
+        #[arg(long)]
+        no_sources_content: bool,
     },
 
     /// Manage the incremental-compilation cache (Step 9).
@@ -277,6 +305,7 @@ fn run_cli(cli: Cli) -> i32 {
             no_sources_content,
             timings,
             dts,
+            no_dts,
             target,
             watch,
             expand,
@@ -297,7 +326,8 @@ fn run_cli(cli: Cli) -> i32 {
                     no_sources_content,
                     timings,
                     dts,
-                    &target,
+                    no_dts,
+                    target.as_deref(),
                     expand_mode,
                     react_refresh,
                     force,
@@ -312,7 +342,8 @@ fn run_cli(cli: Cli) -> i32 {
                     no_sources_content,
                     timings,
                     dts,
-                    &target,
+                    no_dts,
+                    target.as_deref(),
                     expand_mode,
                     react_refresh,
                     emit_cert,
@@ -350,7 +381,16 @@ fn run_cli(cli: Cli) -> i32 {
             entry,
             output,
             minify,
-        } => commands::bundle::run(&entry, output.as_deref(), minify, verbosity),
+            sourcemap,
+            no_sources_content,
+        } => commands::bundle::run(
+            &entry,
+            output.as_deref(),
+            minify,
+            sourcemap,
+            no_sources_content,
+            verbosity,
+        ),
         Commands::Cache { action } => match action {
             CacheAction::Status => commands::cache::status(verbosity),
             CacheAction::Clear => commands::cache::clear(verbosity),

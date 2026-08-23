@@ -18,7 +18,7 @@ ground, not a differentiator between the two**. Both:
 - use Python's own parser (pure-Python syntax);
 - validate with **back-to-back differential testing against CPython** — Transcrypt's
   *autotester* (run a testlet under CPython, then under the compiled JS, compare the
-  output sequence) is the same methodology as PythScribe's 1,318-program CPython
+  output sequence) is the same methodology as PythScribe's 1,376-program CPython
   differential corpus;
 - ship **source maps** for source-level debugging.
 
@@ -118,13 +118,69 @@ So: Transcrypt *can* drive Redux (community-proven) and *could* drive Zustand (r
 only), with no first-class bindings, no type stubs, no JSX, and camelCase JS naming;
 PythScribe drives both as native, typed, verified libraries in Python idiom.
 
+## Runtime architecture: compile-to-JS vs ship-the-interpreter
+
+A prior question worth settling explicitly: **what runtime does Python-in-the-browser run
+on?** There are two families, and PythScribe and Transcrypt are in the same one.
+
+- **Compile-to-JS (PythScribe, Transcrypt).** Emit JavaScript plus a *small* helper runtime
+  (kilobytes: `len`, `range`, dict/list helpers, …). No interpreter ships; your code *is* JS.
+- **Ship-the-interpreter (Pyodide / PyScript).** Ship CPython itself compiled to WebAssembly
+  (~6–11 MB) and interpret `.py` at runtime.
+
+| Axis (browser/edge) | Compile-to-JS (PythScribe, Transcrypt) | Ship-the-interpreter (Pyodide/PyScript) |
+|---|---|---|
+| What ships | your code as JS + KB of helpers | full CPython + stdlib in WASM (~6–11 MB) |
+| Cold start | milliseconds (edge-viable, PythScribe targets <50 ms) | seconds (interpreter boot + heap) |
+| Execution speed | native JS-engine speed (+ WASM for numeric) | interpreted Python-in-WASM (much slower) |
+| DOM/JS interop | direct — the emitted code is JS | expensive JS↔WASM crossing per call |
+| Semantics | JS by default; CPython fidelity must be *re-created* on JS | true CPython for free (it *is* CPython) |
+| Python packages | none as packages (you write the language); npm libs instead | any pure-Python / WASM-wheel package |
+| Debug frames | JS, source-mapped back to `.py`/`.ps` | real Python frames |
+
+**For production web / edge / serverless, compile-to-JS wins decisively** — bundle size, cold
+start, and speed make shipping a 6–11 MB interpreter a non-starter there. **Ship-the-interpreter
+is the right tool only** when you need *real CPython + its package ecosystem* in the browser
+(numpy/pandas, notebook-style data apps, teaching demos) and bundle/cold-start don't matter.
+
+The price of compile-to-JS is that CPython semantics must be **re-created on a JS runtime** — and
+this is exactly where PythScribe and Transcrypt diverge (the "conformance vs performance" axis
+above): **PythScribe pays it in full** with verified/differential-tested helpers (arbitrary-precision
+`int`, `KeyError`, code-point strings, banker's rounding → **Python syntax with CPython-faithful semantics**), while
+**Transcrypt keeps the runtime thinner** and lets JavaScript semantics show through on the interop
+surface unless you opt into a Python idiom. Both keep the runtime in the KB range, not MB.
+PythScribe adds a **third gear neither the interpreter nor a pure JS-transpile has**: WASM
+auto-routing of pure-numeric hot paths, so the numeric fragment runs at near-native speed while the
+DOM/UI code stays lean JS.
+
 ## Debuggability and source maps
 
-Both generate source maps for source-level breakpoints and stepping. Transcrypt adds
-optional **source-line annotations** in the output and an **inline-JavaScript escape
-hatch** (native JS at any point via a directive). PythScribe adds **`pyths run --explain`**
-(a Python-style explanation paragraph above any crash) and **Python-named runtime errors**
-with CPython-matching message text, source-mapped to `.ps` line:col.
+Both emit **Source Map v3** (`//# sourceMappingURL=…`), so a browser shows console logs, thrown
+errors, and stack frames at the **original source line** — Transcrypt at `mapping.py:4`
+(`at print_stuff (mapping.py:4)`), PythScribe at `app.ps:4` — clickable straight to the source.
+PythScribe embeds **`sourcesContent`** and **preserved-identifier `names`** (so frames resolve
+without shipping separate source files), and its console `print` is emitted **inline at the call
+site**, so its output is attributed to *your* `.ps` line rather than to a runtime module (Transcrypt
+maps `print` into `org.transcrypt.__runtime__.py` because its runtime is transpiled Python).
+Transcrypt adds optional **source-line annotations** and an **inline-JS escape hatch**; PythScribe
+adds **`pyths run --explain`** (a Python-style explanation above any crash) and **Python-named
+runtime errors** with CPython-matching text, source-mapped to `.ps` line:col, plus CDP-verified
+**breakpoints and step-over**.
+
+The errors themselves differ, not only their display. Transcrypt surfaces **JS-native** exceptions
+(a `TypeError`, a thrown `Error`) mapped back to the `.py` line — but by default it does **not**
+synthesize Python's fail-loud errors: a missing dict key or an out-of-range index returns `undefined`
+(its performance-first default), whereas PythScribe **raises** `KeyError` / `IndexError` /
+`ZeroDivisionError` with CPython-matching message text. Fail-loud collections are already a point
+against TypeScript (whose types erase at runtime); by default they separate PythScribe from Transcrypt
+too.
+
+The one place Transcrypt was ahead — **step-into** — is closed in **v0.2.2**: because PythScribe's
+runtime is JS (not transpiled Python), step-into used to descend into JS helpers; shipping an
+identity `.js.map` with `ignoreList` per runtime file (+ `x_google_ignoreList` on the runtime chunk
+in the Vite/Next plugins) makes step-into **skip the runtime entirely and stay in your `.ps`** —
+cleaner than stepping *through* a Python runtime. (The bundled-build source map lands in the same
+change.)
 
 ## Interop and naming
 
@@ -138,6 +194,98 @@ PythScribe converts **snake_case → camelCase** for React import names and JSX 
 write components with `@component`/`@psx` and Pythonic JSX (PSX) with props delivered as
 named parameters — plus a Next.js toolchain and 30+ recognized libraries. So PythScribe
 code reads as Python; Transcrypt code reads as Python-shaped JavaScript.
+
+The difference is concrete. A Transcrypt React component wires JS by hand, spells everything
+in **camelCase** to match JS, calls `createElement` with **string-keyed prop dicts**, and
+reaches into the event as a **JS object** (`event['target']['value']`):
+
+```python
+# Transcrypt — Python-shaped JavaScript
+React = require('react')                       # manual JS import
+createElement = React.createElement            # manual name mapping
+el = createElement
+def App():
+    newItem, setNewItem = useState("")         # camelCase, JS names
+    def handleChange(event):
+        target = event['target']               # JS object via subscript
+        setNewItem(target['value'])
+    return el('form', {'onSubmit': handleSubmit},          # createElement + camelCase string dict
+              el('input', {'id': 'editBox',
+                           'onChange': handleChange,
+                           'value': newItem}))
+```
+
+The same component in PythScribe imports natively, is written in **snake_case** (converted to
+`useState`/`onChange` at compile), uses **PSX** (elements are calls, props are named kwargs),
+and reads the event by **attribute**:
+
+```python
+# PythScribe — Python
+from pyths.react import component, use_state
+@component
+def App():
+    new_item, set_new_item = use_state("")     # snake_case → useState at compile
+    def handle_change(event):
+        set_new_item(event.target.value)       # attribute access
+    return form(on_submit=handle_submit,                    # PSX: on_submit → onSubmit
+                input(id="editBox", on_change=handle_change, value=new_item))
+```
+
+Both support Python builtins and stdlib (`len`, `list(...)`, `.append`/`.index`,
+comprehensions) — but here too the models diverge: PythScribe binds these to **native
+CPython semantics** (arbitrary-precision `int`, `KeyError` on a missing key, code-point
+strings, banker's rounding — machine-checked/differential-tested), whereas Transcrypt's
+interop surface carries **JavaScript semantics** unless you opt into a Python idiom. Net:
+Transcrypt's surface is *JS names and JS objects wearing Python syntax*; PythScribe keeps the
+surface **Python syntax** and the behavior **CPython-faithful** — converting names and
+implementing semantics for you. In an era where code is generated more than hand-typed, that is
+the payoff: the **syntax** stays readable Python for *review* (we review far more than we author),
+and the **semantics** stay faithful enough to *trust* what was generated.
+
+## Components, naming, and the Python data layer
+
+PythScribe doesn't blanket-rename identifiers; it applies **one three-way rule** that keeps
+Python-shaped code Python while leaving real JS APIs untouched:
+
+1. **React import names + JSX/PSX props** convert snake_case → camelCase (`use_state`→`useState`,
+   `on_click`→`onClick`, `class_name`→`className`).
+2. **Python builtin methods** lower to their JS equivalent (`s.strip()`→`s.trim()`,
+   `xs.append(x)`→`xs.push(x)`).
+3. **DOM / third-party-JS methods** are emitted **verbatim** — you write the real API name
+   (`e.preventDefault()`, `el.addEventListener(...)`, `query.invalidateQueries(...)`); there is no
+   snake_case form for these.
+
+So hooks, props, and builtins read as Python while genuine JS APIs stay exactly themselves — no
+guessing, no accidental renames. (Transcrypt handles the same clash with build-time aliases —
+`py_split`/`js_split`, `__pragma__('alias', …)` — and otherwise expects the JS name.)
+
+Because PythScribe recognizes **10 stdlib modules natively and CPython-faithfully** — `collections`,
+`itertools`, `functools`, `math`, `json`, `random`, `datetime`, `re`, and **exact** `decimal`/
+`fractions` — you can do real Python data-wrangling and feed the result straight into PSX, in one
+idiom:
+
+```python
+from collections import Counter
+
+@component
+def TagCloud(posts):
+    counts = Counter(tag for p in posts for tag in p.tags)      # Python stdlib
+    return div(class_name="cloud",
+        *[span(class_name="tag", f"{t} ({n})") for t, n in counts.most_common()])
+```
+
+Transcrypt ships a **smaller, partial** stdlib: its Python builtins (`len`, list/dict methods,
+comprehensions) are present, but the breadth (`collections`/`functools`) and the fidelity (exact
+`Decimal`/`Fraction`) are PythScribe's — heavier data layers in Transcrypt more often fall back to
+JavaScript.
+
+Finally, a PythScribe component is a `def` tagged **`@component`** (helper views use `@psx`). This is
+idiomatic Python — decorators-as-markers, like `@dataclass`/`@property` — and it separates components
+from ordinary functions **both ways**: *visually*, a reader (or a reviewer of AI-generated code) sees
+at a glance which functions are components; *in the compiler*, `@component` lowers to `memo(function
+…)`, so the marker also **applies React semantics** (memoization + the hooks contract), not just a
+label. Transcrypt has no such marker — a component is a plain `def App():` that returns
+`createElement(...)`, indistinguishable from any other function until you reach the call site.
 
 ## The `.psc` / LOIR layer (PythScribe-only)
 
@@ -155,6 +303,37 @@ fragments, runtime-helper specs, `i64` semantics, naming soundness), a different
 (cross-checked on a second JS engine), and a **trust manifest** enumerating what is proved
 vs tested vs trusted.
 
+### Cross-checked against Transcrypt's own autotester
+
+A fair, concrete test of the conformance-by-default claim is to take Transcrypt's *own*
+autotester corpus — the back-to-back CPython/JS suite Transcrypt ships to validate itself —
+and run it through PythScribe as a PythScribe↔CPython differential. Running it is only
+*possible* because Transcrypt built a CPython-differential suite in the first place; the
+point below is narrow and additive, not a knock on that engineering.
+
+- **Language surface — 45/45 single-file testlets byte-equal to CPython** (2,328/2,328
+  individual checks). These are the features the suite is built to stress: multiple
+  inheritance, properties, decorators, generators, operator overloading, comprehensions,
+  closures, exceptions, f-strings, slicing, and async/await (`asyncio.run`/`gather`/`sleep`).
+- **Full surface — 47/60 ported-clean** across the entire autotester (single-file +
+  multi-file + raw-JS), with **13 measured boundaries** (metaclasses, JS proxies,
+  `globals()`, multi-file package re-export, and by-design non-byte-equal properties such as
+  PRNG streams) and 4 excluded (DOM/AJAX/external-build demos with no CPython-runnable
+  differential). Every boundary is *named and measured*, not silently skipped.
+- **Differentiation — 3/3.** On the three testlet cases where Transcrypt's output and
+  CPython genuinely diverge, PythScribe matches CPython on all three: `-3 % 8` → `5` (Python
+  modulo, not JS `-3`); a runtime-branch that prints `Using CPython`; and `x in SomeClass`
+  on a non-container → CPython's `TypeError` (Transcrypt's attribute-membership model returns
+  a truthy value). This is the conformance-first stance made concrete — where the two peers
+  part ways, PythScribe is the one that tracks CPython.
+
+Separately, a hand-authored **multi-file package-import differential corpus** (relative
+imports, cross-module inheritance, subpackages, re-export, diamonds/module-singletons,
+cross-module dataclasses) runs **13/13 byte-equal to CPython**. Relative-import packages are
+the supported multi-file model; the current first-party gap is that `pyths run` executes a
+single entry module rather than walking the package graph (`pyths bundle` is the multi-file
+path and inlines the graph).
+
 ## Summary
 
 | Axis | Transcrypt | PythScribe |
@@ -170,6 +349,7 @@ vs tested vs trusted.
 | State mgmt | Redux via community wrappers (no JSX); Zustand raw interop only; no type stubs | Redux Toolkit + react-redux + Zustand native, `.pyi`-stubbed, dual-track-tested |
 | Compression | — | `.psc` LOIR + verified expander |
 | Assurance | Autotester (back-to-back) | + routing certificate, Lean proofs, trust manifest |
+| Cross-conformance | — | Passes **Transcrypt's own autotester** vs CPython: 45/45 language surface, 47/60 full, **3/3** on the cases where Transcrypt and CPython diverge |
 | Maturity | Mature, years in production | Newer |
 | License | Apache-2.0 | FSL-1.1-ALv2 |
 

@@ -28,12 +28,21 @@ is unaffected; only the *repr* of a whole float differs. Full fidelity would nee
 type that taxes every numeric op on the edge target — deliberately rejected. (See the A4/F4 entries
 below for the precise tracked/untracked boundary.)
 
-### D2 — `eval` / `exec` / `compile` are rejected
+### D2 — `eval` / `exec` / `compile` — and every other unimplemented builtin — are rejected
 
 PythScribe is an **ahead-of-time compiler**, so the dynamic-execution builtins are refused at
 compile time with a clear diagnostic ("PythScribe is an ahead-of-time compiler and does not run
 arbitrary Python at runtime") rather than a cryptic runtime error. Running arbitrary Python at
 runtime would require shipping an interpreter to the browser/edge — the opposite of the design.
+
+This is now a **class-wide gate** (public issue #3): a bare reference to *any* known CPython
+builtin with no lowering — `open`, `input`, `hash`, `id`, `globals`, `locals`, `memoryview`,
+`help`, `breakpoint`, `aiter`, `anext`, `__import__`, plus the D2 trio — fails **both**
+`pyths compile` and `pyths check` with a diagnostic naming the builtin and its deferral target
+(`pythscribe-v3.x`), instead of compiling to a bare JS identifier that dies with a runtime
+`ReferenceError`. User bindings/imports named like a builtin shadow it and compile normally.
+(`format`, `slice`, `ascii`, and 1-arg `vars` gained real implementations in the same change;
+zero-arg `vars()` is `locals()` and is rejected with its own message.)
 
 ### D3 — `str.encode()` / `bytes` are not (yet) modeled
 
@@ -62,9 +71,57 @@ intuitive result but is nonetheless a **deviation**. Making captured loop variab
 would require hoisting the loop target to a single function-scoped binding and is tracked as a
 **v3.x codegen follow-up**; until then this is documented, not changed.
 
+### D5 — `random.seed(n)` is deterministic within PythScribe, not CPython-value-equal
+
+`random.seed(n)` seeds a shared module-level PRNG that every `random.*` function draws from
+(the same architecture as CPython's hidden module `Random()` instance), so a seeded program is
+**reproducible run-to-run within PythScribe**: same seed → same sequence of `random()` /
+`randint()` / `choice()` / `shuffle()` / … results. The generator is **mulberry32, not
+CPython's Mersenne Twister**, so the *values* do not match CPython's for the same seed — same
+class of deviation as the ≤4-ULP transcendentals: the *property* (determinism, distribution,
+range) matches; bit-level output does not. A full Mersenne Twister port is a v3.x candidate if
+a real workload ever needs CPython-exact streams. Unseeded use is nondeterministic, as in
+CPython. `random.Random(seed)` gives an independent seedable instance.
+
 *(These are the same by-design deviations tracked in `TRUST.md` and surfaced in the differential
 suites as pinned cases rather than "fixed". Related mechanics — the float tracked/untracked
 boundary, division-by-zero message on whole-float variables — are detailed in the A4/F4 entries.)*
+
+**Positive boundary correction (2026-08-16, full-surface autotester):** async/await + `asyncio`
+(`asyncio.run` / `gather` / `sleep`, coroutine interleaving) is **fully supported** and
+byte-matches CPython in the differential harness — any older note calling async
+"out-of-fragment" or partial is obsolete.
+
+### D6 — default object `repr` reports the module as `__main__`
+
+An instance of a user class with no `__repr__` renders as CPython's default fallback,
+`<module.Class object at 0x…>` (previously `{}`). The `module` segment is the one
+approximation: PythScribe always emits `__main__`, whereas CPython names the module the class
+was *defined* in. So a class imported from another of your own modules reprs as
+`<__main__.Widget object at 0x…>` rather than `<mymod.Widget object at 0x…>`. Everything else
+is exact — the class name, the `str(x) == repr(x)` fallback identity, and a stable, per-object
+synthetic address (distinct objects get distinct addresses). Single-module programs are fully
+exact; the deviation is a **cosmetic repr-string difference only** in multi-module programs, and
+never affects control flow, equality, or hashing. A faithful `__module__` would require
+threading each class's defining-module name through codegen — a v3.x candidate if a workload
+ever needs module-accurate default reprs.
+
+### D7 — `import_module` is asynchronous (returns a Promise)
+
+`import_module(spec)` (CPython's `importlib.import_module`, also usable bare as a PythScribe
+builtin) lowers to native ES **dynamic** `import(spec)` so `.ps` can express code-splitting /
+lazy-load. CPython's `importlib.import_module` is *synchronous* and returns the module object
+directly; ES `import()` returns a **Promise**, so the PythScribe form must be `await`ed:
+
+```python
+from importlib import import_module        # or just call import_module(...) bare
+m = await import_module(f"./{name}.js")     # → m = await import(`./${name}.js`)
+Cls = m[name]                               # module-namespace subscript
+```
+
+Only `import_module` is provided from `importlib`; any other `from importlib import …` name is
+rejected at compile time. The deviation is the **`await`** — everything else (the returned
+namespace object, named-export subscript) matches Python semantics.
 
 ## HTML sinks — `set_html` / `dangerously_set_html` (A18)
 
@@ -197,8 +254,7 @@ kwarg). Deferred divergences below — each has a tracked issue.
 - **Accepted residuals (documented, no issue):** `groupby` buffers each
   group eagerly (a group list stays valid after the parent iterator
   advances; CPython invalidates it) and `tee` materializes its source
-  (no lazy shared buffer; infinite sources hang); `!a` (ascii)
-  f-string conversion unsupported; `defaultdict` repr lacks the
+  (no lazy shared buffer; infinite sources hang); `defaultdict` repr lacks the
   `<class 'int'>` factory display; Counter keys are SameValueZero (no
   CPython key canonicalization of `True`/`1` or tuple keys — plain
   `dict` non-string keys DO canonicalize via PyDict).
@@ -248,3 +304,50 @@ are lowercase and module-level class instantiation is chosen by capitalization
 (`Foo(...)` → `new Foo(...)`), a class *named* with a lowercase reserved word is
 not recognized for `new`-insertion — a pre-existing limitation of the
 capitalization heuristic, independent of reserved-word handling.
+
+## Generated-output write safety — trust model + platform residuals (v0.2.2 hardening)
+
+The compiler/plugins refuse to overwrite files they cannot prove they created
+(the `@generated` text header, the `pythscribe.generated` WASM custom
+section), verify that proof on the same file descriptor they truncate, and
+pre-flight the complete output graph before writing anything (see
+`docs/security.md` §9). `--force` is the deliberate exception: it authorizes
+overwriting a file *without* an ownership proof — that is its purpose — but
+even then only the exact file the pre-flight inspected (same identity, same
+bytes), never a file swapped in afterwards. Honest boundaries of that
+scheme:
+
+- **The ownership markers are accident prevention, not a security boundary.**
+  A malicious process that can already write your build directory can forge
+  either marker — or just write the destination directly. No marker scheme
+  can defend against a same-directory writer; that is the OS/filesystem
+  permission boundary's job. What the writer does guarantee, stated
+  precisely: opens are no-follow on POSIX (`O_NOFOLLOW`); it never truncates
+  before the identity + ownership proof passes on the writing fd; it never
+  writes a destination that was not pre-flighted; and every overwrite is
+  bound to the exact file (dev+inode / volume+file-index) the pre-flight
+  inspected, so a different file renamed into place afterwards — even a
+  marked or byte-identical one — is refused.
+- **Pre-flighting the whole graph reduces, but does not eliminate, partial
+  builds.** Writes are sequential: a failure in the middle of the sequence
+  (disk full, a destination appearing between writes) leaves the outputs
+  already written by that build in place. The guarantee is narrower — any
+  refusal the pre-flight can detect aborts the build before the FIRST write,
+  and a partially-written artifact is never silently trusted by the next
+  run: it either still carries its leading `@generated` marker and is
+  rebuilt, or it lost its ownership proof and is refused with an explicit
+  error (resolved by rebuilding with `--force` or deleting the partial
+  file).
+- **Windows has no `O_NOFOLLOW`** — the overwrite path there relies on the
+  pre-open `symlink_metadata` plus the on-fd proof; symlink creation on
+  Windows is privilege-gated (admin / developer mode). Hard-link refusal IS
+  enforced on Windows (`GetFileInformationByHandle`, link count must be
+  exactly 1).
+- **Alias detection case-folds on Windows and macOS defaults only.** A
+  case-insensitive mount on Linux (or a case-sensitive APFS volume) is not
+  modeled; the per-destination exclusive-create/fd checks still fail closed
+  on the real collision, just later in the write sequence.
+- **One-time `--force` for pre-v0.2.2 WASM:** a `.wasm` built by ≤ v0.2.1
+  predates the ownership section, so its first rebuild under v0.2.2 needs
+  `--force` once (the error message says exactly this); the rebuilt module
+  carries the section and all later rebuilds are free.

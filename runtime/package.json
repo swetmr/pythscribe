@@ -1,6 +1,6 @@
 {
   "name": "pyths-runtime",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Runtime library for PythScribe \u2014 Write Python, Ship to the Web",
   "type": "module",
   "main": "src/index.js",
@@ -26,6 +26,8 @@
     "./stdlib/heapq": "./src/stdlib/heapq.js",
     "./stdlib/bisect": "./src/stdlib/bisect.js",
     "./stdlib/sys": "./src/stdlib/sys.js",
+    "./stdlib/cmath": "./src/stdlib/cmath.js",
+    "./stdlib/unicodedata": "./src/stdlib/unicodedata.js",
     "./web": "./src/web.js",
     "./web/fetch": "./src/web/fetch.js",
     "./web/storage": "./src/web/storage.js",
@@ -36,6 +38,7 @@
   "files": [
     "src/",
     "asyncio.js",
+    "asyncio.js.map",
     "README.md",
     "LICENSE"
   ],

@@ -1,6 +1,7 @@
 // PythScribe standard library: itertools module
 
 import { pyEq } from "../operators.js";
+import { pyBool } from "../types.js";
 
 // Non-enumerable tuple marker (local twin of operators.js pyTuple — see
 // runtime.js __markTuple). CPython's combinatoric/pairing iterators all
@@ -109,6 +110,18 @@ export function* dropwhile(predicate, iterable) {
         if (dropping && predicate(item)) continue;
         dropping = false;
         yield item;
+    }
+}
+
+// CPython itertools.compress(data, selectors): yield the data elements
+// whose corresponding selector is truthy (Python truthiness — stops at the
+// shorter of the two).
+export function* compress(data, selectors) {
+    const sel = selectors[Symbol.iterator]();
+    for (const d of data) {
+        const s = sel.next();
+        if (s.done) return;
+        if (pyBool(s.value)) yield d;
     }
 }
 
@@ -248,3 +261,5 @@ export function* pairwise(iterable) {
         prev = { value: item, done: false };
     }
 }
+
+//# sourceMappingURL=itertools.js.map

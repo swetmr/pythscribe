@@ -36,41 +36,326 @@ pub fn snake_to_camel(name: &str) -> String {
     generic_snake_to_camel(name)
 }
 
-/// Whether a snake_case name (as found in `from pyths.react import X`) refers
-/// to an export that lives in the `react` npm package itself — NOT in
-/// pyths-runtime/react. These must be split out into a separate
-/// `import { X } from "react"` statement during codegen.
+/// Which module actually exports a given `from pyths.react import X` helper.
 ///
-/// Why split: the runtime can't re-export React APIs without forcing React as
-/// a hard dependency, which breaks non-React consumers of pyths-runtime (the
-/// CPython semantic differential tests run in Node without React installed).
-/// pyths-runtime/react keeps codegen-meta helpers like `component`, `psx`,
-/// `style`, `classes`; React APIs come from React itself.
+/// `pyths.react` is a HYBRID surface: the user writes one import, but the
+/// symbols live in three genuinely different upstream places plus the pyths
+/// runtime. Routing every name through a single audited table (this enum + the
+/// `react_helper_source` match) is the root fix for the WB-22/WB-23 family, in
+/// which individual symbols were mapped to a module that does not export them:
+///
+/// * `ReactCore` (`"react"`) — hooks and React-core APIs (`createElement`,
+///   `cloneElement`, `isValidElement`, `Fragment`, `memo`, `forwardRef`, …).
+/// * `ReactDom` (`"react-dom"`) — DOM-only APIs (`createPortal`, `flushSync`,
+///   `findDOMNode`). These are NOT in the `react` package (WB-23:
+///   `createPortal` was wrongly mapped to `"react"`).
+/// * `ReactDomClient` (`"react-dom/client"`) — the React 18+ client roots
+///   (`createRoot`, `hydrateRoot`).
+/// * `PythsRuntime` (`"pyths-runtime/react"`) — the codegen-meta helpers the
+///   runtime ACTUALLY exports (`component`, `psx`, `style`, `classes`, plus the
+///   internal `createPropTransformer`/`wrapUseState`). Nothing else may route
+///   here: the runtime deliberately does not re-export React (that would force
+///   React as a hard dep and break the non-React CPython differential tests),
+///   so a React symbol mapped here is a load-time "no such export" crash
+///   (WB-22: `cloneElement` fell through to this module and blanked the app).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReactHelperSource {
+    ReactCore,
+    ReactDom,
+    ReactDomClient,
+    PythsRuntime,
+}
+
+impl ReactHelperSource {
+    /// The literal JS module specifier this source imports from.
+    pub fn module(self) -> &'static str {
+        match self {
+            ReactHelperSource::ReactCore => "react",
+            ReactHelperSource::ReactDom => "react-dom",
+            ReactHelperSource::ReactDomClient => "react-dom/client",
+            ReactHelperSource::PythsRuntime => "pyths-runtime/react",
+        }
+    }
+}
+
+/// THE single audited routing table: PYTHON name (snake_case for
+/// functions/hooks, Capitalized for class/element re-exports, exactly as
+/// written at the import/member site, before `snake_to_camel`) → the module
+/// that really exports the symbol.
+///
+/// This is a `pub` DATA table (not match arms) so consumers — the emit paths,
+/// `route_namespace_member`, and the real-package boundary test
+/// (`tests/react_boundary_test.rs`) — iterate the SAME table. The boundary
+/// test imports every non-runtime entry from its declared module against the
+/// actually-installed React 19 packages, so the table is verified exhaustively
+/// BY CONSTRUCTION: an entry added here is automatically checked; there is no
+/// second manually-synced list to forget (the old test's `ROUTABLE` array was
+/// exactly that escape hatch).
+///
+/// Entries whose symbol was REMOVED in React 19 (see `REACT_19_REMOVED`) are
+/// still listed with their would-be module: every import/member path checks
+/// `react_19_removed` FIRST, so the route is never emitted — it exists so the
+/// boundary test can assert the symbol is genuinely ABSENT from that module.
+pub const REACT_HELPER_TABLE: &[(&str, ReactHelperSource)] = &[
+    // ---- pyths-runtime/react — the runtime's real codegen-meta exports.
+    ("component", ReactHelperSource::PythsRuntime),
+    ("psx", ReactHelperSource::PythsRuntime),
+    ("style", ReactHelperSource::PythsRuntime),
+    ("classes", ReactHelperSource::PythsRuntime),
+    ("create_prop_transformer", ReactHelperSource::PythsRuntime),
+    ("wrap_use_state", ReactHelperSource::PythsRuntime),
+    // ---- react-dom — DOM-only APIs (NOT in the `react` package).
+    ("create_portal", ReactHelperSource::ReactDom),
+    ("flush_sync", ReactHelperSource::ReactDom),
+    ("use_form_status", ReactHelperSource::ReactDom),
+    ("use_form_state", ReactHelperSource::ReactDom),
+    // react-dom symbols REMOVED in 19 — would-be routes only (see above).
+    ("find_dom_node", ReactHelperSource::ReactDom),
+    ("render", ReactHelperSource::ReactDom),
+    ("hydrate", ReactHelperSource::ReactDom),
+    ("unmount_component_at_node", ReactHelperSource::ReactDom),
+    // ---- react-dom/client — React 18+ client roots.
+    ("create_root", ReactHelperSource::ReactDomClient),
+    ("hydrate_root", ReactHelperSource::ReactDomClient),
+    // ---- react (core) — hooks + core APIs + capitalized re-exports.
+    // Hooks
+    ("use_state", ReactHelperSource::ReactCore),
+    ("use_reducer", ReactHelperSource::ReactCore),
+    ("use_ref", ReactHelperSource::ReactCore),
+    ("use_effect", ReactHelperSource::ReactCore),
+    ("use_layout_effect", ReactHelperSource::ReactCore),
+    ("use_insertion_effect", ReactHelperSource::ReactCore),
+    ("use_context", ReactHelperSource::ReactCore),
+    ("use_memo", ReactHelperSource::ReactCore),
+    ("use_callback", ReactHelperSource::ReactCore),
+    ("use_transition", ReactHelperSource::ReactCore),
+    ("use_deferred_value", ReactHelperSource::ReactCore),
+    ("use_id", ReactHelperSource::ReactCore),
+    ("use_sync_external_store", ReactHelperSource::ReactCore),
+    ("use_imperative_handle", ReactHelperSource::ReactCore),
+    ("use_debug_value", ReactHelperSource::ReactCore),
+    // React 19 additions
+    ("use", ReactHelperSource::ReactCore),
+    ("use_optimistic", ReactHelperSource::ReactCore),
+    ("use_action_state", ReactHelperSource::ReactCore),
+    ("use_effect_event", ReactHelperSource::ReactCore),
+    ("act", ReactHelperSource::ReactCore),
+    ("cache", ReactHelperSource::ReactCore),
+    // Core APIs
+    ("create_context", ReactHelperSource::ReactCore),
+    ("create_element", ReactHelperSource::ReactCore),
+    ("clone_element", ReactHelperSource::ReactCore),
+    ("create_ref", ReactHelperSource::ReactCore),
+    ("is_valid_element", ReactHelperSource::ReactCore),
+    ("forward_ref", ReactHelperSource::ReactCore),
+    ("start_transition", ReactHelperSource::ReactCore),
+    ("lazy", ReactHelperSource::ReactCore),
+    ("memo", ReactHelperSource::ReactCore),
+    // react-core symbol REMOVED in 19 — would-be route only.
+    ("create_factory", ReactHelperSource::ReactCore),
+    // Capitalized re-exports (arrive un-snaked)
+    ("Suspense", ReactHelperSource::ReactCore),
+    ("Fragment", ReactHelperSource::ReactCore),
+    ("StrictMode", ReactHelperSource::ReactCore),
+    ("Profiler", ReactHelperSource::ReactCore),
+    ("Component", ReactHelperSource::ReactCore),
+    ("PureComponent", ReactHelperSource::ReactCore),
+    ("Children", ReactHelperSource::ReactCore),
+];
+
+/// Resolve the upstream module for a `from pyths.react import <name>` symbol.
+///
+/// A lookup over `REACT_HELPER_TABLE` (the single audited surface). The
+/// default for unknown names is `ReactCore`: `pyths.react` fronts React, only
+/// the runtime meta-helpers live in `pyths-runtime/react` and they are all
+/// listed explicitly, so an unknown symbol is far likelier to be a genuine
+/// React export than a runtime shim — and defaulting unknowns to the runtime
+/// is precisely what produced the WB-22 "no such export" crash.
+pub fn react_helper_source(name: &str) -> ReactHelperSource {
+    REACT_HELPER_TABLE
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, s)| *s)
+        .unwrap_or(ReactHelperSource::ReactCore)
+}
+
+/// Back-compat predicate: whether a `pyths.react` symbol resolves to the
+/// `react` core package (as opposed to react-dom or the pyths runtime).
 pub fn is_react_core_export(name: &str) -> bool {
+    react_helper_source(name) == ReactHelperSource::ReactCore
+}
+
+/// One React-19-removed export: the PYTHON spelling, the camelCase JS
+/// spelling, and the one-line remediation for the compile diagnostic.
+pub struct React19Removed {
+    pub py_name: &'static str,
+    pub js_name: &'static str,
+    pub message: &'static str,
+}
+
+/// B5 — the COMPLETE set of symbols the routing table maps (or would map)
+/// to a module that no longer exports them in React 19 / react-dom 19,
+/// verified against the actually-installed `react@19` / `react-dom@19`
+/// packages (a production React app, 19.2.6). Emitting any of these is a hard
+/// ESM "no such export" load error → blank app. The WB-22/23 table tests only
+/// asserted the table against ITSELF, never against the real packages, so a
+/// dead route passed — and the original fix listed only `findDOMNode`,
+/// validating its own shape and missing the adjacent removals (`render`,
+/// `hydrate`, `unmountComponentAtNode`, `createFactory`). This is a `pub`
+/// DATA table so the boundary test iterates it exhaustively: every entry is
+/// asserted genuinely ABSENT from its would-be module against the real
+/// packages, and every entry must also appear in `REACT_HELPER_TABLE` (its
+/// would-be route), so the set cannot silently drift back into a live route.
+///
+/// Lookups match the PYTHON name AND the camelCase JS spelling, so the
+/// diagnostic fires regardless of how the user wrote it.
+pub const REACT_19_REMOVED: &[React19Removed] = &[
+    React19Removed {
+        py_name: "find_dom_node",
+        js_name: "findDOMNode",
+        message:
+            "`findDOMNode` was removed in React 19 (react-dom no longer exports it) — \
+             importing it is a load-time \"no such export\" error. Use a ref (`useRef`/\
+             `createRef` on the element) instead of `findDOMNode`.",
+    },
+    React19Removed {
+        py_name: "render",
+        js_name: "render",
+        message:
+            "`render` was removed from react-dom in React 19 — importing it is a \
+             load-time \"no such export\" error. Use `create_root` (createRoot from \
+             react-dom/client): `root = create_root(el)` then `root.render(app)`.",
+    },
+    React19Removed {
+        py_name: "hydrate",
+        js_name: "hydrate",
+        message:
+            "`hydrate` was removed from react-dom in React 19 — importing it is a \
+             load-time \"no such export\" error. Use `hydrate_root` (hydrateRoot from \
+             react-dom/client) instead.",
+    },
+    React19Removed {
+        py_name: "unmount_component_at_node",
+        js_name: "unmountComponentAtNode",
+        message:
+            "`unmountComponentAtNode` was removed from react-dom in React 19 — \
+             importing it is a load-time \"no such export\" error. Call `.unmount()` \
+             on the root returned by `create_root` instead.",
+    },
+    React19Removed {
+        py_name: "create_factory",
+        js_name: "createFactory",
+        message:
+            "`createFactory` was removed from react in React 19 — importing it is a \
+             load-time \"no such export\" error. Call `create_element(type, ...)` \
+             directly instead of a factory.",
+    },
+];
+
+/// Look up a React-19-removed symbol by either spelling (python snake or
+/// camelCase JS). Returns the remediation message for the compile diagnostic.
+pub fn react_19_removed(name: &str) -> Option<&'static str> {
+    REACT_19_REMOVED
+        .iter()
+        .find(|e| e.py_name == name || e.js_name == name)
+        .map(|e| e.message)
+}
+
+/// The CORE React packages the routing table covers, keyed on the RAW Python
+/// module spelling at an `import` site (kebab forms kept defensively for
+/// callers that pass the mapped name). This is the gate for two class rules:
+///
+/// * a namespace alias of one of these modules gets full MEMBER routing
+///   (`route_namespace_member`) — camel-casing + module check + removed check;
+/// * the `react_19_removed` import diagnostic is SCOPED to these modules (plus
+///   the `pyths.react` hybrid). Other react-ecosystem packages legitimately
+///   export names like `render` (`@testing-library/react`), so a global
+///   symbol-keyed check would misfire on them.
+pub fn core_react_module(module: &str) -> Option<ReactHelperSource> {
+    match module {
+        "react" => Some(ReactHelperSource::ReactCore),
+        "react_dom" | "react-dom" => Some(ReactHelperSource::ReactDom),
+        "react_dom.client" | "react-dom/client" => Some(ReactHelperSource::ReactDomClient),
+        _ => None,
+    }
+}
+
+/// The routing decision for a member access `<ns>.<member>` where `<ns>` is a
+/// namespace alias of a core React module (`import react [as R]`,
+/// `import react_dom [as D]`, `import react_dom.client as C`).
+pub enum MemberRoute {
+    /// The member is exported by the base module — emit `<ns>.<jsName>`.
+    Routed(String),
+    /// The member was removed in React 19 — compile diagnostic (message).
+    Removed(&'static str),
+    /// The member is a KNOWN symbol exported by a DIFFERENT module — emitting
+    /// `<ns>.<jsName>` would be a silent `undefined`. Compile diagnostic.
+    WrongModule {
+        js_name: String,
+        exports_from: ReactHelperSource,
+    },
+}
+
+/// THE uniform member-routing rule (0.2.2 member-call class fix). For a member
+/// access `<base>.<member>(...)` — or a bound reference `f = <base>.<member>`
+/// — where `<base>` is a core-React namespace alias, the member is routed
+/// EXACTLY like the from-import path: `react_19_removed` checked first, then
+/// camel-cased via `snake_to_camel`, then module-checked via the audited
+/// `REACT_HELPER_TABLE`. The original fix special-cased only
+/// `create_element`-with-≥2-args in call position — every other member
+/// (`react.use_state`, `react.clone_element`, `react_dom.create_portal`,
+/// single-arg `create_element`, value-position references) compiled to a
+/// silent-dead snake identifier. This one rule closes the whole class:
+///
+/// * removed in React 19 (either spelling) → `Removed` (compile diagnostic);
+/// * known symbol, matching module → `Routed(jsName)`;
+/// * known symbol, DIFFERENT module (`react.create_portal`,
+///   `react_dom.use_state`, `react.component`) → `WrongModule` (diagnostic —
+///   the namespace object genuinely has no such export);
+/// * unknown symbol → `Routed(snake_to_camel(member))`, byte-identical to
+///   what `from <module> import <member>` emits (the from-import parity
+///   contract; unknown names cannot be module-checked without a full export
+///   inventory, and the boundary test owns table completeness).
+///
+/// Known-symbol lookups match the python spelling OR its camelCase JS form
+/// (`react.createPortal` is caught, not just `react.create_portal`).
+pub fn route_namespace_member(base: ReactHelperSource, member: &str) -> MemberRoute {
+    if let Some(msg) = react_19_removed(member) {
+        return MemberRoute::Removed(msg);
+    }
+    let known = REACT_HELPER_TABLE
+        .iter()
+        .find(|(n, _)| *n == member || snake_to_camel(n) == member);
+    match known {
+        Some((name, src)) => {
+            let js_name = snake_to_camel(name);
+            if *src == base {
+                MemberRoute::Routed(js_name)
+            } else {
+                MemberRoute::WrongModule {
+                    js_name,
+                    exports_from: *src,
+                }
+            }
+        }
+        None => MemberRoute::Routed(snake_to_camel(member)),
+    }
+}
+
+/// The React hooks whose FIRST-argument callback's RETURN is stored as a
+/// cleanup ("destroy") and invoked by React. React accepts only `undefined`
+/// or a function as that return; a Python effect ending in `return None`
+/// emits `return null`, and since `null !== undefined` React calls it →
+/// "destroy is not a function" (WF-1). Callbacks to these hooks are wrapped
+/// in `__pyEffect`, which coerces any non-function return to `undefined`.
+/// `use_sync_external_store` belongs here too: its `subscribe` callback's
+/// return is the unsubscribe cleanup, invoked the same way (WF-1 round 2).
+/// The value-returning hooks (`use_memo`/`use_callback`) and all other hooks
+/// are NOT wrapped — their return is data, not a cleanup.
+pub fn is_cleanup_effect_hook(name: &str) -> bool {
     matches!(
         name,
-        // State & refs
-        "use_state" | "use_reducer" | "use_ref"
-        // Effects
-        | "use_effect" | "use_layout_effect" | "use_insertion_effect"
-        // Context
-        | "use_context"
-        // Memoization
-        | "use_memo" | "use_callback"
-        // Transitions
-        | "use_transition" | "use_deferred_value"
-        // Other hooks
-        | "use_id" | "use_sync_external_store"
-        | "use_imperative_handle" | "use_debug_value"
-        // React API
-        | "create_context" | "create_element" | "create_ref" | "create_portal"
-        | "forward_ref" | "start_transition"
-        // React 19
-        | "use"
-        // Common capitalized re-exports
-        | "Suspense" | "Fragment" | "StrictMode" | "Profiler"
-        | "Component" | "PureComponent" | "Children" | "cloneElement"
-        | "isValidElement" | "lazy" | "memo"
+        "use_effect" | "use_layout_effect" | "use_insertion_effect" | "use_sync_external_store"
     )
 }
 
@@ -105,6 +390,15 @@ pub fn react_hook_mapping(name: &str) -> Option<&'static str> {
         "create_portal" => Some("createPortal"),
         "forward_ref" => Some("forwardRef"),
         "start_transition" => Some("startTransition"),
+        "clone_element" => Some("cloneElement"),
+        "is_valid_element" => Some("isValidElement"),
+        // react-dom / react-dom/client APIs (the generic snake→camel rule
+        // mis-cases `find_dom_node` as `findDomNode`; the acronym must stay
+        // upper — pin the whole react-dom family explicitly).
+        "flush_sync" => Some("flushSync"),
+        "find_dom_node" => Some("findDOMNode"),
+        "create_root" => Some("createRoot"),
+        "hydrate_root" => Some("hydrateRoot"),
         // Next.js hooks
         "use_router" => Some("useRouter"),
         "use_pathname" => Some("usePathname"),
@@ -428,6 +722,17 @@ pub fn is_builtin_constructor(name: &str) -> bool {
     )
 }
 
+/// WB-17 — the ES primitive-WRAPPER globals. Called WITHOUT `new` they are
+/// TYPE-CONVERSION functions returning primitives (`Boolean("")` → `false`,
+/// `Number("3")` → `3`, `String(5)` → `"5"`); called WITH `new` they return
+/// boxed wrapper OBJECTS (`new Boolean(false)` is TRUTHY, `typeof
+/// new Number(3)` is `"object"`), and `Symbol`/`BigInt` THROW when `new`-ed.
+/// The capitalized-name → `new` heuristic must therefore emit a BARE call for
+/// these — never `new`.
+pub fn is_js_primitive_wrapper(name: &str) -> bool {
+    matches!(name, "Boolean" | "Number" | "String" | "Symbol" | "BigInt")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +895,328 @@ mod tests {
         assert_eq!(snake_to_camel("http_equiv"), "httpEquiv");
         assert_eq!(snake_to_camel("plays_inline"), "playsInline");
         assert_eq!(snake_to_camel("allow_full_screen"), "allowFullScreen");
+    }
+
+    // -------- WB-22/WB-23: the audited pyths.react → module routing table --------
+
+    #[test]
+    fn test_react_helper_source_routing() {
+        use ReactHelperSource::*;
+        // react-core hooks + APIs.
+        for n in [
+            "use_state",
+            "use_effect",
+            "use_memo",
+            "use_ref",
+            "create_element",
+            "create_context",
+            "create_ref",
+            "forward_ref",
+            "start_transition",
+            "lazy",
+            "memo",
+            "use",
+            "Suspense",
+            "Fragment",
+            "StrictMode",
+            "Children",
+            // WB-22: cloneElement/isValidElement are REACT CORE — the old
+            // table listed them only in camelCase, so the snake python names
+            // fell through to pyths-runtime/react (a non-existent export).
+            "clone_element",
+            "is_valid_element",
+        ] {
+            assert_eq!(
+                react_helper_source(n),
+                ReactCore,
+                "{} must route to react core",
+                n
+            );
+        }
+        // react-dom — WB-23: createPortal lives here, NOT in react.
+        for n in ["create_portal", "flush_sync", "find_dom_node"] {
+            assert_eq!(
+                react_helper_source(n),
+                ReactDom,
+                "{} must route to react-dom",
+                n
+            );
+        }
+        // react-dom/client — the 18+ roots.
+        for n in ["create_root", "hydrate_root"] {
+            assert_eq!(
+                react_helper_source(n),
+                ReactDomClient,
+                "{} must route to react-dom/client",
+                n
+            );
+        }
+        // pyths-runtime/react — ONLY the runtime's real codegen-meta exports.
+        for n in ["component", "psx", "style", "classes"] {
+            assert_eq!(
+                react_helper_source(n),
+                PythsRuntime,
+                "{} must route to pyths-runtime/react",
+                n
+            );
+        }
+    }
+
+    #[test]
+    fn test_react_helper_source_module_strings() {
+        assert_eq!(ReactHelperSource::ReactCore.module(), "react");
+        assert_eq!(ReactHelperSource::ReactDom.module(), "react-dom");
+        assert_eq!(ReactHelperSource::ReactDomClient.module(), "react-dom/client");
+        assert_eq!(ReactHelperSource::PythsRuntime.module(), "pyths-runtime/react");
+    }
+
+    #[test]
+    fn test_wb22_wb23_symbols_convert_correctly() {
+        // The affected symbols must snake→camel to the exact React identifier.
+        assert_eq!(snake_to_camel("clone_element"), "cloneElement");
+        assert_eq!(snake_to_camel("create_portal"), "createPortal");
+        assert_eq!(snake_to_camel("is_valid_element"), "isValidElement");
+        assert_eq!(snake_to_camel("flush_sync"), "flushSync");
+        // Acronym must stay upper — generic snake→camel would give findDomNode.
+        assert_eq!(snake_to_camel("find_dom_node"), "findDOMNode");
+        assert_eq!(snake_to_camel("create_root"), "createRoot");
+        assert_eq!(snake_to_camel("hydrate_root"), "hydrateRoot");
+    }
+
+    #[test]
+    fn test_react_helper_audit_no_runtime_leak() {
+        use ReactHelperSource::*;
+        // AUDIT: the ONLY names that may route to pyths-runtime/react are the
+        // four codegen-meta helpers the runtime actually exports (plus its two
+        // internal helpers). Any React symbol routed there is a load-time crash
+        // (WB-22). Guard the whole audited surface against regression.
+        let runtime_ok = [
+            "component",
+            "psx",
+            "style",
+            "classes",
+            "create_prop_transformer",
+            "wrap_use_state",
+        ];
+        for n in [
+            "use_state",
+            "use_effect",
+            "use_reducer",
+            "use_context",
+            "use_memo",
+            "use_callback",
+            "use_ref",
+            "use_id",
+            "use_transition",
+            "use_deferred_value",
+            "use_sync_external_store",
+            "use_imperative_handle",
+            "use_debug_value",
+            "use_layout_effect",
+            "use_insertion_effect",
+            "use",
+            "create_element",
+            "clone_element",
+            "is_valid_element",
+            "create_context",
+            "create_ref",
+            "forward_ref",
+            "start_transition",
+            "lazy",
+            "memo",
+            "Suspense",
+            "Fragment",
+            "StrictMode",
+            "Profiler",
+            "Component",
+            "PureComponent",
+            "Children",
+            "create_portal",
+            "flush_sync",
+            "find_dom_node",
+            "create_root",
+            "hydrate_root",
+        ] {
+            assert_ne!(
+                react_helper_source(n),
+                PythsRuntime,
+                "{} must NOT route to pyths-runtime/react (it does not export it)",
+                n
+            );
+        }
+        for n in runtime_ok {
+            assert_eq!(react_helper_source(n), PythsRuntime, "{}", n);
+        }
+    }
+
+    #[test]
+    fn test_react_19_removed_symbols_flagged() {
+        // B5 (class rule): EVERY React-19 removal must be flagged under BOTH
+        // spellings, with a message that names the JS symbol and dates the
+        // removal. The full set, verified against the real react@19 /
+        // react-dom@19 packages: findDOMNode, render, hydrate,
+        // unmountComponentAtNode (react-dom) + createFactory (react).
+        let expected: &[(&str, &str)] = &[
+            ("find_dom_node", "findDOMNode"),
+            ("render", "render"),
+            ("hydrate", "hydrate"),
+            ("unmount_component_at_node", "unmountComponentAtNode"),
+            ("create_factory", "createFactory"),
+        ];
+        assert_eq!(
+            REACT_19_REMOVED.len(),
+            expected.len(),
+            "REACT_19_REMOVED drifted from the audited set — update this test \
+             AND re-verify against the real packages"
+        );
+        for (py, js) in expected {
+            for n in [py, js] {
+                let msg = react_19_removed(n)
+                    .unwrap_or_else(|| panic!("{n} must be flagged as removed"));
+                assert!(msg.contains(js), "message names the symbol {js}: {msg}");
+                assert!(msg.contains("React 19"), "message dates the removal: {msg}");
+            }
+        }
+        // Every removed symbol has its would-be route in the table (so the
+        // boundary test can assert genuine absence from that module).
+        for e in REACT_19_REMOVED {
+            assert!(
+                REACT_HELPER_TABLE.iter().any(|(n, _)| *n == e.py_name),
+                "{} must have a would-be route in REACT_HELPER_TABLE",
+                e.py_name
+            );
+        }
+        // Symbols that DO still exist in React 19 must NOT be flagged.
+        for n in [
+            "create_element",
+            "clone_element",
+            "is_valid_element",
+            "create_portal",
+            "flush_sync",
+            "create_root",
+            "hydrate_root",
+            "use_state",
+            "use_form_status",
+            "use_optimistic",
+            "act",
+            "cache",
+        ] {
+            assert!(
+                react_19_removed(n).is_none(),
+                "{n} is a live React-19 export and must NOT be flagged as removed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_react_helper_table_has_no_duplicates() {
+        // The table is the single audited surface — a duplicate key would make
+        // the routing depend on entry order.
+        for (i, (n, _)) in REACT_HELPER_TABLE.iter().enumerate() {
+            assert!(
+                !REACT_HELPER_TABLE[i + 1..].iter().any(|(m, _)| m == n),
+                "duplicate REACT_HELPER_TABLE entry: {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_core_react_module_gate() {
+        use ReactHelperSource::*;
+        assert_eq!(core_react_module("react"), Some(ReactCore));
+        assert_eq!(core_react_module("react_dom"), Some(ReactDom));
+        assert_eq!(core_react_module("react-dom"), Some(ReactDom));
+        assert_eq!(core_react_module("react_dom.client"), Some(ReactDomClient));
+        // Ecosystem packages are NOT core — the removed-import diagnostic and
+        // member module-check must not fire for them (`render` is a real
+        // @testing-library/react export).
+        for m in [
+            "at_testing_library.react",
+            "react_markdown",
+            "react_router_dom",
+            "zustand",
+            "react_dom.server",
+            "pyths.react",
+        ] {
+            assert!(core_react_module(m).is_none(), "{m} must not be core");
+        }
+    }
+
+    #[test]
+    fn test_route_namespace_member_matrix() {
+        use ReactHelperSource::*;
+        // Routed: known symbol on its home module — both spellings.
+        for (base, member, js) in [
+            (ReactCore, "use_state", "useState"),
+            (ReactCore, "useState", "useState"),
+            (ReactCore, "clone_element", "cloneElement"),
+            (ReactCore, "create_element", "createElement"),
+            (ReactCore, "createElement", "createElement"),
+            (ReactCore, "Fragment", "Fragment"),
+            (ReactDom, "create_portal", "createPortal"),
+            (ReactDom, "createPortal", "createPortal"),
+            (ReactDom, "flush_sync", "flushSync"),
+            (ReactDom, "use_form_status", "useFormStatus"),
+            (ReactDomClient, "create_root", "createRoot"),
+            (ReactDomClient, "hydrate_root", "hydrateRoot"),
+        ] {
+            match route_namespace_member(base, member) {
+                MemberRoute::Routed(got) => assert_eq!(got, js, "{member}"),
+                _ => panic!("{member} on {base:?} must route"),
+            }
+        }
+        // Removed: React-19 removals diagnose on ANY base, both spellings.
+        for member in [
+            "find_dom_node",
+            "findDOMNode",
+            "render",
+            "hydrate",
+            "unmount_component_at_node",
+            "unmountComponentAtNode",
+            "create_factory",
+            "createFactory",
+        ] {
+            for base in [ReactCore, ReactDom, ReactDomClient] {
+                assert!(
+                    matches!(route_namespace_member(base, member), MemberRoute::Removed(_)),
+                    "{member} on {base:?} must be Removed"
+                );
+            }
+        }
+        // WrongModule: known symbol reached through the wrong namespace —
+        // the export genuinely does not exist there (silent undefined).
+        for (base, member, home) in [
+            (ReactCore, "create_portal", ReactDom),
+            (ReactCore, "createPortal", ReactDom),
+            (ReactCore, "create_root", ReactDomClient),
+            (ReactDom, "use_state", ReactCore),
+            (ReactDom, "create_element", ReactCore),
+            (ReactDomClient, "create_portal", ReactDom),
+            // the pyths meta-helpers are not React exports at all
+            (ReactCore, "component", PythsRuntime),
+            (ReactCore, "psx", PythsRuntime),
+        ] {
+            match route_namespace_member(base, member) {
+                MemberRoute::WrongModule { exports_from, .. } => {
+                    assert_eq!(exports_from, home, "{member}")
+                }
+                _ => panic!("{member} on {base:?} must be WrongModule"),
+            }
+        }
+        // Unknown symbols: from-import parity — camel-cased, routed on any
+        // base (no export inventory to check against).
+        for (member, js) in [
+            ("use_whatever_custom", "useWhateverCustom"),
+            ("preload", "preload"),
+            ("version", "version"),
+        ] {
+            for base in [ReactCore, ReactDom, ReactDomClient] {
+                match route_namespace_member(base, member) {
+                    MemberRoute::Routed(got) => assert_eq!(got, js),
+                    _ => panic!("unknown {member} must route (from-import parity)"),
+                }
+            }
+        }
     }
 
     #[test]

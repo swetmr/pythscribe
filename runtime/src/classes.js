@@ -17,6 +17,13 @@
 //  * `__pyIsInstance` — isinstance() that consults the MRO (so non-first
 //                     bases match), with tuple-of-types support.
 
+// Bytes dispatch authority (runtime.js) — the ONE bytes/bytearray
+// recognizer, used by the isinstance sentinel cases below. Import sits
+// ABOVE the first top-level declaration on purpose: the #170 slicer
+// excludes pre-declaration lines, and the inline `pyths run` mirror pulls
+// the same __pyBytesKind definition via the extractor instead.
+import { __pyBytesKind } from "./runtime.js";
+
 // Diamond-inheritance marker. `__pyClass` flattens each class's MRO methods
 // onto its own prototype, so a base's prototype carries COPIES of ancestor
 // methods it did not define in its body. This Symbol tags those copies so a
@@ -26,6 +33,12 @@
 const __PY_MIXIN = Symbol("pyMixin");
 
 export class PyObject {
+    // PyObject IS CPython's `object` — the implicit root every user-class
+    // MRO ends in. Stamp the Python name so surfaces that read __name__
+    // (`[c.__name__ for c in D.__mro__]`, repr) report 'object', not the
+    // internal JS class name 'PyObject' (the `__name__ ?? name` fallback
+    // in the codegen's attribute lowering would otherwise leak it).
+    static __name__ = "object";
     constructor(...args) {
         const cls = new.target;
         const mro = cls && cls.__mro__ ? cls.__mro__ : [cls];
@@ -168,12 +181,23 @@ export function __pyIsInstance(obj, cls) {
             case "bool": return typeof obj === "boolean";
             // bool is a subclass of int in Python, so a boolean is an int.
             case "int": return typeof obj === "boolean" || typeof obj === "bigint" || (typeof obj === "number" && Number.isInteger(obj));
-            case "float": return typeof obj === "number" && !Number.isInteger(obj);
+            case "float": return (typeof obj === "number" && !Number.isInteger(obj)) || (obj != null && obj.__pyfloat__ === true);
             case "dict": return obj !== null && typeof obj === "object" && (Object.getPrototypeOf(obj) === Object.prototype || obj instanceof Map);
-            case "set": return obj instanceof Set;
+            case "set": case "frozenset": return obj instanceof Set;
+            // Bytes authority: bytearray is NOT a bytes subclass in CPython,
+            // so each name matches exactly its own kind.
+            case "bytes": return __pyBytesKind(obj) === "bytes";
+            case "bytearray": return __pyBytesKind(obj) === "bytearray";
             case "NoneType": return obj === null || obj === undefined;
+            // Everything is an instance of object in Python.
+            case "object": return true;
         }
         return false;
+    }
+    // Interned CALLABLE type objects (int/list/dict/object/… as VALUES —
+    // runtime.js __pyType* singletons) dispatch through the string path.
+    if (typeof cls === "function" && cls.__pytype__ === true) {
+        return __pyIsInstance(obj, cls.__name__);
     }
     // `type(x)` for a builtin returns an interned type OBJECT (__PyTypeObj)
     // whose __name__ is the CPython type name, not a JS constructor. Route
@@ -192,13 +216,102 @@ export function __pyIsInstance(obj, cls) {
     return mro ? mro.indexOf(cls) >= 0 : false;
 }
 
+// autotester arguments: keyword form of __pyClassCall. Statics and
+// classmethods bind keywords against their own metadata; a plain instance
+// method called UNBOUND (`A.__init__(self, y, x, m=n, ...)`) carries self
+// as the FIRST positional, which its __pyparams__ metadata does not list —
+// bind keywords against the remaining positionals and re-prepend self.
+export function __pyClassCallKw(cls, name, pos, kw) {
+    const s = cls[name];
+    if (typeof s === "function" && /^class[\s{(]/.test(Function.prototype.toString.call(s))) {
+        return new s(...__pyKwArgs(s, pos, kw));
+    }
+    if (typeof s === "function") {
+        return cls[name](...__pyKwArgs(s, pos, kw));
+    }
+    const m = cls.prototype ? cls.prototype[name] : undefined;
+    if (typeof m === "function") {
+        // __init__ metadata may live on the CLASS object (the emitter's
+        // post-class assignments) rather than the prototype method.
+        const meta = m.__pyparams__ ? m : (cls.__pyparams__ ? cls : m);
+        return m.call(pos[0], ...__pyKwArgs(meta, pos.slice(1), kw));
+    }
+    const e = new Error(`type object '${cls.name}' has no attribute '${name}'`);
+    e.name = "AttributeError";
+    throw e;
+}
+
+// autotester classes: issubclass() over compiled classes (via __mro__ /
+// the prototype chain), interned builtin type objects (runtime.js
+// __pyType* singletons / string sentinels), tuples of classinfos, and the
+// CPython special cases (everything subclasses object; bool ⊆ int).
+export function __pyIsSubclass(cls, info) {
+    // CPython type name of a builtin classinfo, else null.
+    const tyName = (c) => {
+        if (typeof c === "string") return c;
+        if (typeof c === "function" && c.__pytype__ === true) return c.__name__;
+        if (c !== null && typeof c === "object" && typeof c.__name__ === "string"
+            && c.constructor && c.constructor.name === "__PyTypeObj") return c.__name__;
+        return null;
+    };
+    const cn = tyName(cls);
+    if (cn === null && typeof cls !== "function") {
+        const e = new Error("issubclass() arg 1 must be a class");
+        e.name = "TypeError"; throw e;
+    }
+    // Tuple form: any match wins.
+    if (info !== null && typeof info === "object" && typeof info[Symbol.iterator] === "function") {
+        for (const c of info) { if (__pyIsSubclass(cls, c)) return true; }
+        return false;
+    }
+    const ci = tyName(info);
+    if (ci === "object") return true; // everything is a subclass of object
+    if (cn !== null) {
+        // builtin type vs builtin type: identity + the bool ⊆ int special case.
+        if (ci === null) return false;
+        return cn === ci || (cn === "bool" && ci === "int");
+    }
+    // compiled/user class cls
+    if (typeof info === "function" && info.__pytype__ !== true) {
+        if (cls === info) return true;
+        const mro = cls.__mro__;
+        if (mro && mro.indexOf(info) >= 0) return true;
+        let p = cls;
+        while ((p = Object.getPrototypeOf(p))) { if (p === info) return true; }
+        return false;
+    }
+    return false; // user class never subclasses a builtin type name
+}
+
 // Round-3 pythonic sweep: Python class attributes. The attribute lives on
 // the class object (static chain gives subclass fallthrough for
 // `Sub.attr`); a live prototype accessor makes instances read through and
 // turns instance assignment into an own-property shadow — Python's
 // attribute lookup semantics.
+// autotester properties: the `property(fget, fset)` BUILTIN as a value —
+// `x = property(getX, setX)` in a class body. Returns a marked descriptor
+// record; __pyClassAttr installs it as a real accessor pair.
+export function pyProperty(fget, fset, fdel, doc) {
+    return { __pyproperty__: true, fget, fset, fdel, doc };
+}
+
 export function __pyClassAttr(cls, name, value) {
-    cls[name] = value;
+    cls[name] = value; // Cls.attr reads the raw value (property object incl.)
+    if (value !== null && typeof value === "object" && value.__pyproperty__) {
+        Object.defineProperty(cls.prototype, name, {
+            get() { return value.fget ? value.fget.call(this) : undefined; },
+            set(v) {
+                if (!value.fset) {
+                    const e = new Error("can't set attribute");
+                    e.name = "AttributeError";
+                    throw e;
+                }
+                value.fset.call(this, v);
+            },
+            configurable: true,
+        });
+        return;
+    }
     Object.defineProperty(cls.prototype, name, {
         get() { return cls[name]; },
         set(v) { Object.defineProperty(this, name, { value: v, writable: true, enumerable: true, configurable: true }); },
@@ -213,6 +326,15 @@ export function __pyClassAttr(cls, name, value) {
 // prototype with the first argument as `self`.
 export function __pyClassCall(cls, name, args) {
     const s = cls[name];
+    // autotester classes: a NESTED class installed as a class attribute
+    // (`Outer.Inner(...)`) must construct with `new` — a plain call throws
+    // "Class constructor cannot be invoked without 'new'".
+    if (
+        typeof s === "function" &&
+        /^class[\s{(]/.test(Function.prototype.toString.call(s))
+    ) {
+        return new s(...args);
+    }
     if (typeof s === "function") return cls[name](...args);
     const m = cls.prototype ? cls.prototype[name] : undefined;
     if (typeof m === "function") return m.call(args[0], ...args.slice(1));
@@ -220,3 +342,5 @@ export function __pyClassCall(cls, name, args) {
     e.name = "AttributeError";
     throw e;
 }
+
+//# sourceMappingURL=classes.js.map

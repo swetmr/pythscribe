@@ -36,7 +36,7 @@ HELD-OUT SPLIT
 The grammar was developed against the corpora in scripts/test-grammar.py
 (tracked .ps/.psc, the differential corpus, the clone pairs). Measuring on
 those would be measuring on the training set. `--extra-corpus DIR` supplies an
-external corpus (we use the reference-app repo: its .ps/.psc sources and the
+external corpus (a held-out set of real .ps/.psc sources and
 generation-eval completions — never seen by the grammar gate). That corpus is
 deterministically halved by SHA-1 of the relative path:
 
@@ -54,7 +54,7 @@ USAGE
     python scripts/grammar-fuzz.py --generate 10000
 
     # full measurement, with the external held-out corpus
-    python scripts/grammar-fuzz.py --generate 10000 --extra-corpus ../reference-app
+    python scripts/grammar-fuzz.py --generate 10000 --extra-corpus <path-to-held-out-corpus>
 
     --generate N     number of random derivations for the false-accept run
     --seed S         RNG seed (default 20260714; runs are reproducible)
@@ -688,7 +688,7 @@ def harvest_corpus(extra_dirs):
                   file=sys.stderr)
             continue
         for f in git_ls(d, "*.ps"):
-            rel = f"reference-app:{f}"
+            rel = f"extern:{f}"
             add(rel, held_split(rel), read(os.path.join(d, f)))
         # generation-eval / rerun completions: .ps inside markdown fences
         for root, _dirs, files in os.walk(d):

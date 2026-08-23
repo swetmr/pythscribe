@@ -85,6 +85,17 @@ function runPythscribe(id, setup, expr) {
     const rewired = rewireImports(readFileSync(jsPath, "utf8"));
     const mjsPath = path.join(SCRATCH, `${id}.run.mjs`);
     writeFileSync(mjsPath, rewired, "utf8");
+    // Harness gap fix: an auto-routed (WASM) program emits a co-located
+    // `<id>.glue.js` whose own `pyths-runtime` imports were never rewired —
+    // every WASM-routed corpus entry failed with ERR_MODULE_NOT_FOUND
+    // regardless of behavior. Rewire the glue in place (the entry imports
+    // it relatively, so same-dir resolution still works), and point the
+    // entry's `./<id>.glue.js` import at it from the `.run.mjs` name.
+    const gluePath = psPath.replace(/\.ps$/, ".glue.js");
+    try {
+        const glue = readFileSync(gluePath, "utf8");
+        writeFileSync(gluePath, rewireImports(glue), "utf8");
+    } catch { /* no glue emitted — pure-JS program */ }
     const node = spawnSync("node", [mjsPath], { encoding: "utf8" });
     if (node.status !== 0) {
         throw new Error(`node failed: ${node.stderr}`);

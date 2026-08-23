@@ -1,0 +1,56 @@
+arg int -> 1 ; (typeof x === "bigint" ? x : BigInt(Math.trunc(x)))
+ret int -> 1 ; __i64ToJs(x)
+arg float -> 1 ; __f64Arg(x)
+ret float -> 1 ; __f64Box(x)
+arg bool -> 1 ; x ? 1 : 0
+ret bool -> 1 ; Boolean(x)
+arg str -> 0 ; __str_to_wasm(x)
+ret str -> 0 ; __str_from_wasm(x)
+arg none -> 0 ; -
+ret none -> 1 ; -
+arg any -> 0 ; -
+ret any -> 0 ; -
+arg void -> 0 ; -
+ret void -> 1 ; -
+arg named -> 0 ; -
+ret named -> 0 ; -
+arg list<int> -> 1 ; __list_to_wasm(x, "i64")
+ret list<int> -> 0 ; __list_from_wasm(x, "i64")
+arg list<float> -> 1 ; __list_to_wasm(x, "f64")
+ret list<float> -> 0 ; __list_from_wasm(x, "f64")
+arg list<bool> -> 1 ; __list_to_wasm(x, "i32")
+ret list<bool> -> 0 ; __list_from_wasm(x, "i32")
+arg list<str> -> 0 ; __list_to_wasm(x, "i32")
+ret list<str> -> 0 ; __list_from_wasm(x, "i32")
+arg list<none> -> 0 ; -
+ret list<none> -> 0 ; -
+arg list<any> -> 0 ; __list_to_wasm(x, "i32")
+ret list<any> -> 0 ; __list_from_wasm(x, "i32")
+arg list<void> -> 0 ; -
+ret list<void> -> 0 ; -
+arg list<named> -> 0 ; -
+ret list<named> -> 0 ; -
+arg list<list<int>> -> 0 ; __list_to_wasm(x, "i32")
+ret list<list<int>> -> 0 ; __list_from_wasm(x, "i32")
+arg set<int> -> 0 ; __list_to_wasm(x, "i64")
+ret set<int> -> 0 ; __list_from_wasm(x, "i64")
+arg opt<int> -> 0 ; -
+ret opt<int> -> 0 ; -
+arg dict<str,int> -> 0 ; __dict_to_wasm(x)
+ret dict<str,int> -> 0 ; __dict_from_wasm(x)
+arg tuple<int,float> -> 0 ; __tuple_to_wasm(x)
+ret tuple<int,float> -> 0 ; __tuple_from_wasm(x)
+arg callable<int,int> -> 0 ; __closure_to_wasm(x)
+ret callable<int,int> -> 0 ; __closure_from_wasm(x)
+arg callable<int,none> -> 0 ; __closure_to_wasm(x)
+ret callable<int,none> -> 0 ; __closure_from_wasm(x)
+fault i64-arg-oob twins -> reroute-twin
+fault i64-arg-oob notwins -> throw-range
+fault list-elem-i64-oob twins -> reroute-twin
+fault list-elem-i64-oob notwins -> throw-range
+fault ovf-flag twins -> reroute-twin
+fault ovf-flag notwins -> throw-overflow
+fault wasm-trap twins -> reroute-twin
+fault wasm-trap notwins -> propagate-trap
+fault py-exception twins -> propagate-py
+fault py-exception notwins -> propagate-py

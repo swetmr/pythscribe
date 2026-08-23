@@ -17,13 +17,23 @@ test("int+int stays exact BigInt past 2**53", () => {
     assert.equal(pyPow(2n, 53n) + 1n, 9007199254740993n);
 });
 
-test("int+float promotes to float (Number)", () => {
-    assert.equal(pyAdd(1n, 2.0), 3.0);
-    assert.equal(typeof pyAdd(1n, 2.0), "number");
-    assert.equal(pyAdd(2.0, 1n), 3.0);
-    assert.equal(typeof pyAdd(2.0, 1n), "number");
-    assert.equal(pySub(5n, 1.5), 3.5);
-    assert.equal(pyMul(2n, 2.5), 5.0);
+test("int+float promotes to float (boxed iff integer-valued)", async () => {
+    // Option B: a FLOAT operand arrives boxed when integer-valued (a bare
+    // native 2.0 is an int by representation — codegen boxes float
+    // literals). Integer-valued float results carry the PyFloat brand;
+    // non-integer results stay native Numbers.
+    const { __pyF } = await import("./operators.js");
+    const a = pyAdd(1n, __pyF(2.0));
+    assert.equal(a.__pyfloat__, true);
+    assert.equal(Number(a), 3);
+    const b = pyAdd(__pyF(2.0), 1n);
+    assert.equal(b.__pyfloat__, true);
+    assert.equal(Number(b), 3);
+    assert.equal(pySub(5n, 1.5), 3.5); // non-integer result: native
+    assert.equal(typeof pySub(5n, 1.5), "number");
+    const m = pyMul(2n, 2.5); // 5.0: integer-valued -> boxed
+    assert.equal(m.__pyfloat__, true);
+    assert.equal(Number(m), 5);
 });
 
 test("true division always returns float", () => {

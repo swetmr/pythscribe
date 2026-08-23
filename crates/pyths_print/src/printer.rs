@@ -35,7 +35,7 @@ fn binop_prec(op: &BinOp) -> u8 {
         BinOp::BitAnd => 7,
         BinOp::ShiftLeft | BinOp::ShiftRight => 8,
         BinOp::Add | BinOp::Sub => 9,
-        BinOp::Mul | BinOp::Div | BinOp::FloorDiv | BinOp::Mod => 10,
+        BinOp::Mul | BinOp::Div | BinOp::FloorDiv | BinOp::Mod | BinOp::MatMul => 10,
         BinOp::Pow => 12,
         // PythScribe extensions: low precedence (below `or`)
         BinOp::NullishCoalesce => 3,
@@ -548,7 +548,23 @@ impl PsPrinter {
             ExprKind::NoneLiteral => "None".to_string(),
             ExprKind::Name(n) => n.clone(),
             ExprKind::StringLiteral(s) => quote_string_literal(s),
-
+            // Bytes literal: canonical CPython-style b'...' with hex escapes
+            // for non-printable bytes.
+            ExprKind::BytesLiteral(bytes) => {
+                let mut body = String::new();
+                for b in bytes {
+                    match b {
+                        b'\\' => body.push_str(r"\\"),
+                        b'\'' => body.push_str(r"\'"),
+                        b'\n' => body.push_str(r"\n"),
+                        b'\t' => body.push_str(r"\t"),
+                        b'\r' => body.push_str(r"\r"),
+                        0x20..=0x7e => body.push(*b as char),
+                        other => body.push_str(&format!(r"\x{:02x}", other)),
+                    }
+                }
+                format!("b'{}'", body)
+            }
             ExprKind::FString { parts } => {
                 // Canonical form: prefer f"..." (double-quoted), but fall back to
                 // f'''...''' when the emitted inner content contains a bare `"`.
@@ -891,6 +907,7 @@ impl PsPrinter {
             BinOp::FloorDiv => "//",
             BinOp::Mod => "%",
             BinOp::Pow => "**",
+            BinOp::MatMul => "@",
             BinOp::Eq => "==",
             BinOp::NotEq => "!=",
             BinOp::Lt => "<",
@@ -922,6 +939,7 @@ impl PsPrinter {
             AugAssignOp::FloorDiv => "//",
             AugAssignOp::Mod => "%",
             AugAssignOp::Pow => "**",
+            AugAssignOp::MatMul => "@",
             AugAssignOp::BitAnd => "&",
             AugAssignOp::BitOr => "|",
             AugAssignOp::BitXor => "^",

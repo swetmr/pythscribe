@@ -16,7 +16,7 @@ pub fn run(
     let filename = path.file_name().unwrap().to_string_lossy();
 
     // Parse
-    let module = pyths_parser::parse(&source).map_err(|errors| {
+    let mut module = pyths_parser::parse(&source).map_err(|errors| {
         let diags: Vec<_> = errors
             .iter()
             .map(|e| {
@@ -33,6 +33,9 @@ pub fn run(
 
         pyths_diagnostic::render::render_diagnostics(&source, &filename, &diags)
     })?;
+    // Expand relative star imports (commands::relstar) before codegen.
+    super::relstar::normalize_relative_imports(&mut module, path)?;
+    let module = module;
 
     // Codegen — inline runtime so output is self-contained for Node.js
     //
@@ -40,10 +43,12 @@ pub fn run(
     // than a predictable `pyths_<stem>.mjs` in the shared OS temp dir. A fixed
     // name is a TOCTOU / symlink target (a local attacker pre-creates it to
     // force an arbitrary overwrite or to substitute the code node executes).
+    // Round-5: hold the TempDir HANDLE — cleanup is RAII-bound, so every exit
+    // path below (including a failed `node` spawn `?`-return) removes the dir.
     let temp_dir = super::procutil::make_private_temp_dir("run")?;
     let stem = path.file_stem().unwrap().to_string_lossy();
-    let temp_file = temp_dir.join(format!("pyths_{}.mjs", stem));
-    let temp_map = temp_dir.join(format!("pyths_{}.mjs.map", stem));
+    let temp_file = temp_dir.path().join(format!("pyths_{}.mjs", stem));
+    let temp_map = temp_dir.path().join(format!("pyths_{}.mjs.map", stem));
 
     let js = if explain {
         // Emit source map so post-mortem can resolve stack frames back
@@ -75,7 +80,7 @@ pub fn run(
     // upward from the temp file's directory, so materialize a real
     // `pyths-runtime` package there — mirroring what `npm install
     // pyths-runtime` would produce — before spawning node.
-    pyths_runtime::materialize_runtime_package(&temp_dir)?;
+    pyths_runtime::materialize_runtime_package(temp_dir.path())?;
 
     super::output::info(&format!("Running {} via Node.js...", file), verbosity);
 
@@ -83,10 +88,9 @@ pub fn run(
     // the current directory, so a hostile `node.exe` planted in the project
     // root is never preferred (Windows `CreateProcess` otherwise searches cwd).
     // `PYTHS_NODE` may override the interpreter explicitly.
-    let node = super::procutil::resolve_program("node", Some("PYTHS_NODE")).ok_or_else(|| {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        "could not find `node` on PATH — install Node.js or set PYTHS_NODE to its path"
-    })?;
+    let node = super::procutil::resolve_program("node", Some("PYTHS_NODE")).ok_or(
+        "could not find `node` on PATH — install Node.js or set PYTHS_NODE to its path",
+    )?; // TempDir RAII cleans up on this early return
 
     let status = if explain {
         // Capture stderr so we can prepend a Python-flavored explanation
@@ -113,8 +117,9 @@ pub fn run(
     };
 
     // Clean up the whole private temp directory (mjs, map, materialized
-    // runtime package, and anything else that landed inside).
-    let _ = std::fs::remove_dir_all(&temp_dir);
+    // runtime package, and anything else that landed inside). RAII: the drop
+    // also runs on every earlier `?`-return, incl. a failed `node` spawn.
+    drop(temp_dir);
 
     if !status.success() {
         return Err("Node.js execution failed".into());

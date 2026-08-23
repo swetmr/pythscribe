@@ -102,3 +102,5 @@ export class Router {
         return this._notFound ? { handler: this._notFound, params: {} } : null;
     }
 }
+
+//# sourceMappingURL=router.js.map

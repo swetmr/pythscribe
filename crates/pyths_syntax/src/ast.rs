@@ -180,6 +180,9 @@ pub enum ExprKind {
     /// String literal
     StringLiteral(String),
 
+    /// Bytes literal: `b'...'` — decoded code points narrowed to bytes.
+    BytesLiteral(Vec<u8>),
+
     /// F-string: `f"hello {name}"`
     FString { parts: Vec<FStringPart> },
 

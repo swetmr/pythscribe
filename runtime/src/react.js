@@ -127,3 +127,5 @@ export function style(obj) {
 export function classes(...args) {
     return args.filter(Boolean).join(" ");
 }
+
+//# sourceMappingURL=react.js.map

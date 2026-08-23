@@ -16,11 +16,12 @@ Language is deeply connected to how human beings operate and feel, the syntax, s
 matter as much as aesthetics. PythScribe is designed to eliminate the syntactic struggle and reduce cognitive load for python developers who can now pick up frontend work in a shorter time by just learning React or Next (the framework matters more than the language).
 
 As is often the case, the more elegant way is also the more concise. PythScribe delivers **up to ~25%
-token savings** versus regular JavaScript/TypeScript — its inherent conciseness (**−15.1%** vs React+TS on
-cl100k) plus the optional `.psc` compression layer (**+8.9–9.3%** on idiomatic code), and, for AI-emitted
-code, a measured generation-token reduction with **per-model medians of 7–25%** (pooled **20.1%**, 95% CI
-14.9–25.2%; see below) — while also incorporating useful operators like optional chaining and nullish
-coalescing. It can be useful for enterprises/startups looking to cut down on token costs.
+token savings** versus regular JavaScript/TypeScript — from its inherent conciseness plus the optional
+`.psc` compression layer, and, for AI-emitted code, a measured generation-token reduction (the precise
+per-model figures, medians, and confidence intervals are in the [`.psc` section below](#psc-an-llm-oriented-ir)
+and the [compression paper](https://doi.org/10.5281/zenodo.21386779)) — while also incorporating useful
+operators like optional chaining and nullish coalescing. It can be useful for enterprises/startups looking
+to cut down on token costs.
 
 The hybrid compilation to JS and WASM will serve well in compute-heavy and edge/serverless deployments.
 
@@ -42,7 +43,7 @@ Syntax is half the story; the other half is **semantics**. On every axis where J
 | **Missing key** | silent `undefined` | `KeyError` — fails loud |
 | **Equality** | `==` coercion (`[] == ![]` is `true`) | Python's `==` and truthiness |
 
-Each row is a place a naive Python→JS transpile *silently breaks*. Several of these behaviors are proved in the verified core over their covered fragment — for example, astral-string indexing corrected to code-point behavior, and WASM `i64` arithmetic equal to the wrapped Python value — and all of them are exercised by the CPython differential corpus; the naive translation demonstrably differs on the listed cases (naive JS `.indexOf` returns UTF-16, not code-point, offsets once an astral character precedes the match; native 32-bit `<<` cannot compute `1 << 40`). This matters most for **real-world text and LLM-generated content** — emoji, mixed scripts, non-BMP characters, where JS's UTF-16 indexing quietly corrupts strings and counts — and for data/numeric work where exact integers, banker's rounding, value-ordered sorts, and fail-loud collections prevent silent bugs. You write Python, you get Python's behavior, compiled to the browser and edge — correct semantics are the *default*, checked by differential testing and, for the covered fragments, by proof, rather than left to remembering `Array.from` / `BigInt` / a comparator / an explicit `Map`. (Honest caveats: **fractional** float arithmetic and transcendentals follow IEEE-754 in both — only the safe-integer float domain is proved exact so far; and the correctness helpers carry a runtime cost — both documented, not hidden.)
+Each row is a place a naive Python→JS transpile *silently breaks*. Several of these behaviors are proved in the verified core over their covered fragment — for example, astral-string indexing corrected to code-point behavior, and WASM `i64` arithmetic equal to the wrapped Python value — and all of them are exercised by the CPython differential corpus; the naive translation demonstrably differs on the listed cases (naive JS `.indexOf` returns UTF-16, not code-point, offsets once an astral character precedes the match; native 32-bit `<<` cannot compute `1 << 40`). This matters most for **real-world text and LLM-generated content** — emoji, mixed scripts, non-BMP characters, where JS's UTF-16 indexing quietly corrupts strings and counts — and for data/numeric work where exact integers, banker's rounding, value-ordered sorts, and fail-loud collections prevent silent bugs. The output is **readable Python syntax with CPython-faithful semantics**, compiled to the browser and edge — correct semantics are the *default*, checked by differential testing and, for the covered fragments, by proof, rather than left to remembering `Array.from` / `BigInt` / a comparator / an explicit `Map`. In an era where code is generated more than hand-written, that is the point: the **syntax** stays readable for *review*, and the **semantics** stay faithful enough to *trust* what was generated. (Honest caveats: **fractional** float arithmetic and transcendentals follow IEEE-754 in both — only the safe-integer float domain is proved exact so far; and the correctness helpers carry a runtime cost — both documented, not hidden.)
 
 ---
 
@@ -75,18 +76,43 @@ pyths compile counter.ps -o counter.js
 - **React & Next.js** — `@component`, `@psx` (helper functions returning JSX), all React hooks via generic `use_*` rule, async server components, Suspense, `use()` (React 19), `"use client"`/`"use server"` directives
 - **Ecosystem libraries** — TanStack Query, React Router (+DOM), React Hook Form, Framer Motion, Zustand, Jotai, Recoil, XState, MobX, SWR all natively recognized; arbitrary npm packages resolve via the kebab-case fallback (`from foo_bar import x` → `import { x } from "foo-bar"`)
 - **Type system** — full inference, `pyths check`, bundled `.pyi` stubs for React/Next.js/React-Router/TanStack Query so imports bind to declared `Callable`/class types at check time
-- **TypeScript interop** — `pyths compile --dts` emits a `.d.ts` declaration for every module, so your typed `.ps` exports drop into any TypeScript/JS codebase with full types at the boundary — the same `.js` + `.d.ts` shape typed npm libraries ship in
+- **TypeScript interop** — every module compiles with a `.d.ts` declaration **by default** (`--no-dts` to skip), so your typed `.ps` exports drop into any TypeScript/JS codebase with full types at the boundary — the same `.js` + `.d.ts` shape typed npm libraries ship in
 - **`@dataclass`** — Auto-generates constructor with type validation, `toString()`, `__eq__()`, `toDict()`/`fromDict()`, frozen support; constructors accept both positional and `{kwargs}` forms
 - **Standard library** — `math`, `json`, `itertools`, `functools`, `collections`, `random`, `datetime`, `re`, `decimal`, `fractions` (exact arithmetic: `Decimal('0.1') + Decimal('0.2') == Decimal('0.3')` is `True`, exactly like CPython — BigInt coefficient/exponent, not a float wrapper)
 - **Web / edge modules** — `fetch`, `storage`, `router` (browser APIs); plus `pyths.web`'s `handler` / `Response` for a Cloudflare-Worker entry (`__default__ = handler(fetch)`)
 - **Tooling** — `fmt`, `lint`, `test`, `bundle`, `cache` — a complete development workflow; Vite + Next.js plugins ship with **React Fast Refresh** (state-preserving HMR for `.ps`) and source maps
-- **WASM auto-routing** — `--target js+wasm` automatically routes pure numeric functions to WebAssembly while DOM/React code stays JS; the universal glue runs in browsers, Cloudflare Workers, Deno, and Node from a single artifact (numeric bundles import the DOM-free `pyths-runtime/core` subpath)
+- **WASM auto-routing (the default)** — pure numeric functions are **automatically routed to WebAssembly** while DOM/React code stays JS; this is the no-flag `pyths compile` default (`--target js` pins JS-only). The universal glue runs in browsers, Cloudflare Workers, Deno, and Node; numeric bundles import the DOM-free `pyths-runtime/core` subpath. *(The Vite/Next plugins emit JS-only for now — carrying WASM sidecars through the bundler is on the roadmap.)*
 - **Fast** — Rust-native compiler; ~124,000 lines/second; sub-millisecond compile times for typical files
 - **Source maps** — `--sourcemap` for debugging in browser DevTools
 - **Optional `.psc` compression** — opt-in compressed superset for AI-emitted code, **8.9% o200k / 9.3% cl100k additional token savings** on idiomatic code, on top of PythScribe's inherent reduction; `.ps` users see zero behavior change. See [`docs/compression.md`](docs/compression.md).
-- **Tested** — 2,000+ automated checks across 12 layers: 1,432 Rust unit/integration tests, a **1,318-entry** CPython semantic differential corpus (fully green, and cross-checked on a second JS engine — 1,317/1,318 byte-identical across V8 and JavaScriptCore), the 24 Livermore kernels x {cpython, js, wasm}, a Lark grammar acceptor gate (484/485 accept, 1579/1579 reject), tri-track clone DOM parity (279 tests, React as oracle), browser pixel + DOM-bytecode parity, Node auto-routing E2E, panic-resistance fuzzing, machine-checked Lean proofs bound to the shipping compiler, and a per-compilation subscript-routing certificate. `cargo test --workspace`: **1,432 passing, 0 failing**.
+- **Tested** — **4,000+ automated checks across 12 layers**: 1,973 Rust unit/integration tests, a **1,376-entry** CPython semantic differential corpus (fully green, cross-checked on a second JS engine — 1,375/1,376 identical across V8 and JavaScriptCore), the 24 Livermore kernels × {cpython, js, wasm}, a grammar acceptor gate, tri-track clone DOM parity (React as oracle), browser pixel + DOM-bytecode parity, Node auto-routing E2E, panic-resistance fuzzing, machine-checked Lean proofs bound to the shipping compiler, and a per-compilation subscript-routing certificate. `cargo test --workspace`: **green, 0 failing**. Full per-layer counts are in the [assurance paper](https://doi.org/10.5281/zenodo.21875694).
 
 > **Technical summary** — see [`technical_summary.md`](./technical_summary.md) for a 10-minute snapshot of where the project stands toward production parity with React + Next.js (gaps documented). Written for engineers, contributors, and anyone evaluating the toolchain.
+
+## Assurance scope — what's *proved*, *tested*, and *trusted*
+
+PythScribe is agent-written, and this README won't pretend otherwise. Every claim above sits in exactly one of three tiers, and the boundaries are published in [`TRUST.md`](./TRUST.md) — where each guarantee names its enforcement mechanism and the command that regenerates its evidence. The full write-up is the [assurance paper](https://doi.org/10.5281/zenodo.21875694).
+
+| Tier | What's in it | How it's enforced |
+|---|---|---|
+| **Proved** (Lean 4, `verification/`) | `.psc`→`.ps` expansion (determinism, zone-safety, alias round-trip); subscript-routing read-safety plus a per-compilation certificate checker proved *sound and complete* against a model of the emitter; slice/index in-bounds safety; truthiness; `==` as an equivalence relation; WASM scratch non-interference; identifier-naming soundness (no Python identifier ever emits a bare JS reserved word); and statement/expression **preservation waves** over selected language fragments (arithmetic, bitwise, string methods, dict methods) | `lake build` + pinned `#print axioms`, in CI |
+| **Tested** (oracle-diverse — what proof doesn't reach) | Runtime semantics vs **CPython**: a 1,376-entry differential corpus, fully green and cross-checked on a second JS engine (V8 + JavaScriptCore — 1,375/1,376 identical); 24 Livermore kernels ×{JS, WASM}; React-oracle DOM-parity tests; pixel/DOM parity; a grammar acceptor gate; 1,973 Rust tests; panic fuzzing | `cargo test --workspace` + the differential/parity CI jobs |
+| **Trusted** (audited, not proved) | The `.ps`→JS/WASM codegen *body fragment*; the Rust byte-scanner's refinement of the proved Lean classifier; the type-inference evidence feeding routing certificates; the runtime JS; and the toolchain (rustc, the Lean kernel, Node, CPython-as-oracle) | Audited + differentially bound — the honest floor |
+
+The value here is **oracle diversity and honest scope accounting**, not a claim of end-to-end proof. Proof covers selected fragments; everything else is held by the CPython differential and parity oracles; the rest is trusted and named as such.
+
+## What doesn't work yet (honest scope)
+
+The correctness story is scoped, not universal. Where PythScribe stops:
+
+- **Floating-point is IEEE-754, not exact.** Only the *safe-integer* float domain (`|v| ≤ 2⁵³`) is proved exact. `0.1 + 0.2` is still `0.30000000000000004`, and transcendentals (`sin`, `exp`, …) follow the platform's IEEE-754 — exactly as in JavaScript. PythScribe fixes the missing *integer* type, not float rounding.
+- **Preservation is proved over *fragments*, not the whole language.** The Lean waves cover selected fragments and are bound to the shipping compiler by differential testing, not proved end-to-end. Everything outside those fragments rests on the CPython corpus, not on proof.
+- **The FFI boundary is untyped at runtime.** Values crossing in from the DOM, `JSON.parse`, or third-party JS are untyped and unchecked — PythScribe's semantics govern *your* code, not data handed to it by foreign JS.
+- **Generic npm interop works, but is untyped.** Any npm package resolves (30+ recognized libraries plus a kebab-case fallback) and you write the real JS member names — but foreign libraries degrade to `unknown` at the type boundary (typed `.pyi` stubs via `stubgen` are in progress).
+- **Some Python surface is deliberately narrower than CPython.** printf-style `%`-formatting raises `NotImplementedError` (use an f-string); a few stdlib method corners and language features remain partial. `technical_summary.md` tracks the gaps toward full React + Next.js parity.
+- **WASM is for pure-numeric functions only.** Auto-routing sends only pure numeric functions to WebAssembly; anything with DOM access, effects, or objects stays on the JS path.
+
+None of these are hidden in the codebase — they are the same boundaries the [assurance paper](https://doi.org/10.5281/zenodo.21875694) draws. Bugs in the trusted surface are expected; the append-only defect ledger and per-file regeneration commands are how they get absorbed in the open.
 
 ## PythScribe vs TypeScript
 
@@ -96,10 +122,13 @@ TypeScript checks types at compile time, then **erases them** — so JavaScript'
 |---|---|---|
 | No integer type (precision past 2⁵³) | ✗ `number` is still IEEE-754 float | ✓ real arbitrary-precision `int` — `2**53 + 1` → `9007199254740993`, exact |
 | Coercion (`[] + {}`, `1 + "1"`) | ◐ typed at compile time, **coerces at runtime** | ✓ `[] + []` is `[]`; `1 + "1"` is a type error, not `"11"` |
-| Silent `undefined` / `NaN` | ◐ runtime values stay silent | ✓ fails loud — `xs[10]` → `IndexError`, `d["x"]` → `KeyError` |
-| Automatic Semicolon Insertion | ✗ same JS rules | ✓ gone — you write Python |
+| Silent `undefined` / `NaN` | ◐ runtime values stay silent | ✓ fails loud — `xs[10]` → `IndexError`, `d["x"]` → `KeyError`, and **arithmetic on a missing value** `None * x` → `TypeError` (where JS/TS silently yield `NaN` and propagate it) |
+| Automatic Semicolon Insertion | ✗ same JS rules | ✓ gone — Python syntax, no ASI |
+| 32-bit bitwise truncation / lossy `**` | ✗ same JS (`-1 & x` wraps; `2**60` is a float) | ✓ infinite two's-complement bitwise; exact integer `**` |
 
-**Honestly:** PythScribe fixes the missing *integer* type, **not** floating-point rounding — `0.1 + 0.2` is still `0.30000000000000004` (that's IEEE-754, not a language defect). And it can't police the FFI boundary: data from the DOM, `JSON.parse`, or third-party JS is untyped at runtime. The full, TS-literate breakdown — which of JavaScript's classic ten defects actually survive TypeScript, and where PythScribe does *not* differentiate — is in [**docs/pythscribe-vs-typescript.md**](docs/pythscribe-vs-typescript.md). *(Every behavioral claim above is exercised by the CPython differential test corpus.)*
+**And it's not just the type system that stops at the boundary — TypeScript's does, and ours doesn't.** A TS interface is *erased*: `await res.json() as User` is a lie the compiler believes, `any` from one untyped import silently spreads, and every JS runtime footgun survives the type check. PythScribe carries semantics into the runtime — and the arithmetic cases (`//`, `%`, `**`, bitwise, integer precision) are **machine-proved in Lean**, not merely tested.
+
+**Honestly:** PythScribe fixes the missing *integer* type, **not** floating-point rounding — `0.1 + 0.2` is still `0.30000000000000004` (that's IEEE-754, not a language defect); and TS's strict null-checking is genuinely good — we don't claim that one. It can't police the FFI boundary either: data from the DOM, `JSON.parse`, or third-party JS is untyped at runtime. The full, TS-literate breakdown — which of JavaScript's classic ten defects actually survive TypeScript, and where PythScribe does *not* differentiate — is in [**docs/pythscribe-vs-typescript.md**](docs/pythscribe-vs-typescript.md). *(Every behavioral claim above is exercised by the CPython differential corpus; the arithmetic cases are additionally Lean-proved.)*
 
 ## `.psc`: an LLM-Oriented IR
 
@@ -113,7 +142,25 @@ Full study, methodology, and reproducibility artifact — *"A Compressed Model-F
 
 ## Installation
 
-Everything installs from npm — no Rust toolchain required. All packages are at **0.2.1**.
+Everything installs from npm — no Rust toolchain required (installs `@latest` by default; all packages share one version).
+
+### Add PythScribe to a project
+
+```bash
+npm install pythscribe
+```
+
+**That one package brings the whole chain** — the `pyths` compiler (with your platform's prebuilt native binary), the `pyths-runtime`, and the **React / Vite** plugin (`vite-plugin-pyths`) — so a React + Vite project is ready to compile `.ps` files.
+
+**Using Next.js?** It's fully supported — add its plugin alongside:
+
+```bash
+npm install pythscribe next-plugin-pyths
+```
+
+```bash
+pyths --version
+```
 
 ### Scaffold a new app (fastest)
 
@@ -122,29 +169,15 @@ npm create pyths-app@latest my-app
 cd my-app && npm install && npm run dev
 ```
 
-This generates a ready-to-run Next.js + PythScribe project with the compiler, runtime, and plugin already wired up.
+This scaffolds a ready-to-run **Next.js** + PythScribe app (compiler, runtime, and plugin wired up). For **React / Vite** instead, use `npm install pythscribe` in your own Vite project (above).
 
-### Or install into an existing project
+### Standalone scripts
 
-```bash
-# Compiler CLI — provides the `pyths` command (prebuilt native binary for your platform)
-npm install -g pythscribe@0.2.1
-
-# Runtime — required for any non-trivial code (builtins: len, range, enumerate, stdlib, …)
-npm install pyths-runtime@0.2.1
-
-# Bundler plugin — pick the one for your framework
-npm install -D vite-plugin-pyths@0.2.1     # Vite / React
-npm install -D next-plugin-pyths@0.2.1     # Next.js
-```
-
-`npm install -g pythscribe` pulls the right binary for your platform (Linux, macOS, Windows — x64 and arm64) as an optional dependency and gives you the `pyths` command:
+`pyths run app.ps` needs only the compiler — the runtime is built into the CLI, which pulls the right binary for your platform (Linux, macOS, Windows — x64 and arm64) as an optional dependency:
 
 ```bash
-pyths --version          # 0.2.1
+npm install -g pythscribe
 ```
-
-Standalone scripts (`pyths run …`) work with just the compiler — the runtime is built in. Framework projects also need `pyths-runtime` (imported by the compiled output) and the matching bundler plugin above.
 
 ### Build from source (alternative)
 
@@ -276,14 +309,16 @@ Global flags:
 ### `pyths compile`
 
 ```bash
-pyths compile app.ps                    # → app.js
+pyths compile app.ps                    # → app.js + app.d.ts (automatic routing:
+                                        #   a numeric kernel also emits app.wasm + app.glue.js)
+pyths compile app.ps --target js        # pin JS-only (no WASM sidecars)
+pyths compile app.ps --no-dts           # skip the .d.ts declaration
 pyths compile app.ps -o dist/app.js     # custom output path
-pyths compile app.ps --stdout           # print to stdout
+pyths compile app.ps --stdout           # print JS to stdout (single module, no sidecars)
 pyths compile app.ps --sourcemap        # emit app.js.map
-pyths compile app.ps --dts              # emit app.d.ts
 pyths compile app.ps --timings          # show per-phase timing
-pyths compile app.ps --target wasm      # compile numeric functions to .wasm
-pyths compile app.ps --target js+wasm   # emit both .js and .wasm
+pyths compile app.ps --target wasm      # compile numeric functions to .wasm only
+pyths compile app.ps --target js+wasm   # explicit JS + WASM (the default for kernel modules)
 ```
 
 ### `pyths check`
@@ -440,7 +475,7 @@ pyths/
 ## Development
 
 ```bash
-# Rust workspace — compiler, parser, type checker, WASM codegen, CLI (1,432 tests)
+# Rust workspace — compiler, parser, type checker, WASM codegen, CLI (1,973 tests)
 cargo test --workspace
 
 # Specific crate
@@ -457,7 +492,7 @@ node --test runtime/src/stdlib/decimal.test.mjs runtime/src/stdlib/fractions.tes
 # Format-spec differential vs CPython (~30; requires `python` on PATH)
 node --test crates/pyths_runtime/js/format_diff_test.mjs
 
-# CPython semantic differential corpus (1,318 entries, fully green vs CPython 3.12; requires `python` on PATH)
+# CPython semantic differential corpus (1,376 entries, fully green vs CPython 3.12; requires `python` on PATH)
 node tests/differential/run.mjs
 
 # Promise / async-JS interop suite (43, pinned expectations — CPython cannot oracle raw Promises)
@@ -483,7 +518,7 @@ cargo bench -p pyths_codegen_js
 cargo build --release
 ```
 
-Total: **2,000+ automated checks across 12 layers** (1,432 cargo + 1,318 differential + 24 Livermore x3 + 279 clone-parity + ~28 pixel/DOM parity + acceptor corpus + Lean proofs + certificate corpus). CI runs them on every push (`.github/workflows/ci.yml`), including the Lean `verification` job and the tri-track `clones` job; the panic-resistance fuzz harness lives in `crates/pyths_cli/tests/fuzz_inputs.rs`. A separate weekly fuzz cron (`.github/workflows/fuzz.yml`) runs coverage-guided `cargo-fuzz` targets from `fuzz/`.
+Total: **4,000+ automated checks across 12 layers** (1,973 cargo + 1,376 differential + 24 Livermore ×3 + clone-parity + pixel/DOM parity + acceptor corpus + Lean proofs + certificate corpus). CI runs them on every push (`.github/workflows/ci.yml`), including the Lean `verification` job and the tri-track `clones` job; the panic-resistance fuzz harness lives in `crates/pyths_cli/tests/fuzz_inputs.rs`. A separate weekly fuzz cron (`.github/workflows/fuzz.yml`) runs coverage-guided `cargo-fuzz` targets from `fuzz/`.
 
 The full assurance study behind these layers — oracle-diverse testing, per-compilation routing certificates, machine-checked Lean verification, and explicit trust accounting — is written up in *"Layered Assurance for an Agent-Written Python-to-JavaScript/WebAssembly Compiler"*: **https://doi.org/10.5281/zenodo.21875694**.
 

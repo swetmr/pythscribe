@@ -358,3 +358,5 @@ export function compile(pattern, flags) {
 export function escape(string) {
     return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+//# sourceMappingURL=re.js.map

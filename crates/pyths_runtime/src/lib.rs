@@ -163,6 +163,155 @@ pub fn runtime_package_files() -> &'static [(&'static str, &'static str)] {
             "src/stdlib/sys.js",
             include_str!("../../../runtime/src/stdlib/sys.js"),
         ),
+        (
+            "src/stdlib/cmath.js",
+            include_str!("../../../runtime/src/stdlib/cmath.js"),
+        ),
+        (
+            "src/stdlib/unicodedata.js",
+            include_str!("../../../runtime/src/stdlib/unicodedata.js"),
+        ),
+        // DX-4 (step-into): the sibling identity ignore-list maps — one per
+        // shipped `.js` above, so the materialized package mirrors the npm
+        // package exactly and DevTools can ignore-list the runtime wherever
+        // it is served from. Generated + guarded by
+        // `crates/pyths_cli/tests/runtime_maps.rs`.
+        (
+            "asyncio.js.map",
+            include_str!("../../../runtime/asyncio.js.map"),
+        ),
+        (
+            "src/index.js.map",
+            include_str!("../../../runtime/src/index.js.map"),
+        ),
+        (
+            "src/core.js.map",
+            include_str!("../../../runtime/src/core.js.map"),
+        ),
+        (
+            "src/dom.js.map",
+            include_str!("../../../runtime/src/dom.js.map"),
+        ),
+        (
+            "src/react.js.map",
+            include_str!("../../../runtime/src/react.js.map"),
+        ),
+        (
+            "src/classes.js.map",
+            include_str!("../../../runtime/src/classes.js.map"),
+        ),
+        (
+            "src/runtime.js.map",
+            include_str!("../../../runtime/src/runtime.js.map"),
+        ),
+        (
+            "src/types.js.map",
+            include_str!("../../../runtime/src/types.js.map"),
+        ),
+        (
+            "src/operators.js.map",
+            include_str!("../../../runtime/src/operators.js.map"),
+        ),
+        (
+            "src/web.js.map",
+            include_str!("../../../runtime/src/web.js.map"),
+        ),
+        (
+            "src/web/index.js.map",
+            include_str!("../../../runtime/src/web/index.js.map"),
+        ),
+        (
+            "src/web/fetch.js.map",
+            include_str!("../../../runtime/src/web/fetch.js.map"),
+        ),
+        (
+            "src/web/storage.js.map",
+            include_str!("../../../runtime/src/web/storage.js.map"),
+        ),
+        (
+            "src/web/router.js.map",
+            include_str!("../../../runtime/src/web/router.js.map"),
+        ),
+        (
+            "src/utils/tenacity.js.map",
+            include_str!("../../../runtime/src/utils/tenacity.js.map"),
+        ),
+        (
+            "src/stdlib/index.js.map",
+            include_str!("../../../runtime/src/stdlib/index.js.map"),
+        ),
+        (
+            "src/stdlib/math.js.map",
+            include_str!("../../../runtime/src/stdlib/math.js.map"),
+        ),
+        (
+            "src/stdlib/operator.js.map",
+            include_str!("../../../runtime/src/stdlib/operator.js.map"),
+        ),
+        (
+            "src/stdlib/json.js.map",
+            include_str!("../../../runtime/src/stdlib/json.js.map"),
+        ),
+        (
+            "src/stdlib/itertools.js.map",
+            include_str!("../../../runtime/src/stdlib/itertools.js.map"),
+        ),
+        (
+            "src/stdlib/functools.js.map",
+            include_str!("../../../runtime/src/stdlib/functools.js.map"),
+        ),
+        (
+            "src/stdlib/collections.js.map",
+            include_str!("../../../runtime/src/stdlib/collections.js.map"),
+        ),
+        (
+            "src/stdlib/random.js.map",
+            include_str!("../../../runtime/src/stdlib/random.js.map"),
+        ),
+        (
+            "src/stdlib/datetime.js.map",
+            include_str!("../../../runtime/src/stdlib/datetime.js.map"),
+        ),
+        (
+            "src/stdlib/re.js.map",
+            include_str!("../../../runtime/src/stdlib/re.js.map"),
+        ),
+        (
+            "src/stdlib/decimal.js.map",
+            include_str!("../../../runtime/src/stdlib/decimal.js.map"),
+        ),
+        (
+            "src/stdlib/fractions.js.map",
+            include_str!("../../../runtime/src/stdlib/fractions.js.map"),
+        ),
+        (
+            "src/stdlib/copy.js.map",
+            include_str!("../../../runtime/src/stdlib/copy.js.map"),
+        ),
+        (
+            "src/stdlib/string.js.map",
+            include_str!("../../../runtime/src/stdlib/string.js.map"),
+        ),
+        (
+            "src/stdlib/heapq.js.map",
+            include_str!("../../../runtime/src/stdlib/heapq.js.map"),
+        ),
+        (
+            "src/stdlib/bisect.js.map",
+            include_str!("../../../runtime/src/stdlib/bisect.js.map"),
+        ),
+        (
+            "src/stdlib/sys.js.map",
+            include_str!("../../../runtime/src/stdlib/sys.js.map"),
+        ),
+        (
+            "src/stdlib/cmath.js.map",
+            include_str!("../../../runtime/src/stdlib/cmath.js.map"),
+        ),
+        (
+            "src/stdlib/unicodedata.js.map",
+            include_str!("../../../runtime/src/stdlib/unicodedata.js.map"),
+        ),
     ]
 }
 
@@ -235,5 +384,33 @@ mod tests {
             "exports parse looks broken (only {} targets found)",
             checked
         );
+    }
+
+    /// DX-4 drift guard: every materialized `.js` must carry its sibling
+    /// identity ignore-list `.js.map` (and that map must mark itself
+    /// ignore-listed) — adding a runtime module without its map would ship a
+    /// file DevTools steps INTO, silently regressing the step-into DX.
+    #[test]
+    fn every_js_has_ignore_listed_sibling_map() {
+        let files = runtime_package_files();
+        let listed: std::collections::HashSet<&str> = files.iter().map(|(p, _)| *p).collect();
+        for (path, _) in files {
+            if !path.ends_with(".js") {
+                continue;
+            }
+            let map_path = format!("{}.map", path);
+            assert!(
+                listed.contains(map_path.as_str()),
+                "{} has no sibling {} in runtime_package_files()",
+                path,
+                map_path
+            );
+            let map = files.iter().find(|(p, _)| *p == map_path).unwrap().1;
+            assert!(
+                map.contains("\"ignoreList\":[0]") && map.contains("\"x_google_ignoreList\":[0]"),
+                "{} is not an ignore-list identity map",
+                map_path
+            );
+        }
     }
 }

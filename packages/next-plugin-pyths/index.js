@@ -1,6 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolvePythsCommand } from "./pyths-safe.js";
 
 /**
  * Next.js plugin for PythScribe (.ps and .psc files).
@@ -29,10 +28,25 @@ import { resolve } from "node:path";
  * @returns {object} Modified Next.js config
  */
 export default function withPyths(nextConfig = {}, pluginOptions = {}) {
-    const pythsBin = pluginOptions.pythsBin || findPythsBinary();
+    // SECURITY (#1, CWE-426): resolve the compiler to an ABSOLUTE command here,
+    // once, and pass it down to the loader. A bare name like "pyths" is resolved
+    // by the platform at spawn time and that search can include the CURRENT
+    // DIRECTORY, so a hostile repo's `./pyths.exe` would be selected. Loader
+    // options must stay JSON-serializable for Turbopack, so the command is
+    // carried as a string plus a string[] of leading args.
+    const { command, prefixArgs } = resolvePythsCommand({
+        pythsBin: pluginOptions.pythsBin,
+    });
     const reactRefresh = pluginOptions.reactRefresh ?? "auto";
     const loaderPath = resolve(import.meta.dirname || process.cwd(), "loader.js");
-    const loaderOptions = { pythsBin, reactRefresh };
+    // P7: propagate emitDts so `withPyths({}, { emitDts: false })` actually
+    // suppresses the `.d.ps.ts` write (the loader defaults it to true otherwise).
+    const loaderOptions = {
+        pythsBin: command,
+        pythsPrefixArgs: prefixArgs,
+        reactRefresh,
+        emitDts: pluginOptions.emitDts,
+    };
 
     return {
         ...nextConfig,
@@ -104,26 +118,6 @@ export default function withPyths(nextConfig = {}, pluginOptions = {}) {
     };
 }
 
-/**
- * Find the pyths binary.
- */
-function findPythsBinary() {
-    // SECURITY (CWE-426 untrusted search path): do NOT probe cwd-relative `target/`
-    // paths by default, and NEVER execute a candidate just to test it — a hostile
-    // project could ship `./target/release/pyths` and gain code execution the moment
-    // a developer runs the build. Resolution order:
-    //   1. explicit PYTHS_BIN env (trusted, user-set)
-    //   2. opt-in local dev build via PYTHS_DEV_BIN (existence check only, no exec)
-    //   3. the `pyths` command on PATH / node_modules/.bin (npm puts .bin on PATH)
-    if (process.env.PYTHS_BIN) return process.env.PYTHS_BIN;
-    if (process.env.PYTHS_DEV_BIN) {
-        for (const rel of [
-            "target/release/pyths", "target/release/pyths.exe",
-            "target/debug/pyths", "target/debug/pyths.exe",
-        ]) {
-            const p = resolve(process.cwd(), rel);
-            if (existsSync(p)) return p;
-        }
-    }
-    return "pyths";
-}
+// Compiler resolution now lives in `pyths-safe.js::resolvePythsCommand`, which
+// always yields an ABSOLUTE command (#1, CWE-426) and is shared byte-for-byte
+// with vite-plugin-pyths.

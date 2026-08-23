@@ -56,6 +56,20 @@ def main (args : List String) : IO UInt32 := do
       IO.eprintln "regenerate with: lake exe expanddiff --print-wasm-admission-table > verification/wasm-admission-table.txt"
       IO.eprintln "then make cert.rs agree (cargo test wasm_admission_table_matches_committed_fixture)"
       return 1
+  | ["--print-marshalling-table"] =>
+    IO.print PythExpandVerify.marshallingTable
+    return 0
+  | ["--check-marshalling-table", path] =>
+    let fixture ← IO.FS.readFile path
+    let normalized := (fixture.replace "\r\n" "\n")
+    if normalized = PythExpandVerify.marshallingTable then
+      IO.println "marshalling table: Lean model == committed fixture"
+      return 0
+    else
+      IO.eprintln "marshalling table MISMATCH: the Lean MarshalTable model disagrees with verification/marshalling-table.txt"
+      IO.eprintln "regenerate with: lake exe expanddiff --print-marshalling-table > verification/marshalling-table.txt"
+      IO.eprintln "then make bridge.rs agree (cargo test marshalling_table_matches_committed_fixture)"
+      return 1
   | ["--kwargs"] => runTier PythExpandVerify.tierB
   | ["--hooks"] => runTier PythExpandVerify.tierHooks
   | ["--idioms"] => runTier PythExpandVerify.tierE
@@ -64,6 +78,7 @@ def main (args : List String) : IO UInt32 := do
   | _ =>
     IO.eprintln "usage: expanddiff [--kwargs | --hooks | --idioms | --tiera \
       | --print-route-table | --check-route-table <path> \
-      | --print-wasm-admission-table | --check-wasm-admission-table <path>] \
+      | --print-wasm-admission-table | --check-wasm-admission-table <path> \
+      | --print-marshalling-table | --check-marshalling-table <path>] \
       (default: stdin→stdout dict expansion)"
     return 2

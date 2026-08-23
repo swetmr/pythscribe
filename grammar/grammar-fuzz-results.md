@@ -7,7 +7,7 @@ pip install lark
 cargo build --release --workspace
 
 # headline numbers (needs the external held-out corpus)
-python scripts/grammar-fuzz.py --generate 10000 --extra-corpus ../reference-app
+python scripts/grammar-fuzz.py --generate 10000 --extra-corpus <path-to-held-out-corpus>
 
 # CI gate (hermetic; in-repo corpora + corpus-free generation)
 python scripts/grammar-fuzz.py --generate 2000 --fail-on-new
@@ -59,9 +59,8 @@ authoritative parser and discarded if the parser rejects it, so a buggy mutation
 can never be scored as a grammar false-reject.
 
 The grammar was developed against the in-repo corpora, so measuring only there
-would be measuring on the training set. The external corpus (the reference-app
-repo: its `.ps` sources and the generation-eval completions — never seen by the
-grammar gate) is deterministically halved by SHA-1 of the path:
+would be measuring on the training set. The external held-out corpus (real `.ps` sources and generation-eval
+completions — never seen by the grammar gate) is deterministically halved by SHA-1 of the path:
 
 | Split | What it is | False rejects |
 |---|---|---|

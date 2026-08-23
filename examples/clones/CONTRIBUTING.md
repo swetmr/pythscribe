@@ -91,7 +91,7 @@ examples/clones/
   override).
 - `pyths-runtime` / `vite-plugin-pyths` / `next-plugin-pyths` are `file:` deps pointing at
   this repo's `runtime/` and `packages/*` — never floated to a registry version. See the
-  root-repo CLAUDE.md "pin, don't float" discipline if you're touching these.
+  repo's "pin, don't float" discipline if you're touching these.
 - Next's `turbopack.root` is set to the **repo root** (`examples/clones/next/next.config.mjs`
   resolves `../../..`), not just `examples/clones/`, so Turbopack can follow the `file:`
   symlinks into `runtime/`/`packages/` AND resolve relative imports that reach up into

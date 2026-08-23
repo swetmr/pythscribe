@@ -159,6 +159,22 @@ struct ClosureSig {
     ret: Option<WasmType>,
 }
 
+/// B1: the branch targets of ONE enclosing loop, recorded as ABSOLUTE label
+/// indices (the value of `FuncContext::block_depth` at the instant the label
+/// was opened). `break`/`continue` compute their `br` RELATIVE depth from the
+/// current `block_depth` at the branch site, so they are correct under any
+/// number of intervening structured blocks (`if`, `try`, nested loops) — the
+/// old hardcoded `Br(1)`/`Br(0)` were only correct directly in the loop body.
+#[derive(Debug, Clone, Copy)]
+struct LoopLabels {
+    /// The `block` wrapping the loop — `break` branches to its end.
+    break_abs: u32,
+    /// The label `continue` branches to: the `loop` header for `while`
+    /// (re-tests the condition), or the body-wrapping `block` for `for`
+    /// (falls through to the increment, then back to the header).
+    continue_abs: u32,
+}
+
 /// Per-function compilation context.
 struct FuncContext {
     /// Local variables: name â†’ (local index, WASM type)
@@ -167,8 +183,15 @@ struct FuncContext {
     next_local: u32,
     /// Return type (None for void functions)
     return_type: Option<WasmType>,
-    /// Loop nesting depth for break/continue
-    loop_depth: u32,
+    /// B1: number of currently-open structured labels (block/loop/if) that
+    /// enclose the current emission point INSIDE the function body. Every
+    /// statement-level structured-block emitter must bracket its labels with
+    /// `push_label`/`pop_label` so branch depths computed against this are
+    /// correct by construction. (Expression-internal blocks that open and
+    /// close without emitting statements inside need not be tracked.)
+    block_depth: u32,
+    /// B1: enclosing-loop label stack (innermost last) for break/continue.
+    loop_labels: Vec<LoopLabels>,
     /// Pre-allocated i32 temp locals for string operation internals (8 locals)
     str_temps: Vec<u32>,
     /// Pre-allocated i32 save locals for nested string expression results (4 locals)
@@ -180,6 +203,14 @@ struct FuncContext {
     /// (`rh[ir[k]]`) each take their own pair. A single fixed pair
     /// was the Livermore k14 silent-miscompile (clobbered container).
     sub_scratch: Vec<(u32, u32)>,
+    /// CVE-2026-15903 fix (F3/F4): pre-allocated i64 scratch PAIRS
+    /// (normalized-index, length) for the UNCONDITIONAL list-subscript bounds
+    /// check, indexed by `sub_depth` in lockstep with `sub_scratch`. The check
+    /// must test the FULL i64 index BEFORE the `i32.wrap_i64` narrowing, so it
+    /// needs an i64 home for the (negative-normalized) index and the length;
+    /// nested reads each take their own pair for the same reason `sub_scratch`
+    /// is per-depth.
+    sub_scratch_i64: Vec<(u32, u32)>,
     /// Current list-subscript-read nesting depth.
     sub_depth: usize,
     /// Nesting depth of `try` blocks. When > 0, `raise` only sets __err_code
@@ -204,6 +235,34 @@ struct FuncContext {
 }
 
 impl FuncContext {
+    /// B1: record that a structured label (block/loop/if) is being opened.
+    /// Returns the label's ABSOLUTE index, to be stored and later resolved
+    /// against the current depth via `br_depth_to`.
+    fn push_label(&mut self) -> u32 {
+        let abs = self.block_depth;
+        self.block_depth += 1;
+        abs
+    }
+
+    /// B1: record that the most recently opened structured label is closed
+    /// (its `end` was emitted).
+    fn pop_label(&mut self) {
+        debug_assert!(self.block_depth > 0, "pop_label underflow");
+        self.block_depth -= 1;
+    }
+
+    /// B1: relative `br` depth from the current emission point to the label
+    /// with absolute index `abs` (which must still be open).
+    fn br_depth_to(&self, abs: u32) -> u32 {
+        debug_assert!(
+            abs < self.block_depth,
+            "br target label {} is not open (depth {})",
+            abs,
+            self.block_depth
+        );
+        self.block_depth - 1 - abs
+    }
+
     fn get_or_alloc_local(&mut self, name: &str, ty: WasmType) -> u32 {
         if let Some(&(idx, _)) = self.locals.get(name) {
             return idx;
@@ -227,6 +286,10 @@ impl FuncContext {
         for (l, r) in &self.sub_scratch {
             s.push(*l);
             s.push(*r);
+        }
+        for (n, l) in &self.sub_scratch_i64 {
+            s.push(*n);
+            s.push(*l);
         }
         s.extend(self.ck_i64.iter().copied());
         s.extend(self.pw_i64.iter().copied());
@@ -441,8 +504,20 @@ impl WasmEmitter {
                     Self::collect_typed_locals(b, scope);
                 }
             }
-            StmtKind::While { body, .. } => Self::collect_typed_locals(body, scope),
-            StmtKind::For { body, .. } => Self::collect_typed_locals(body, scope),
+            // Loop-`else` (B1 family): the else body is real emitted code —
+            // every walker must traverse it (a dropped else once meant
+            // admitted-but-never-emitted statements).
+            StmtKind::While {
+                body, else_body, ..
+            }
+            | StmtKind::For {
+                body, else_body, ..
+            } => {
+                Self::collect_typed_locals(body, scope);
+                if let Some(b) = else_body {
+                    Self::collect_typed_locals(b, scope);
+                }
+            }
             _ => {}
         }
     }
@@ -493,13 +568,28 @@ impl WasmEmitter {
                     Self::collect_lambdas_with_scope(b, scope, out);
                 }
             }
-            StmtKind::While { test, body, .. } => {
+            StmtKind::While {
+                test,
+                body,
+                else_body,
+            } => {
                 Self::collect_lambdas_in_expr_scoped(test, scope, out);
                 Self::collect_lambdas_with_scope(body, scope, out);
+                if let Some(b) = else_body {
+                    Self::collect_lambdas_with_scope(b, scope, out);
+                }
             }
-            StmtKind::For { iter, body, .. } => {
+            StmtKind::For {
+                iter,
+                body,
+                else_body,
+                ..
+            } => {
                 Self::collect_lambdas_in_expr_scoped(iter, scope, out);
                 Self::collect_lambdas_with_scope(body, scope, out);
+                if let Some(b) = else_body {
+                    Self::collect_lambdas_with_scope(b, scope, out);
+                }
             }
             _ => {}
         }
@@ -787,13 +877,28 @@ impl WasmEmitter {
                     Self::collect_lambdas_in_stmts(b, out);
                 }
             }
-            StmtKind::While { test, body, .. } => {
+            StmtKind::While {
+                test,
+                body,
+                else_body,
+            } => {
                 Self::collect_lambdas_in_expr(test, out);
                 Self::collect_lambdas_in_stmts(body, out);
+                if let Some(b) = else_body {
+                    Self::collect_lambdas_in_stmts(b, out);
+                }
             }
-            StmtKind::For { iter, body, .. } => {
+            StmtKind::For {
+                iter,
+                body,
+                else_body,
+                ..
+            } => {
                 Self::collect_lambdas_in_expr(iter, out);
                 Self::collect_lambdas_in_stmts(body, out);
+                if let Some(b) = else_body {
+                    Self::collect_lambdas_in_stmts(b, out);
+                }
             }
             _ => {}
         }
@@ -1462,9 +1567,11 @@ impl WasmEmitter {
             locals: HashMap::new(),
             next_local: 1, // local 0 reserved for env_ptr
             return_type: lam.return_type.clone(),
-            loop_depth: 0,
+            block_depth: 0,
+            loop_labels: Vec::new(),
             str_temps: Vec::new(),
             sub_scratch: Vec::new(),
+            sub_scratch_i64: Vec::new(),
             sub_depth: 0,
             str_saves: Vec::new(),
             str_depth: 0,
@@ -1502,6 +1609,16 @@ impl WasmEmitter {
             ctx.locals
                 .insert(format!("__subi{}", i), (r, WasmType::I32));
             ctx.sub_scratch.push((l, r));
+            // CVE-2026-15903 (F3/F4): i64 bounds-check pair for this depth.
+            let bi = ctx.next_local;
+            ctx.next_local += 1;
+            ctx.locals
+                .insert(format!("__subn{}", i), (bi, WasmType::I64));
+            let bl = ctx.next_local;
+            ctx.next_local += 1;
+            ctx.locals
+                .insert(format!("__subL{}", i), (bl, WasmType::I64));
+            ctx.sub_scratch_i64.push((bi, bl));
         }
         // #358: overflow-check scratch (4 + 3 i64, 2 f64) — lambda bodies are
         // expressions and can contain checked int arithmetic too.
@@ -1632,11 +1749,25 @@ impl WasmEmitter {
                     self.collect_strings_from_stmts(eb);
                 }
             }
-            StmtKind::While { test, body, .. } => {
+            StmtKind::While {
+                test,
+                body,
+                else_body,
+            } => {
                 self.collect_strings_from_expr(test);
                 self.collect_strings_from_stmts(body);
+                if let Some(eb) = else_body {
+                    self.collect_strings_from_stmts(eb);
+                }
             }
-            StmtKind::For { body, .. } => self.collect_strings_from_stmts(body),
+            StmtKind::For {
+                body, else_body, ..
+            } => {
+                self.collect_strings_from_stmts(body);
+                if let Some(eb) = else_body {
+                    self.collect_strings_from_stmts(eb);
+                }
+            }
             // raise X("msg") and except handler bodies — collect strings from
             // the message argument so __err_msg can reference a pooled literal.
             StmtKind::Raise(Some(e), _) => self.collect_strings_from_expr(e),
@@ -1741,9 +1872,11 @@ impl WasmEmitter {
             locals: HashMap::new(),
             next_local: 0,
             return_type: to_wasm_type(&info.return_type),
-            loop_depth: 0,
+            block_depth: 0,
+            loop_labels: Vec::new(),
             str_temps: Vec::new(),
             sub_scratch: Vec::new(),
+            sub_scratch_i64: Vec::new(),
             sub_depth: 0,
             str_saves: Vec::new(),
             str_depth: 0,
@@ -1790,6 +1923,16 @@ impl WasmEmitter {
             ctx.locals
                 .insert(format!("__subi{}", i), (r, WasmType::I32));
             ctx.sub_scratch.push((l, r));
+            // CVE-2026-15903 (F3/F4): i64 bounds-check pair for this depth.
+            let bi = ctx.next_local;
+            ctx.next_local += 1;
+            ctx.locals
+                .insert(format!("__subn{}", i), (bi, WasmType::I64));
+            let bl = ctx.next_local;
+            ctx.next_local += 1;
+            ctx.locals
+                .insert(format!("__subL{}", i), (bl, WasmType::I64));
+            ctx.sub_scratch_i64.push((bi, bl));
         }
 
         // #358: pre-allocate overflow-check scratch locals. Binary checked
@@ -1961,8 +2104,16 @@ impl WasmEmitter {
                         .as_ref()
                         .is_some_and(|b| Self::body_calls_named(b, target))
             }
-            StmtKind::While { body, .. } | StmtKind::For { body, .. } => {
+            StmtKind::While {
+                body, else_body, ..
+            }
+            | StmtKind::For {
+                body, else_body, ..
+            } => {
                 Self::body_calls_named(body, target)
+                    || else_body
+                        .as_ref()
+                        .is_some_and(|b| Self::body_calls_named(b, target))
             }
             _ => false,
         }
@@ -2025,8 +2176,16 @@ impl WasmEmitter {
                         .as_ref()
                         .is_some_and(|b| Self::body_calls_sorted(b))
             }
-            StmtKind::While { body, .. } | StmtKind::For { body, .. } => {
+            StmtKind::While {
+                body, else_body, ..
+            }
+            | StmtKind::For {
+                body, else_body, ..
+            } => {
                 Self::body_calls_sorted(body)
+                    || else_body
+                        .as_ref()
+                        .is_some_and(|b| Self::body_calls_sorted(b))
             }
             _ => false,
         }
@@ -2493,29 +2652,79 @@ impl WasmEmitter {
                             let cont_ty = self.expr_type(container, ctx);
                             match &cont_ty {
                                 WasmType::PtrList(elem_ty) => {
+                                    // CVE-2026-15903 fix (F1): the store previously
+                                    // had NO bounds check on any branch — `a[i] = v`
+                                    // wrote to `ptr + 8 + i*elem_size` unconditionally,
+                                    // landing in neighbouring live objects for OOB
+                                    // `i`. Mirror the read path's UNCONDITIONAL,
+                                    // full-i64, negative-normalizing check and store
+                                    // only on the in-bounds branch.
                                     let elem_size = elem_ty.size_bytes();
-                                    // Compute address: container + 8 + index * elem_size
+                                    let elem = (**elem_ty).clone();
+                                    let (list_temp, idx_temp) =
+                                        match ctx.sub_scratch.get(ctx.sub_depth) {
+                                            Some(&p) => p,
+                                            None => {
+                                                debug_assert!(
+                                                    false,
+                                                    "sub_scratch pool undersized (store)"
+                                                );
+                                                func.instruction(&Instruction::Unreachable);
+                                                return;
+                                            }
+                                        };
+                                    let (idx64_temp, len64_temp) =
+                                        match ctx.sub_scratch_i64.get(ctx.sub_depth) {
+                                            Some(&p) => p,
+                                            None => {
+                                                debug_assert!(
+                                                    false,
+                                                    "sub_scratch_i64 pool undersized (store)"
+                                                );
+                                                func.instruction(&Instruction::Unreachable);
+                                                return;
+                                            }
+                                        };
+                                    // Save the list pointer (bump depth so nested
+                                    // reads in the container take their own scratch).
+                                    ctx.sub_depth += 1;
                                     self.emit_expr(container, ctx, func);
+                                    ctx.sub_depth -= 1;
+                                    func.instruction(&Instruction::LocalSet(list_temp));
+                                    // Raw index -> shared normalize + bounds check.
+                                    ctx.sub_depth += 1;
+                                    self.emit_expr(index, ctx, func);
+                                    ctx.sub_depth -= 1;
+                                    let idx_ty = self.expr_type(index, ctx);
+                                    self.emit_list_index_check(
+                                        list_temp, idx_temp, idx64_temp, len64_temp, &idx_ty,
+                                        func,
+                                    );
+                                    // if cond { raise/trap; skip store } else { store }
+                                    func.instruction(&Instruction::If(
+                                        wasm_encoder::BlockType::Empty,
+                                    ));
+                                    self.emit_index_oob(ctx, func);
+                                    func.instruction(&Instruction::Else);
+                                    // In-bounds address: ptr + 8 + i*elem_size.
+                                    func.instruction(&Instruction::LocalGet(list_temp));
                                     func.instruction(&Instruction::I32Const(8));
                                     func.instruction(&Instruction::I32Add);
-                                    self.emit_expr(index, ctx, func);
-                                    let idx_ty = self.expr_type(index, ctx);
-                                    if idx_ty != WasmType::I32 {
-                                        self.emit_convert(&idx_ty, &WasmType::I32, func);
-                                    }
+                                    func.instruction(&Instruction::LocalGet(idx_temp));
                                     if elem_size > 1 {
                                         func.instruction(&Instruction::I32Const(elem_size as i32));
                                         func.instruction(&Instruction::I32Mul);
                                     }
                                     func.instruction(&Instruction::I32Add);
-                                    // Push value
+                                    // Push value.
+                                    ctx.sub_depth += 1;
                                     self.emit_expr(value, ctx, func);
+                                    ctx.sub_depth -= 1;
                                     let val_ty = self.expr_type(value, ctx);
-                                    let elem = (**elem_ty).clone();
                                     if val_ty != elem {
                                         self.emit_convert(&val_ty, &elem, func);
                                     }
-                                    // Store
+                                    // Store.
                                     match &elem {
                                         WasmType::I64 => {
                                             func.instruction(&Instruction::I64Store(MemArg {
@@ -2539,6 +2748,7 @@ impl WasmEmitter {
                                             }));
                                         }
                                     }
+                                    func.instruction(&Instruction::End);
                                 }
                                 WasmType::PtrDict(_, _) => {
                                     // Dict subscript-set via __dict.set_str import.
@@ -2658,34 +2868,77 @@ impl WasmEmitter {
                 self.emit_if(test, body, elif_clauses, else_body, ctx, func);
             }
 
-            StmtKind::While { test, body, .. } => {
-                // block $break
-                //   loop $continue
-                //     <test>; i32.eqz; br_if $break
-                //     <body>
-                //     br $continue
-                //   end
-                // end
-                ctx.loop_depth += 1;
+            StmtKind::While {
+                test,
+                body,
+                else_body,
+            } => {
+                // block $break              ; `break` targets this (skips else)
+                //   [block $normal]         ; only with an `else` clause
+                //     loop $continue
+                //       <test>; i32.eqz; br_if $normal (or $break w/o else)
+                //       <body>
+                //       br $continue
+                //     end
+                //   [end]
+                //   [<else body>]           ; runs on NORMAL exit only —
+                // end                       ; a `break` branches PAST it
+                // B1: label depths are computed via the label stack, not
+                // hardcoded, so break/continue in the body are correct at
+                // any nesting depth (under if/try/nested loops).
+                // Loop-`else` (B1 family): the else body runs when the loop
+                // exits because the test became false, and is SKIPPED by
+                // `break` — standard Python semantics. The normal-exit test
+                // branches to the inner $normal block (falling into the else
+                // body), while `break` targets the outer $break block.
+                let has_else = else_body.is_some();
+                let break_abs = ctx.push_label();
                 func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+                let normal_abs = if has_else {
+                    let n = ctx.push_label();
+                    func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+                    n
+                } else {
+                    break_abs
+                };
+                let continue_abs = ctx.push_label();
                 func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+                ctx.loop_labels.push(LoopLabels {
+                    break_abs,
+                    continue_abs, // while: continue re-tests at the loop header
+                });
 
                 self.emit_condition(test, ctx, func);
                 func.instruction(&Instruction::I32Eqz);
-                func.instruction(&Instruction::BrIf(1)); // break to outer block
+                func.instruction(&Instruction::BrIf(ctx.br_depth_to(normal_abs)));
 
                 for s in body {
                     self.emit_stmt(s, ctx, func);
                 }
 
-                func.instruction(&Instruction::Br(0)); // continue to loop start
+                func.instruction(&Instruction::Br(ctx.br_depth_to(continue_abs)));
+                ctx.loop_labels.pop();
                 func.instruction(&Instruction::End); // end loop
+                ctx.pop_label();
+                if let Some(else_b) = else_body {
+                    func.instruction(&Instruction::End); // end $normal block
+                    ctx.pop_label();
+                    // loop_labels was popped above, so a `break` inside the
+                    // else body correctly binds to an OUTER loop (CPython).
+                    for s in else_b {
+                        self.emit_stmt(s, ctx, func);
+                    }
+                }
                 func.instruction(&Instruction::End); // end block
-                ctx.loop_depth -= 1;
+                ctx.pop_label();
             }
 
             StmtKind::For {
-                target, iter, body, ..
+                target,
+                iter,
+                body,
+                else_body,
+                ..
             } => {
                 // range() vs collection iteration
                 let is_range = matches!(
@@ -2694,26 +2947,43 @@ impl WasmEmitter {
                         if matches!(&callee.kind, ExprKind::Name(n) if n == "range")
                 );
                 if is_range {
-                    self.emit_for_range(target, iter, body, ctx, func);
+                    self.emit_for_range(target, iter, body, else_body, ctx, func);
                 } else {
                     let iter_ty = self.expr_type(iter, ctx);
                     if matches!(iter_ty, WasmType::PtrList(_)) {
-                        self.emit_for_list(target, iter, body, ctx, func);
+                        self.emit_for_list(target, iter, body, else_body, ctx, func);
                     } else {
                         // Fallback: try range path (gracefully degrades).
-                        self.emit_for_range(target, iter, body, ctx, func);
+                        self.emit_for_range(target, iter, body, else_body, ctx, func);
                     }
                 }
             }
 
             StmtKind::Break => {
-                // br to the outer block (1 = skip loop, reach block end)
-                func.instruction(&Instruction::Br(1));
+                // B1: branch to the nearest enclosing loop's break block,
+                // with the relative depth computed from the label stack —
+                // correct under any intervening if/try/nested blocks (the
+                // old hardcoded Br(1) assumed break sat DIRECTLY in the
+                // loop body and miscompiled otherwise).
+                if let Some(labels) = ctx.loop_labels.last().copied() {
+                    func.instruction(&Instruction::Br(ctx.br_depth_to(labels.break_abs)));
+                } else {
+                    // `break` outside a loop is a Python SyntaxError; the
+                    // parser rejects it upstream. Trap defensively rather
+                    // than emit a wild branch.
+                    func.instruction(&Instruction::Unreachable);
+                }
             }
 
             StmtKind::Continue => {
-                // br to the loop start (0 = loop header)
-                func.instruction(&Instruction::Br(0));
+                // B1: branch to the nearest enclosing loop's continue label
+                // (loop header for while; body-end block for for-loops so
+                // the increment still runs), depth from the label stack.
+                if let Some(labels) = ctx.loop_labels.last().copied() {
+                    func.instruction(&Instruction::Br(ctx.br_depth_to(labels.continue_abs)));
+                } else {
+                    func.instruction(&Instruction::Unreachable);
+                }
             }
 
             StmtKind::Pass => {
@@ -2800,6 +3070,86 @@ impl WasmEmitter {
     /// If inside a `try` block (`ctx.try_depth > 0`), only set the error code
     /// and let the surrounding try's dispatch decide whether to br to a
     /// handler or propagate.
+    /// CVE-2026-15903 fix — the shared, UNCONDITIONAL list-subscript bounds
+    /// check + Python negative-index normalization.
+    ///
+    /// On entry the raw index value (of `idx_ty`) is on top of the stack and
+    /// `list_temp` (i32) holds the list base pointer. On exit:
+    ///   * `idx_temp` (i32) holds the validated element index (only meaningful
+    ///     on the in-bounds path), and
+    ///   * a single i32 `cond` is left on the stack, nonzero exactly when the
+    ///     (normalized) index is out of range.
+    ///
+    /// The index is kept at full i64 width through the whole check, so an index
+    /// that would `i32.wrap_i64` back in-range (`a[2**32]`) can no longer slip
+    /// past it (F3). Negative indices are normalized from the end the way
+    /// CPython does (`a[-1]` → `a[len-1]`) rather than being rejected or landing
+    /// on the list header (F5). Because the surviving index satisfies
+    /// `0 <= i < len` against the *true* stored length, the later
+    /// `i * elem_size` address math cannot i32-wrap into another object (F4).
+    /// `(idx64_temp, len64_temp)` are the caller's per-`sub_depth` i64 scratch
+    /// pair, so nested reads never clobber this level's index/length.
+    fn emit_list_index_check(
+        &self,
+        list_temp: u32,
+        idx_temp: u32,
+        idx64_temp: u32,
+        len64_temp: u32,
+        idx_ty: &WasmType,
+        func: &mut Function,
+    ) {
+        // Raw index -> i64 (no narrowing yet).
+        if *idx_ty != WasmType::I64 {
+            self.emit_convert(idx_ty, &WasmType::I64, func);
+        }
+        func.instruction(&Instruction::LocalSet(idx64_temp));
+        // len -> i64 (the length header is a non-negative i32).
+        func.instruction(&Instruction::LocalGet(list_temp));
+        func.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        func.instruction(&Instruction::I64ExtendI32U);
+        func.instruction(&Instruction::LocalSet(len64_temp));
+        // Python negative normalization: if idx < 0 { idx += len }.
+        func.instruction(&Instruction::LocalGet(idx64_temp));
+        func.instruction(&Instruction::I64Const(0));
+        func.instruction(&Instruction::I64LtS);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        func.instruction(&Instruction::LocalGet(idx64_temp));
+        func.instruction(&Instruction::LocalGet(len64_temp));
+        func.instruction(&Instruction::I64Add);
+        func.instruction(&Instruction::LocalSet(idx64_temp));
+        func.instruction(&Instruction::End);
+        // Narrowed element index for the in-bounds path (exact once 0<=i<len).
+        func.instruction(&Instruction::LocalGet(idx64_temp));
+        func.instruction(&Instruction::I32WrapI64);
+        func.instruction(&Instruction::LocalSet(idx_temp));
+        // cond = (idx64 < 0) | (idx64 >= len64), all at full i64 width.
+        func.instruction(&Instruction::LocalGet(idx64_temp));
+        func.instruction(&Instruction::I64Const(0));
+        func.instruction(&Instruction::I64LtS);
+        func.instruction(&Instruction::LocalGet(idx64_temp));
+        func.instruction(&Instruction::LocalGet(len64_temp));
+        func.instruction(&Instruction::I64GeS);
+        func.instruction(&Instruction::I32Or);
+    }
+
+    /// Emit the out-of-bounds arm of a list-subscript bounds check. Either
+    /// raises a catchable `IndexError` (when the module carries error infra) or
+    /// traps (`unreachable`) — both are memory-safe and never touch the OOB
+    /// address. A trap is caught by the glue's `WebAssembly.RuntimeError`
+    /// fallback net and re-run on the exact JS twin, so the observable result is
+    /// still Python's `IndexError`.
+    fn emit_index_oob(&self, ctx: &FuncContext, func: &mut Function) {
+        if self.needs_errors {
+            self.emit_raise_code(exception_code("IndexError").unwrap(), ctx, func);
+        } else {
+            func.instruction(&Instruction::Unreachable);
+        }
+    }
+
     fn emit_raise_code(&self, code: i32, ctx: &FuncContext, func: &mut Function) {
         func.instruction(&Instruction::I32Const(code));
         func.instruction(&Instruction::GlobalSet(self.err_code_global_idx));
@@ -2859,9 +3209,14 @@ impl WasmEmitter {
         func: &mut Function,
     ) {
         // Open all blocks: outer $end, then n handler blocks (innermost first)
+        // B1: each is a structured label the body statements sit inside —
+        // track them so break/continue in the try body (or handler bodies)
+        // branch past them to the right enclosing-loop label.
         func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // $end
+        ctx.push_label();
         for _ in 0..handlers.len() {
             func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+            ctx.push_label();
         }
 
         // Emit body with err_code checks. raise inside try only sets err_code
@@ -2879,7 +3234,8 @@ impl WasmEmitter {
         // Emit each handler.
         for (i, h) in handlers.iter().enumerate() {
             func.instruction(&Instruction::End); // close $h_<i+1>
-                                                 // Clear err_code (handler caught it)
+            ctx.pop_label(); // B1: handler bodies sit one label shallower
+                             // Clear err_code (handler caught it)
             func.instruction(&Instruction::I32Const(0));
             func.instruction(&Instruction::GlobalSet(self.err_code_global_idx));
             // Emit handler body
@@ -2893,6 +3249,7 @@ impl WasmEmitter {
             }
         }
         func.instruction(&Instruction::End); // close $end
+        ctx.pop_label();
 
         // Post-try uncaught-error propagation: if err_code is still set after
         // exiting the try construct, this means an error occurred that no
@@ -2910,37 +3267,49 @@ impl WasmEmitter {
         // if err_code != 0: dispatch
         func.instruction(&Instruction::GlobalGet(self.err_code_global_idx));
         func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-        for (i, h) in handlers.iter().enumerate() {
-            // Determine the exception this handler catches
-            let exc_name = match &h.exc_type {
-                Some(e) => match &e.kind {
+        // Extract the exception name from a single `Name`/`Call(...)` form.
+        fn one_name(e: &Expr) -> String {
+            match &e.kind {
+                ExprKind::Name(n) => n.clone(),
+                ExprKind::Call { func: callee, .. } => match &callee.kind {
                     ExprKind::Name(n) => n.clone(),
-                    ExprKind::Call { func: callee, .. } => {
-                        if let ExprKind::Name(n) = &callee.kind {
-                            n.clone()
-                        } else {
-                            "Exception".to_string()
-                        }
-                    }
                     _ => "Exception".to_string(),
                 },
-                None => "Exception".to_string(),
+                _ => "Exception".to_string(),
+            }
+        }
+        for (i, h) in handlers.iter().enumerate() {
+            // Review finding 6: the set of exceptions this handler catches. A
+            // TUPLE handler `except (A, B):` catches EACH listed type — it is
+            // NOT a catch-all (the old `_ => "Exception"` treated it as one,
+            // so `except (ValueError, KeyError)` wrongly swallowed IndexError).
+            let names: Vec<String> = match &h.exc_type {
+                None => vec!["Exception".to_string()],
+                Some(e) => match &e.kind {
+                    ExprKind::Tuple(elts) => elts.iter().map(one_name).collect(),
+                    _ => vec![one_name(e)],
+                },
             };
             // We're inside the if (depth 0). Innermost handler is at depth 1,
             // next at depth 2, etc.
             let depth = (i as u32) + 1;
-            if exc_name == "Exception" {
-                // Catch-all
+            if names
+                .iter()
+                .any(|n| n == "Exception" || n == "BaseException")
+            {
+                // Catch-all.
                 func.instruction(&Instruction::Br(depth));
             } else {
-                // Look up built-in first, then custom exception classes.
-                let code = exception_code(&exc_name)
-                    .or_else(|| self.custom_exceptions.get(&exc_name).copied());
-                if let Some(code) = code {
-                    func.instruction(&Instruction::GlobalGet(self.err_code_global_idx));
-                    func.instruction(&Instruction::I32Const(code));
-                    func.instruction(&Instruction::I32Eq);
-                    func.instruction(&Instruction::BrIf(depth));
+                // Branch to this handler if err_code matches ANY listed type.
+                for name in &names {
+                    let code = exception_code(name)
+                        .or_else(|| self.custom_exceptions.get(name).copied());
+                    if let Some(code) = code {
+                        func.instruction(&Instruction::GlobalGet(self.err_code_global_idx));
+                        func.instruction(&Instruction::I32Const(code));
+                        func.instruction(&Instruction::I32Eq);
+                        func.instruction(&Instruction::BrIf(depth));
+                    }
                 }
             }
         }
@@ -2961,6 +3330,9 @@ impl WasmEmitter {
     ) {
         self.emit_condition(test, ctx, func);
         func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        // B1: an `if` is a structured label — track it so break/continue
+        // emitted inside the arms compute the right relative depth.
+        ctx.push_label();
 
         for s in body {
             self.emit_stmt(s, ctx, func);
@@ -2981,6 +3353,7 @@ impl WasmEmitter {
         }
 
         func.instruction(&Instruction::End);
+        ctx.pop_label();
     }
 
     /// Emit a for-range loop.
@@ -2990,6 +3363,7 @@ impl WasmEmitter {
         target: &Expr,
         iter: &Expr,
         body: &[Stmt],
+        else_body: &Option<Vec<Stmt>>,
         ctx: &mut FuncContext,
         func: &mut Function,
     ) {
@@ -3026,15 +3400,32 @@ impl WasmEmitter {
         func.instruction(&Instruction::I32Const(0));
         func.instruction(&Instruction::LocalSet(i_idx));
 
-        ctx.loop_depth += 1;
-        // block $break ; loop $continue
-        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-        func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-        // if i >= n: break
+        // B1 layout: block $break / loop $top / block $continue <body> end /
+        // i++ / br $top. `continue` targets $continue's end so the increment
+        // STILL RUNS (a br to $top would skip it → infinite loop); `break`
+        // targets $break. Depths come from the label stack, correct at any
+        // nesting.
+        // Loop-`else` (B1 family): with an `else` clause an extra $normal
+        // block sits between $break and $top; the exhausted-iterator exit
+        // branches to $normal and falls into the else body, while `break`
+        // targets $break and skips it (standard Python semantics).
+        let has_else = else_body.is_some();
+        let break_abs = ctx.push_label();
+        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // $break
+        let normal_abs = if has_else {
+            let n = ctx.push_label();
+            func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // $normal
+            n
+        } else {
+            break_abs
+        };
+        let top_abs = ctx.push_label();
+        func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty)); // $top
+        // if i >= n: normal exit (runs the else body when present)
         func.instruction(&Instruction::LocalGet(i_idx));
         func.instruction(&Instruction::LocalGet(n_idx));
         func.instruction(&Instruction::I32GeS);
-        func.instruction(&Instruction::BrIf(1));
+        func.instruction(&Instruction::BrIf(ctx.br_depth_to(normal_abs)));
         // var = list[i]: load element at ptr + 8 + i * elem_size
         func.instruction(&Instruction::LocalGet(ptr_temp));
         func.instruction(&Instruction::I32Const(8));
@@ -3047,19 +3438,38 @@ impl WasmEmitter {
         func.instruction(&Instruction::I32Add);
         self.emit_load_at_offset(&elem_ty, 0, func);
         func.instruction(&Instruction::LocalSet(var_idx));
-        // body
+        // body, wrapped in the $continue block
+        let continue_abs = ctx.push_label();
+        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // $continue
+        ctx.loop_labels.push(LoopLabels {
+            break_abs,
+            continue_abs,
+        });
         for s in body {
             self.emit_stmt(s, ctx, func);
         }
+        ctx.loop_labels.pop();
+        func.instruction(&Instruction::End); // end $continue
+        ctx.pop_label();
         // i++
         func.instruction(&Instruction::LocalGet(i_idx));
         func.instruction(&Instruction::I32Const(1));
         func.instruction(&Instruction::I32Add);
         func.instruction(&Instruction::LocalSet(i_idx));
-        func.instruction(&Instruction::Br(0));
+        func.instruction(&Instruction::Br(ctx.br_depth_to(top_abs)));
         func.instruction(&Instruction::End); // loop
+        ctx.pop_label();
+        if let Some(else_b) = else_body {
+            func.instruction(&Instruction::End); // end $normal block
+            ctx.pop_label();
+            // loop_labels was popped above, so a `break` in the else body
+            // correctly binds to an OUTER loop (CPython semantics).
+            for s in else_b {
+                self.emit_stmt(s, ctx, func);
+            }
+        }
         func.instruction(&Instruction::End); // block
-        ctx.loop_depth -= 1;
+        ctx.pop_label();
     }
 
     fn emit_for_range(
@@ -3067,6 +3477,7 @@ impl WasmEmitter {
         target: &Expr,
         iter: &Expr,
         body: &[Stmt],
+        else_body: &Option<Vec<Stmt>>,
         ctx: &mut FuncContext,
         func: &mut Function,
     ) {
@@ -3127,18 +3538,37 @@ impl WasmEmitter {
         }
         func.instruction(&Instruction::LocalSet(step_idx));
 
-        // block $break
-        //   loop $continue
-        //     i < stop ? (i64.lt_s)
-        //     i32.eqz â†’ br_if $break
-        //     <body>
-        //     i += step
-        //     br $continue
-        //   end
+        // B1 layout:
+        // block $break              ; `break` targets this (skips else)
+        //   [block $normal]         ; only with an `else` clause
+        //     loop $top
+        //       i < stop ? (i64.lt_s)
+        //       i32.eqz → br_if $normal (or $break w/o else)
+        //       block $continue
+        //         <body>          ; continue → br $continue (increment RUNS)
+        //       end
+        //       i += step
+        //       br $top
+        //     end
+        //   [end]
+        //   [<else body>]           ; runs on NORMAL (exhausted) exit only
         // end
-        ctx.loop_depth += 1;
-        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-        func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+        // Depths come from the label stack, correct at any nesting.
+        // Loop-`else` (B1 family): the exhausted-range exit branches to
+        // $normal and falls into the else body; `break` targets $break and
+        // skips it (standard Python semantics).
+        let has_else = else_body.is_some();
+        let break_abs = ctx.push_label();
+        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // $break
+        let normal_abs = if has_else {
+            let n = ctx.push_label();
+            func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // $normal
+            n
+        } else {
+            break_abs
+        };
+        let top_abs = ctx.push_label();
+        func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty)); // $top
 
         // Loop condition. #364: a hardcoded `loop_var < stop` skipped the entire
         // loop for a NEGATIVE step — reverse `range(n-1, -1, -1)` produced zero
@@ -3189,12 +3619,22 @@ impl WasmEmitter {
             }
         }
         func.instruction(&Instruction::I32Eqz);
-        func.instruction(&Instruction::BrIf(1)); // break
+        // Normal (exhausted-range) exit — falls into the else body if present.
+        func.instruction(&Instruction::BrIf(ctx.br_depth_to(normal_abs)));
 
-        // Body
+        // Body, wrapped in the $continue block
+        let continue_abs = ctx.push_label();
+        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // $continue
+        ctx.loop_labels.push(LoopLabels {
+            break_abs,
+            continue_abs,
+        });
         for s in body {
             self.emit_stmt(s, ctx, func);
         }
+        ctx.loop_labels.pop();
+        func.instruction(&Instruction::End); // end $continue
+        ctx.pop_label();
 
         // Increment: loop_var += step
         func.instruction(&Instruction::LocalGet(loop_idx));
@@ -3202,10 +3642,20 @@ impl WasmEmitter {
         func.instruction(&Instruction::I64Add);
         func.instruction(&Instruction::LocalSet(loop_idx));
 
-        func.instruction(&Instruction::Br(0)); // continue
+        func.instruction(&Instruction::Br(ctx.br_depth_to(top_abs))); // back to header
         func.instruction(&Instruction::End); // end loop
+        ctx.pop_label();
+        if let Some(else_b) = else_body {
+            func.instruction(&Instruction::End); // end $normal block
+            ctx.pop_label();
+            // loop_labels was popped above, so a `break` in the else body
+            // correctly binds to an OUTER loop (CPython semantics).
+            for s in else_b {
+                self.emit_stmt(s, ctx, func);
+            }
+        }
         func.instruction(&Instruction::End); // end block
-        ctx.loop_depth -= 1;
+        ctx.pop_label();
     }
 
     // === Expression emission ===
@@ -3303,9 +3753,12 @@ impl WasmEmitter {
                     }
                     WasmType::PtrList(elem_ty) => {
                         // List indexing: `lst[i]` — load element at
-                        // ptr + 8 + i * elem_size, with bounds check (when
-                        // needs_errors is enabled, so the err_code global is
-                        // available to raise IndexError).
+                        // ptr + 8 + i * elem_size. CVE-2026-15903 fix: the
+                        // bounds check is now UNCONDITIONAL (no `needs_errors`
+                        // gate — F2), tests the FULL i64 index before the
+                        // i32 narrowing (F3/F4), and normalizes Python negative
+                        // indices from the end (F5). Out of range never reaches
+                        // the load; it raises `IndexError` or traps.
                         let elem_size = elem_ty.size_bytes();
                         let (list_temp, idx_temp) = match ctx.sub_scratch.get(ctx.sub_depth) {
                             Some(&pair) => pair,
@@ -3330,6 +3783,17 @@ impl WasmEmitter {
                                 return;
                             }
                         };
+                        // The parallel i64 bounds-check pair for this depth
+                        // (normalized-index, length). Same pre-sizing guarantee.
+                        let (idx64_temp, len64_temp) =
+                            match ctx.sub_scratch_i64.get(ctx.sub_depth) {
+                                Some(&pair) => pair,
+                                None => {
+                                    debug_assert!(false, "sub_scratch_i64 pool undersized");
+                                    func.instruction(&Instruction::Unreachable);
+                                    return;
+                                }
+                            };
 
                         // Save lst ptr to temp. Emitting the container and
                         // index sub-expressions may itself contain nested
@@ -3340,40 +3804,33 @@ impl WasmEmitter {
                         self.emit_expr(value, ctx, func);
                         ctx.sub_depth -= 1;
                         func.instruction(&Instruction::LocalSet(list_temp));
-                        // Save i (as i32) to temp
+                        // Push the raw index (i64-width preserved) then run the
+                        // shared normalize+bounds check. Leaves `cond` on stack.
                         ctx.sub_depth += 1;
                         self.emit_expr(index, ctx, func);
                         ctx.sub_depth -= 1;
                         let idx_ty = self.expr_type(index, ctx);
-                        if idx_ty != WasmType::I32 {
-                            self.emit_convert(&idx_ty, &WasmType::I32, func);
-                        }
-                        func.instruction(&Instruction::LocalSet(idx_temp));
+                        self.emit_list_index_check(
+                            list_temp, idx_temp, idx64_temp, len64_temp, &idx_ty, func,
+                        );
 
-                        // Bounds check: i < 0 || i >= len(lst) → raise IndexError.
-                        // Only when error infrastructure is on; otherwise skip.
-                        if self.needs_errors {
-                            // i < 0 ?
-                            func.instruction(&Instruction::LocalGet(idx_temp));
-                            func.instruction(&Instruction::I32Const(0));
-                            func.instruction(&Instruction::I32LtS);
-                            // i >= len(lst) ?
-                            func.instruction(&Instruction::LocalGet(idx_temp));
-                            func.instruction(&Instruction::LocalGet(list_temp));
-                            func.instruction(&Instruction::I32Load(MemArg {
-                                offset: 0,
-                                align: 2,
-                                memory_index: 0,
-                            }));
-                            func.instruction(&Instruction::I32GeS);
-                            func.instruction(&Instruction::I32Or);
-                            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-                            // raise IndexError (code 3) — use existing helper.
-                            self.emit_raise_code(exception_code("IndexError").unwrap(), ctx, func);
-                            func.instruction(&Instruction::End);
+                        // `if cond { OOB } else { load }`, result-typed so the
+                        // in-try case (where raise does not return) still leaves
+                        // exactly one value and never falls through to the load.
+                        let result_vt = elem_ty.to_val_type();
+                        func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                            result_vt,
+                        )));
+                        // OOB arm: raise/trap. If raise stays in-function (inside
+                        // a try), leave a sentinel of the element type so the
+                        // block result type is satisfied; the surrounding try
+                        // dispatch discards it.
+                        self.emit_index_oob(ctx, func);
+                        if self.needs_errors && ctx.try_depth > 0 {
+                            self.emit_sentinel_for(&Some((**elem_ty).clone()), func);
                         }
-
-                        // In-bounds load: ptr + 8 + i * elem_size
+                        func.instruction(&Instruction::Else);
+                        // In-bounds load: ptr + 8 + i * elem_size (i now exact).
                         func.instruction(&Instruction::LocalGet(list_temp));
                         func.instruction(&Instruction::I32Const(8));
                         func.instruction(&Instruction::I32Add);
@@ -3384,6 +3841,7 @@ impl WasmEmitter {
                         }
                         func.instruction(&Instruction::I32Add);
                         self.emit_load_at_offset(elem_ty, 0, func);
+                        func.instruction(&Instruction::End);
                     }
                     WasmType::PtrDict(_, _) => {
                         // Dict indexing: __dict_get_str(handle, key_ptr)
@@ -6319,6 +6777,9 @@ impl WasmEmitter {
             AugAssignOp::BitXor => BinOp::BitXor,
             AugAssignOp::ShiftLeft => BinOp::ShiftLeft,
             AugAssignOp::ShiftRight => BinOp::ShiftRight,
+            // `@=` never reaches the numeric-WASM path (matmul is pure
+            // dunder dispatch on objects; the router keeps it on JS).
+            AugAssignOp::MatMul => BinOp::MatMul,
         };
         self.emit_num_op_on_stack(binop, &ty, ctx, func);
     }
@@ -7077,8 +7538,18 @@ fn stmt_uses_pow(stmt: &Stmt) -> bool {
                     .any(|(t, b)| expr_uses_pow(t) || body_uses_pow(b))
                 || else_body.as_ref().is_some_and(|b| body_uses_pow(b))
         }
-        StmtKind::While { test, body, .. } => expr_uses_pow(test) || body_uses_pow(body),
-        StmtKind::For { body, .. } => body_uses_pow(body),
+        StmtKind::While {
+            test,
+            body,
+            else_body,
+        } => {
+            expr_uses_pow(test)
+                || body_uses_pow(body)
+                || else_body.as_ref().is_some_and(|b| body_uses_pow(b))
+        }
+        StmtKind::For {
+            body, else_body, ..
+        } => body_uses_pow(body) || else_body.as_ref().is_some_and(|b| body_uses_pow(b)),
         _ => false,
     }
 }
@@ -7148,13 +7619,28 @@ fn collect_math_imports_stmt(
                 collect_math_imports(b, imports, aliases);
             }
         }
-        StmtKind::While { test, body, .. } => {
+        StmtKind::While {
+            test,
+            body,
+            else_body,
+        } => {
             collect_math_imports_expr(test, imports, aliases);
             collect_math_imports(body, imports, aliases);
+            if let Some(b) = else_body {
+                collect_math_imports(b, imports, aliases);
+            }
         }
-        StmtKind::For { iter, body, .. } => {
+        StmtKind::For {
+            iter,
+            body,
+            else_body,
+            ..
+        } => {
             collect_math_imports_expr(iter, imports, aliases);
             collect_math_imports(body, imports, aliases);
+            if let Some(b) = else_body {
+                collect_math_imports(b, imports, aliases);
+            }
         }
         _ => {}
     }
@@ -7247,6 +7733,7 @@ fn aug_to_binop(op: AugAssignOp) -> BinOp {
         AugAssignOp::BitXor => BinOp::BitXor,
         AugAssignOp::ShiftLeft => BinOp::ShiftLeft,
         AugAssignOp::ShiftRight => BinOp::ShiftRight,
+        AugAssignOp::MatMul => BinOp::MatMul,
     }
 }
 
@@ -7270,8 +7757,18 @@ fn stmt_uses_strings(stmt: &Stmt) -> bool {
                     .any(|(t, b)| expr_uses_strings(t) || body_uses_strings(b))
                 || else_body.as_ref().is_some_and(|b| body_uses_strings(b))
         }
-        StmtKind::While { test, body, .. } => expr_uses_strings(test) || body_uses_strings(body),
-        StmtKind::For { body, .. } => body_uses_strings(body),
+        StmtKind::While {
+            test,
+            body,
+            else_body,
+        } => {
+            expr_uses_strings(test)
+                || body_uses_strings(body)
+                || else_body.as_ref().is_some_and(|b| body_uses_strings(b))
+        }
+        StmtKind::For {
+            body, else_body, ..
+        } => body_uses_strings(body) || else_body.as_ref().is_some_and(|b| body_uses_strings(b)),
         // raise X("msg") — catch the message string so __err_msg has space.
         StmtKind::Raise(Some(e), _) => expr_uses_strings(e),
         StmtKind::Try { body, handlers, .. } => {
@@ -7344,8 +7841,25 @@ fn stmt_uses_dicts(stmt: &Stmt) -> bool {
                     .any(|(t, b)| expr_uses_dicts(t) || body_uses_dicts(b))
                 || else_body.as_ref().is_some_and(|b| body_uses_dicts(b))
         }
-        StmtKind::While { test, body, .. } => expr_uses_dicts(test) || body_uses_dicts(body),
-        StmtKind::For { iter, body, .. } => expr_uses_dicts(iter) || body_uses_dicts(body),
+        StmtKind::While {
+            test,
+            body,
+            else_body,
+        } => {
+            expr_uses_dicts(test)
+                || body_uses_dicts(body)
+                || else_body.as_ref().is_some_and(|b| body_uses_dicts(b))
+        }
+        StmtKind::For {
+            iter,
+            body,
+            else_body,
+            ..
+        } => {
+            expr_uses_dicts(iter)
+                || body_uses_dicts(body)
+                || else_body.as_ref().is_some_and(|b| body_uses_dicts(b))
+        }
         _ => false,
     }
 }
@@ -7399,7 +7913,12 @@ fn stmt_uses_errors(stmt: &Stmt) -> bool {
                 || elif_clauses.iter().any(|(_, b)| body_uses_errors(b))
                 || else_body.as_ref().is_some_and(|b| body_uses_errors(b))
         }
-        StmtKind::While { body, .. } | StmtKind::For { body, .. } => body_uses_errors(body),
+        StmtKind::While {
+            body, else_body, ..
+        }
+        | StmtKind::For {
+            body, else_body, ..
+        } => body_uses_errors(body) || else_body.as_ref().is_some_and(|b| body_uses_errors(b)),
         _ => false,
     }
 }

@@ -14450,7 +14450,7 @@ def D2Res.asItems : D2Res → Option (List (DKey × Int))
     dicts/views. HONEST BOUNDARY: `+` (`iadd`) was REMOVED from this fragment
     (wave-16 iter2) because shipped `pyAdd` is NOT yet guarded — its
     non-numeric-operand gap is the pre-existing C3/C4 arithmetic-type-safety
-    workstream (`semantic_preservance.md`), so covering `+` here would be a
+    workstream (the design notes), so covering `+` here would be a
     model-vs-shipped over-claim; that gap stays tracked in that workstream. -/
 def D2Res.asArith : D2Res → Option Int
   | .rint n => some n
@@ -14470,7 +14470,7 @@ def D2Env.get (env : D2Env) (n : String) : Option (List (DKey × Int)) :=
     deviation axis on int results. -/
 inductive D2Exp where
   | ilit (n : Int)
-  | ifdiv (a b : D2Exp)   -- int sub-fragment (`//` deviates; shipping-GUARDED via `__reqArithNum` on pyFloorDiv). NOTE: `iadd`(`+`) was REMOVED (wave-16 iter2) — shipped `pyAdd` is unguarded (the deferred C3/C4 arithmetic-type-safety workstream, reference-app/semantic_preservance.md), so claiming `+`-preservation here would be a model-vs-shipped over-claim; the fragment covers only shipping-guarded arithmetic.
+  | ifdiv (a b : D2Exp)   -- int sub-fragment (`//` deviates; shipping-GUARDED via `__reqArithNum` on pyFloorDiv). NOTE: `iadd`(`+`) was REMOVED (wave-16 iter2) — shipped `pyAdd` is unguarded (the deferred C3/C4 arithmetic-type-safety workstream), so claiming `+`-preservation here would be a model-vs-shipped over-claim; the fragment covers only shipping-guarded arithmetic.
   | dlit (entries : List (DKey × D2Exp))       -- {k1: v1, …}
   | dvar (s : String)                          -- env-bound dict
   | getNode (d : D2Exp) (k : DKey)             -- d[k] (KeyError → none)
@@ -15130,7 +15130,7 @@ The 16 `preservationX` theorems above return `Option Int`-shaped carriers where
 BOTH div-by-zero and unbound-var collapse to `none`: they prove error-OCCURRENCE
 (C3, "errors iff errors") but are structurally BLIND to error-KIND (C4) — they
 cannot tell `TypeError` from `ZeroDivisionError`. This section upgrades the
-carrier to a typed result (`PyResult`, design: `semantic_preservance.md` §1) and
+carrier to a typed result (`PyResult`, design: the design notes §1) and
 proves ONE arithmetic fragment's preservation as the conjunction
 **C1 (value) ∧ C2 (type-tag) ∧ C3 (error-occurrence) ∧ C4 (error-kind)** in a
 single statement, with a discriminating stub per lattice axis — including two
@@ -15147,7 +15147,7 @@ Same independent-target + stub-litmus discipline as wave 1
 `jsFdiv_eq_fdiv` and `Env`. Purely additive; no existing wave is touched. -/
 
 /-- CPython exception CLASSES (kind only — message TEXT is out of scope by
-    design; see the exception registry, `semantic_preservance.md` §7). -/
+    design; see the exception registry, the design notes §7). -/
 inductive Exc where
   | typeError | valueError | zeroDiv | nameError | indexError | keyError
   | overflow | attributeError | stopIteration | custom (name : String)
@@ -15201,7 +15201,7 @@ inductive PTag where
 def typeTag : PVal → PTag
   | .pint _ => .tint | .pfloat _ => .tfloat | .pstr _ => .tstr
 
-/-- **The D1 collapse** (exception registry, `semantic_preservance.md` §7):
+/-- **The D1 collapse** (exception registry, the design notes §7):
     a whole float loses its tag and shares int's untagged JS `Number`
     representation. Value-preserving (mod ρ, `valRho` below), tag-destroying —
     a faithful model of what shipped PythScribe DOES on whole floats. -/
@@ -16215,7 +16215,7 @@ theorem eraseKind_blind_to_indexKind (e : SubExp) :
 The lattice sections above cover C1 (value), C2 (type-tag), C3
 (error-occurrence) and C4 (error-KIND). C5 — the ORDER in which observable
 effects happen — decomposes into a LANGUAGE-OWNED part and a HOST-OWNED
-part (`semantic_preservance.md` §2/§3/§5 item 6):
+part (the design notes §2/§3/§5 item 6):
 
 * LANGUAGE-OWNED (the compiler's obligation — provable, and proved here in
   two slices): **(6a)** synchronous evaluation order — Python's `or`/`and`
@@ -16817,7 +16817,7 @@ example : ayLower flattenL (.seqA (.emit "log1") (.seqA (.awaitV 42) (.emit "log
 
 /-! ## §7b boundary composition — PART 1: the COMPOSITION META-THEOREM
 
-Design: `semantic_preservance.md` §7b. C1–C6 are all *intra-domain* (Python model vs
+Design: the design notes §7b. C1–C6 are all *intra-domain* (Python model vs
 Python reference, one semantic world). A real reference-app program COMPOSES a
 Python-semantics computation with a **trusted host sink** `S` in a DIFFERENT world — a
 comprehension result becoming DOM children (B-JS), or a numeric kernel the auto-router
@@ -17129,7 +17129,7 @@ out-of-range witness and is refuted by the safety statement.
 
 SCOPE (honest): `WExp` is the scalar-numeric fragment (`+`/`-`/`*`/`neg`, the existing
 model). Comprehensions/collections NEVER reach WASM (admission rejects them —
-`semantic_preservance.md` §7b "handled by exclusion"), so `M_wasm`'s domain is exactly this
+the design notes §7b "handled by exclusion"), so `M_wasm`'s domain is exactly this
 scalar fragment; that exclusion is a separate certified fact, not restated here. The WASM
 host (trap handling) stays the abstract sink — we model the COMPILER's routing/guard, not
 the host. -/
@@ -17251,7 +17251,7 @@ example : wasmRunEdge (.sub (.mul (.lit 3) (.lit 4)) (.lit 20)) [] = some (.val 
 
 /-! ## Preservation lattice v2 — THE UNION: BROAD observational preservation modulo exceptions
 
-Design: `semantic_preservance.md` §2/§5/§6 (the join). The lattice sections above
+Design: the design notes §2/§5/§6 (the join). The lattice sections above
 prove each projection on its OWN fragment (arith → C1∧C2∧C3∧C4; subscript → C4×3;
 short-circuit/async → C5). This section is the CENTREPIECE: a SINGLE unified evaluator
 over ONE **representative combined fragment** — arithmetic (`//` with floor + zero-
@@ -18360,5 +18360,612 @@ example : obsTagModD1 (evalUtgt d1UL 1 (.ulit (.ufloat 2))) = some UTag.tint := 
 /-- info: 'PythExpandVerify.preservationUnion_terminationStub_fails' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms preservationUnion_terminationStub_fails
+
+/-! ## MarshalTable — the JS↔WASM value-marshalling boundary as a finite table
+
+Lean twin of the SHIPPED JS↔WASM value boundary in
+`crates/pyths_codegen_wasm/src/bridge.rs` (`convert_js_to_wasm` /
+`convert_wasm_to_js` / `list_elem_kind` + the `__i64Oob` argument guard, the
+`__list_to_wasm` i64 element guard, the sticky `__ovf` exactness flag and the
+#364 fallback ladder `__isWasmFault`), gated by the #364 numeric-kernel
+boundary admission in `crates/pyths_hir/src/wasm_analysis.rs`
+(`is_numeric_kernel_param` / `is_scalar_wasm_return`).
+
+**Binding (two-sided, the same shape as route-table.txt /
+wasm-admission-table.txt).** The committed fixture
+`verification/marshalling-table.txt` is regenerated and compared from BOTH
+sides: Rust derives it from the shipping functions themselves
+(`bridge::marshalling_table()`, checked by
+`cargo test marshalling_table_matches_committed_fixture`; the failure
+dispositions are derived from REAL probe bridges with loud-panic snippet
+assertions, never restated), and this model prints byte-identical text
+(`lake exe expanddiff --check-marshalling-table`). Either side changing a
+conversion, an admission bit, or a disposition breaks its own gate. The
+runtime semantics behind the rows is confirmed by the shipped-binding
+differential `verification/marshalling_shipped_binding.py` (real `pyths`
+js+wasm vs CPython over boundary-crossing values).
+
+**The claims (HONEST scope).**
+  * `marshal_param_admitted_sound` / `marshal_ret_admitted_sound` — every
+    boundary type the #364 admission accepts marshals ONLY through the
+    value-exact numeric converter classes (i64-exact-guarded / f64-identity /
+    bool-i32 / numeric-list); pointer marshalling (str/dict/tuple/closure/
+    nested lists) is formally EXCLUDED from the admitted surface (an honest
+    operation-level boundary: those conversions exist in the glue but #364
+    keeps them off the fast path precisely because they are not exactness-
+    disciplined).
+  * `i64ArgMarshal_exact` + `i64_boundary_roundtrip` — the i64 crossing (the
+    only lossy-prone scalar) either passes the EXACT value (in i64 range) or
+    diverts (reroute-to-twin / throw) — NEVER a silently wrapped pass. The
+    guard is load-bearing: `i64Marshal_unguardedStub_fails` refutes the
+    unguarded conversion (`wrapI64`, i.e. raw ES `ToBigInt64`) — which was the
+    REAL pre-fix shipped behavior of the `__list_to_wasm` i64 element path
+    (PoC 2026-08-16: `pick([2**63+7])` returned −9223372036854775801; fixed by
+    the element RangeError guard, disposition row `list-elem-i64-oob`).
+  * `marshal_exhaustive` — the finite table is exhaustive over the WHOLE
+    (infinite) representable domain: every `WasmRepr`'s conversion equals a
+    table row's, because the conversion depends only on head constructor +
+    element kind, all witnessed in the alphabet.
+
+**Trust boundary (stated).** The exactness of `BigInt(Math.trunc(x))` /
+`Number(bigint)` inside their stated ranges and float identity are JS-engine
+semantics (host-owned, like the rest of the runtime); the runtime int
+representation invariant (ints beyond 2⁵³ are BigInt, `JsInt.wf`) is the
+runtime's documented representation, exercised by the differential. The f64
+crossing is bit-identity on a native Number (with the glue-local `__f64Arg`
+int→float coercion for the hybrid large-int form — #38/#465: the standard
+`Number(bigint)` conversion in double range, and OverflowError "int too
+large to convert to float" beyond it, matching the runtime authority
+`__reqNum` and CPython's int-in-float-position conversion), with
+the D1 whole-float display deviation owned by the existing D1 rows, not
+here. Client↔server (RPC) and JS↔TS
+boundaries are the SAME table shape but 0.3.x scope — NOT built here. -/
+
+/-- #364 boundary admission for parameters — `is_numeric_kernel_param`,
+    arm-for-arm: numeric scalars and FLAT lists of numeric scalars only. -/
+def isNumericKernelParam : WasmTy → Bool
+  | .int | .float | .bool => true
+  | .list i =>
+    match i with
+    | .int | .float | .bool => true
+    | _ => false
+  | _ => false
+
+/-- #364 boundary admission for returns — `is_scalar_wasm_return`,
+    arm-for-arm: numeric scalar or a no-value return. -/
+def isScalarWasmReturn : WasmTy → Bool
+  | .int | .float | .bool | .wnone | .void => true
+  | _ => false
+
+/-- `list_elem_kind`, arm-for-arm: the element slot a list's contents cross
+    the boundary in (f64/i64 wide slots; EVERYTHING else an i32 slot). -/
+def listElemKind : WasmRepr → String
+  | .f64 => "f64"
+  | .i64 => "i64"
+  | _ => "i32"
+
+/-- `convert_js_to_wasm("x", ·)`, arm-for-arm — the LITERAL conversion
+    expression the glue emits for a JS argument crossing into WASM. -/
+def jsToWasmExpr : WasmRepr → String
+  | .i64 => "(typeof x === \"bigint\" ? x : BigInt(Math.trunc(x)))"
+  -- #38/#461/#465 value-boundary authority: identity on a native Number, but
+  -- a large int arrives as a BigInt (the hybrid form past 2⁵³) and ToNumber
+  -- at the WASM JS-API boundary THROWS on BigInt — so the glue-local
+  -- `__f64Arg` coerces it with the standard int→float conversion, and (#465)
+  -- a BigInt beyond IEEE-754 double range raises OverflowError ("int too
+  -- large to convert to float"), the SAME rule as the runtime authority
+  -- `__reqNum` and as CPython's int→float conversion — never a silent
+  -- Infinity crossing.
+  | .f64 => "__f64Arg(x)"
+  | .i32 => "x ? 1 : 0"
+  | .ptr => "__str_to_wasm(x)"
+  | .ptrList i => "__list_to_wasm(x, \"" ++ listElemKind i ++ "\")"
+  | .ptrDict _ _ => "__dict_to_wasm(x)"
+  | .ptrTuple _ _ => "__tuple_to_wasm(x)"
+  | .ptrClosure _ _ => "__closure_to_wasm(x)"
+
+/-- `convert_wasm_to_js("x", ·)`, arm-for-arm — the conversion for a WASM
+    result crossing back to JS. -/
+def wasmToJsExpr : WasmRepr → String
+  | .i64 => "__i64ToJs(x)"
+  -- Option B (minimal int/float fidelity): an f64 result re-enters JS
+  -- through the glue-local `__f64Box` — a VALUE-IDENTICAL tagged box
+  -- (`Number.isInteger(v) ? new __PyFloatW(v) : v`; `valueOf()` returns
+  -- the same double bit-for-bit), applied iff the result is
+  -- integer-valued so 12.0 keeps its Python float identity. Still in the
+  -- value-exact scalar class: no rounding, no truncation, no pointer.
+  | .f64 => "__f64Box(x)"
+  | .i32 => "Boolean(x)"
+  | .ptr => "__str_from_wasm(x)"
+  | .ptrList i => "__list_from_wasm(x, \"" ++ listElemKind i ++ "\")"
+  | .ptrDict _ _ => "__dict_from_wasm(x)"
+  | .ptrTuple _ _ => "__tuple_from_wasm(x)"
+  | .ptrClosure _ _ => "__closure_from_wasm(x)"
+
+/-- Whether the bridge embeds exact JS twins (`--target js+wasm`) or not
+    (edge targets: workers/wasi/deno). Both ship. -/
+inductive BridgeMode where
+  | twins | notwins
+  deriving DecidableEq, Repr
+
+/-- The boundary failure events the glue disposes of explicitly. -/
+inductive FaultEvent where
+  | i64ArgOob      -- BigInt argument outside i64 (pre-call `__i64Oob` guard)
+  | listElemI64Oob -- i64 LIST ELEMENT outside i64 (`__list_to_wasm` guard)
+  | ovfFlag        -- sticky `__ovf` i64-exactness flag set by in-WASM arithmetic
+  | wasmTrap       -- WebAssembly.RuntimeError (OOB access, unreachable, …)
+  | pyException    -- deliberate Python exception dispatched by `__check_err`
+  deriving DecidableEq, Repr
+
+/-- The shipped failure DISPOSITIONS — mirror of the emitted guard/ladder
+    code (derived Rust-side from real probe bridges): a fault either re-runs
+    on the exact arbitrary-precision twin, throws loudly, or (a deliberate
+    Python exception) propagates unchanged. NEVER a silently wrapped value. -/
+def faultDispo : FaultEvent → BridgeMode → String
+  | .i64ArgOob, .twins => "reroute-twin"
+  | .i64ArgOob, .notwins => "throw-range"
+  | .listElemI64Oob, .twins => "reroute-twin"   -- RangeError → __isWasmFault ladder → twin
+  | .listElemI64Oob, .notwins => "throw-range"  -- no ladder: fail loud, never wrap
+  | .ovfFlag, .twins => "reroute-twin"
+  | .ovfFlag, .notwins => "throw-overflow"
+  | .wasmTrap, .twins => "reroute-twin"
+  | .wasmTrap, .notwins => "propagate-trap"
+  | .pyException, _ => "propagate-py"           -- NOT a fault: same error as the pure-JS path
+
+def faultEventName : FaultEvent → String
+  | .i64ArgOob => "i64-arg-oob"
+  | .listElemI64Oob => "list-elem-i64-oob"
+  | .ovfFlag => "ovf-flag"
+  | .wasmTrap => "wasm-trap"
+  | .pyException => "py-exception"
+
+def bridgeModeName : BridgeMode → String
+  | .twins => "twins"
+  | .notwins => "notwins"
+
+/-- The boundary-type shape alphabet, in table order — must match
+    `bridge::marshalling_alphabet()` (same names, same order). Hits every
+    conversion arm, every element kind, and every admission-predicate arm. -/
+def marshalAlphabet : List (String × WasmTy) :=
+  wasmBaseAlpha
+    ++ wasmBaseAlpha.map (fun p => ("list<" ++ p.1 ++ ">", WasmTy.list p.2))
+    ++ [("list<list<int>>", .list (.list .int)),
+        ("set<int>", .set .int),
+        ("opt<int>", .opt .int),
+        ("dict<str,int>", .dict .str .int),
+        ("tuple<int,float>", .tuple .int .float),
+        ("callable<int,int>", .callable .int .int),
+        ("callable<int,none>", .callable .int .wnone)]
+
+/-- One shape's `arg` + `ret` rows. `-` = no WASM representation (nothing to
+    marshal); the bits are the #364 admission verdicts. -/
+def marshalRow (name : String) (t : WasmTy) : String :=
+  let argE := match toWasmType t with
+    | some r => jsToWasmExpr r
+    | none => "-"
+  let retE := match toWasmType t with
+    | some r => wasmToJsExpr r
+    | none => "-"
+  "arg " ++ name ++ " -> " ++ wasmBit (isNumericKernelParam t) ++ " ; " ++ argE ++ "\n"
+    ++ "ret " ++ name ++ " -> " ++ wasmBit (isScalarWasmReturn t) ++ " ; " ++ retE ++ "\n"
+
+def faultEvents : List FaultEvent :=
+  [.i64ArgOob, .listElemI64Oob, .ovfFlag, .wasmTrap, .pyException]
+
+/-- Must byte-match `bridge::marshalling_table()`. -/
+def marshallingTable : String := Id.run do
+  let mut out := ""
+  for (n, t) in marshalAlphabet do
+    out := out ++ marshalRow n t
+  for e in faultEvents do
+    for m in [BridgeMode.twins, BridgeMode.notwins] do
+      out := out ++ "fault " ++ faultEventName e ++ " " ++ bridgeModeName m
+        ++ " -> " ++ faultDispo e m ++ "\n"
+  return out
+
+/-! ### The i64 crossing at the VALUE level (the only lossy-prone scalar) -/
+
+/-- The runtime's JS int representation invariant: a Number inside the safe
+    range, a BigInt outside it. `wf` is the documented representation
+    invariant (ints past 2⁵³ are ALWAYS BigInt) — an explicit trust-boundary
+    premise, exercised by the shipped-binding differential. -/
+inductive JsInt where
+  | num (n : Int) | big (n : Int)
+  deriving DecidableEq, Repr
+
+def JsInt.val : JsInt → Int
+  | .num n => n
+  | .big n => n
+
+def jsSafeMax : Int := 2 ^ 53 - 1
+
+def JsInt.wf : JsInt → Bool
+  | .num n => decide (-jsSafeMax ≤ n ∧ n ≤ jsSafeMax)
+  | .big _ => true
+
+def i64Max : Int := 2 ^ 63 - 1
+def i64Min : Int := -(2 ^ 63)
+
+/-- Outcome of marshalling one JS int across the boundary. -/
+inductive ArgOutcome where
+  | pass (w : Int)  -- crossed into WASM as the i64 value w
+  | rerouteTwin     -- diverted to the exact JS twin (js+wasm)
+  | throwRange      -- loud RangeError (edge targets)
+  deriving DecidableEq, Repr
+
+/-- The SHIPPED i64 argument crossing: `__i64Oob` guards BigInts beyond i64
+    (Numbers are inside i64 whenever `wf` holds — 2⁵³ < 2⁶³); an in-range
+    value crosses EXACTLY (`BigInt(Math.trunc(x))` / identity on BigInt).
+    Post-fix, the `__list_to_wasm` i64 ELEMENT path has the same shape: the
+    element guard throws RangeError, which the twins-mode fault ladder turns
+    into a twin re-run — so this one function models BOTH the scalar and the
+    element crossing (rows `i64-arg-oob` and `list-elem-i64-oob`). -/
+def i64ArgMarshal (m : BridgeMode) : JsInt → ArgOutcome
+  | .num n => .pass n
+  | .big n =>
+    if n > i64Max ∨ n < i64Min then
+      match m with
+      | .twins => .rerouteTwin
+      | .notwins => .throwRange
+    else .pass n
+
+/-- The i64 element crossing is the same guarded discipline (see above). -/
+abbrev i64ElemMarshal := i64ArgMarshal
+
+/-- The SHIPPED i64 return crossing (`__i64ToJs`): Number inside the safe
+    range, BigInt outside — always the same mathematical integer, and always
+    a `wf` representation. -/
+def i64RetMarshal (w : Int) : JsInt :=
+  if -jsSafeMax ≤ w ∧ w ≤ jsSafeMax then .num w else .big w
+
+/-- **i64 crossing exactness (soundness of the guarded pass).** Under the
+    representation invariant, a `pass` is ALWAYS the exact value AND inside
+    i64 — the conversion never wraps what it lets through; everything else
+    diverts. The guard is load-bearing: see the unguarded stub below. -/
+theorem i64ArgMarshal_exact (m : BridgeMode) (v : JsInt) (w : Int)
+    (hwf : v.wf = true) (h : i64ArgMarshal m v = .pass w) :
+    w = v.val ∧ i64Min ≤ w ∧ w ≤ i64Max := by
+  cases v with
+  | num n =>
+    simp only [i64ArgMarshal, ArgOutcome.pass.injEq] at h
+    simp only [JsInt.wf, decide_eq_true_eq, jsSafeMax] at hwf
+    subst h
+    refine ⟨rfl, ?_, ?_⟩ <;> simp only [JsInt.val, i64Min, i64Max] <;> omega
+  | big n =>
+    simp only [i64ArgMarshal] at h
+    split at h
+    · cases m <;> simp at h
+    · rename_i hin
+      simp only [ArgOutcome.pass.injEq] at h
+      subst h
+      simp only [not_or] at hin
+      exact ⟨rfl, by omega, by omega⟩
+
+/-- The return normalization is value-preserving and re-establishes the
+    representation invariant. -/
+theorem i64RetMarshal_exact (w : Int) :
+    (i64RetMarshal w).val = w ∧ (i64RetMarshal w).wf = true := by
+  unfold i64RetMarshal
+  split
+  · rename_i hin
+    refine ⟨rfl, ?_⟩
+    simp only [JsInt.wf, decide_eq_true_eq]
+    exact hin
+  · exact ⟨rfl, rfl⟩
+
+/-- **Boundary round-trip:** a value that crosses in and comes back is the
+    SAME integer — the js+wasm i64 boundary is the identity on everything it
+    passes (and diverts everything else, never wraps). -/
+theorem i64_boundary_roundtrip (m : BridgeMode) (v : JsInt) (w : Int)
+    (hwf : v.wf = true) (h : i64ArgMarshal m v = .pass w) :
+    (i64RetMarshal w).val = v.val := by
+  have hx := i64ArgMarshal_exact m v w hwf h
+  rw [(i64RetMarshal_exact w).1, hx.1]
+
+/-- **STUB — the UNGUARDED crossing (raw ES `ToBigInt64`): wraps mod 2⁶⁴.**
+    This IS the pre-guard shipped behavior of the `__list_to_wasm` i64
+    element path (PoC 2026-08-16: `pick([2**63+7])` crossed as
+    −9223372036854775801), and what `__i64Oob` prevents for scalars. -/
+def i64ArgMarshal_unguarded (v : JsInt) : ArgOutcome :=
+  .pass (wrapI64 v.val)
+
+/-- **The guard is load-bearing.** The unguarded conversion VIOLATES crossing
+    exactness at the discriminating witness `2⁶³` (a legal `wf` BigInt): it
+    passes `wrapI64 2⁶³ = −2⁶³ ≠ 2⁶³` — the silent-wrap class the table's
+    `i64-arg-oob` / `list-elem-i64-oob` dispositions exclude. (The guarded
+    marshaller diverts this witness: reroute/throw, never a pass.) -/
+theorem i64Marshal_unguardedStub_fails :
+    ¬ (∀ (v : JsInt) (w : Int), v.wf = true →
+        i64ArgMarshal_unguarded v = .pass w →
+        w = v.val ∧ i64Min ≤ w ∧ w ≤ i64Max) := by
+  intro h
+  have hbad := h (.big (2 ^ 63)) (wrapI64 (2 ^ 63)) rfl rfl
+  -- hbad.1 : wrapI64 (2^63) = 2^63 — but wrapI64 (2^63) = -(2^63)
+  have : wrapI64 (2 ^ 63) = -(2 ^ 63) := by decide
+  rw [this] at hbad
+  exact absurd hbad.1 (by decide)
+
+/-- `arr[i] | 0` — the i32 element slot's coercion (ES ToInt32): wraps mod
+    2³². Exact ONLY for values that fit i32 (bools: 0/1) — which is why the
+    i32 kind is admitted solely for `list[bool]`. -/
+def wrap32 (n : Int) : Int := Int.bmod n (2 ^ 32)
+
+/-- The i32-slot element crossing (what a MIS-KINDED int list would do). -/
+def i64ElemMarshal_i32KindStub (v : JsInt) : ArgOutcome :=
+  .pass (wrap32 v.val)
+
+/-- **STUB — the element KIND is load-bearing.** If `list[int]` elements
+    crossed in the i32 slot (a wrong `list_elem_kind`), the discriminating
+    witness `2³² + 1` (a legal `wf` Number, well inside i64 — the CORRECT
+    i64-kind crossing passes it exactly) would cross as `1`. So the table's
+    `list<int> → i64`-kind row is semantically forced, not a labeling. -/
+theorem listInt_i32KindStub_fails :
+    ¬ (∀ (v : JsInt) (w : Int), v.wf = true →
+        i64ElemMarshal_i32KindStub v = .pass w →
+        w = v.val ∧ i64Min ≤ w ∧ w ≤ i64Max) := by
+  intro h
+  have hbad := h (.num (2 ^ 32 + 1)) (wrap32 (2 ^ 32 + 1)) (by decide) rfl
+  have : wrap32 (2 ^ 32 + 1) = 1 := by decide
+  rw [this] at hbad
+  exact absurd hbad.1 (by decide)
+
+/-- Pointwise relational lifting over two lists (matching the
+    Batteries/Mathlib `List.Forall₂` definition — core v4.31 does not ship it
+    and this project is dependency-free, so it is restated here as supporting
+    infrastructure for the element-loop lemma below). `Forall₂ R xs ws` holds
+    iff the lists have EQUAL LENGTH and `R` holds at every index. -/
+inductive List.Forall₂ (R : α → β → Prop) : List α → List β → Prop
+  | nil : Forall₂ R [] []
+  | cons {a b as bs} : R a b → Forall₂ R as bs → Forall₂ R (a :: as) (b :: bs)
+
+/-- **Element-loop exactness (∀-over-elements).** Lifting `i64ArgMarshal_exact`
+    over the list structure: when a whole `list[int]` crosses the `__list_to_wasm`
+    i64 element path ALL-PASS (every element admitted, none diverted), the crossed
+    integers are POINTWISE exact — each equals its source element's value and lands
+    inside i64. This upgrades the element crossing from the abbrev identity
+    `i64ElemMarshal := i64ArgMarshal` (each element merely uses the same guarded
+    function) to a claim QUANTIFIED over the whole list.
+    Scope (honest, F8): this binds the VALUE crossing per element lifted over the
+    list; it is shipping-bound by the SAME `__list_to_wasm` differential as the
+    scalar (the `pick([2**63+7])` PoC), NOT a fresh binding. It does NOT model the
+    per-element linear-memory WRITE loop — that stays differential. -/
+theorem listI64Marshal_exact (m : BridgeMode) (xs : List JsInt) (ws : List Int)
+    (hwf : ∀ v ∈ xs, v.wf = true)
+    (h : xs.map (i64ElemMarshal m) = ws.map ArgOutcome.pass) :
+    List.Forall₂ (fun v w => w = v.val ∧ i64Min ≤ w ∧ w ≤ i64Max) xs ws := by
+  induction xs generalizing ws with
+  | nil =>
+    cases ws with
+    | nil => exact List.Forall₂.nil
+    | cons w ws' => simp at h
+  | cons a as ih =>
+    cases ws with
+    | nil => simp at h
+    | cons w ws' =>
+      simp only [List.map_cons, List.cons.injEq] at h
+      exact List.Forall₂.cons
+        (i64ArgMarshal_exact m a w (hwf a (.head _)) h.1)
+        (ih ws' (fun v hv => hwf v (.tail _ hv)) h.2)
+
+/-- **The element guard is load-bearing over the whole list.** The unguarded
+    element crossing (raw `ToBigInt64` per element) violates element-loop exactness
+    at the singleton `[2⁶³]`: it passes `wrapI64 2⁶³ = −2⁶³`, so `w = v.val` fails. -/
+theorem listI64Marshal_unguardedStub_fails :
+    ¬ (∀ (xs : List JsInt) (ws : List Int),
+        (∀ v ∈ xs, v.wf = true) →
+        xs.map i64ArgMarshal_unguarded = ws.map ArgOutcome.pass →
+        List.Forall₂ (fun v w => w = v.val ∧ i64Min ≤ w ∧ w ≤ i64Max) xs ws) := by
+  intro h
+  have hbad := h [JsInt.big (2 ^ 63)] [wrapI64 (2 ^ 63)]
+      (by intro v hv; cases hv with
+          | head => rfl
+          | tail _ hv' => cases hv')
+      rfl
+  cases hbad with
+  | cons hhead _ =>
+    have hwrap : wrapI64 (2 ^ 63) = -(2 ^ 63) := by decide
+    rw [hwrap] at hhead
+    exact absurd hhead.1 (by decide)
+
+/-- Non-vacuity: a concrete NON-EMPTY all-pass list the hypothesis of
+    `listI64Marshal_exact` actually admits (so it is not vacuously true), and the
+    conclusion holds for it. -/
+example : [JsInt.num 5, JsInt.num (-3)].map (i64ElemMarshal BridgeMode.twins)
+        = [(5 : Int), -3].map ArgOutcome.pass := by decide
+
+example : List.Forall₂ (fun v w => w = JsInt.val v ∧ i64Min ≤ w ∧ w ≤ i64Max)
+          [JsInt.num 5, JsInt.num (-3)] [(5 : Int), -3] := by
+  refine List.Forall₂.cons ⟨rfl, by decide, by decide⟩ ?_
+  exact List.Forall₂.cons ⟨rfl, by decide, by decide⟩ List.Forall₂.nil
+
+/-- The bool crossing round-trips: `x ? 1 : 0` in, `Boolean(x)` out. -/
+def boolArgMarshal (b : Bool) : Int := if b then 1 else 0
+def boolRetMarshal (w : Int) : Bool := w != 0
+
+theorem bool_boundary_roundtrip (b : Bool) :
+    boolRetMarshal (boolArgMarshal b) = b := by
+  cases b <;> rfl
+
+/-! ### The headline theorems: admitted surface ⊆ value-exact classes -/
+
+/-- The js→wasm converter classes that are VALUE-EXACT under the shipped
+    guards: the guarded i64 scalar (`i64ArgMarshal_exact`), f64 identity on
+    Numbers (a BigInt int coerces via `__f64Arg` by the standard int→float
+    conversion — the value the float position denotes — and raises
+    OverflowError beyond double range, #465, never a silent Infinity),
+    bool→i32 (`bool_boundary_roundtrip`), and lists whose ELEMENT slot
+    matches the element type (i64-guarded / f64 / bool-in-i32). NOT exact:
+    every pointer marshalling, and any list whose elements ride a mismatched
+    slot (`listInt_i32KindStub_fails`; a str/ptr element in an i32 slot is
+    the same wrap class). -/
+def argValueExact : WasmRepr → Bool
+  | .i64 | .f64 | .i32 => true
+  | .ptrList .i64 | .ptrList .f64 | .ptrList .i32 => true
+  | _ => false
+
+/-- The wasm→js return classes that are value-exact: `__i64ToJs`
+    (`i64RetMarshal_exact`), f64 identity, `Boolean` on an i32 bool. -/
+def retValueExact : WasmRepr → Bool
+  | .i64 | .f64 | .i32 => true
+  | _ => false
+
+/-- **Marshalling soundness (params).** Every boundary type the #364
+    admission accepts as a parameter lowers to a representation whose
+    js→wasm conversion is in the value-exact class — the admitted JS↔WASM
+    boundary NEVER marshals through a pointer converter or a mismatched
+    element slot. (The finite witness is every `arg … -> 1` row of the
+    committed table: `admitted_arg_rows_use_exact_marshallers`.) -/
+theorem marshal_param_admitted_sound (t : WasmTy) :
+    isNumericKernelParam t = true →
+    ∃ r, toWasmType t = some r ∧ argValueExact r = true := by
+  intro h
+  cases t with
+  | int => exact ⟨.i64, rfl, rfl⟩
+  | float => exact ⟨.f64, rfl, rfl⟩
+  | bool => exact ⟨.i32, rfl, rfl⟩
+  | list i =>
+    cases i with
+    | int => exact ⟨.ptrList .i64, rfl, rfl⟩
+    | float => exact ⟨.ptrList .f64, rfl, rfl⟩
+    | bool => exact ⟨.ptrList .i32, rfl, rfl⟩
+    | _ => simp [isNumericKernelParam] at h
+  | _ => simp [isNumericKernelParam] at h
+
+/-- **Marshalling soundness (returns).** Every #364-admitted return type is
+    either a genuine no-value return (`none`/`void` — nothing crosses) or
+    lowers to a value-exact scalar normalization; an admitted return NEVER
+    marshals through a pointer converter. -/
+theorem marshal_ret_admitted_sound (t : WasmTy) :
+    isScalarWasmReturn t = true →
+    (toWasmType t = none ∧ (t = .wnone ∨ t = .void)) ∨
+      ∃ r, toWasmType t = some r ∧ retValueExact r = true := by
+  intro h
+  cases t with
+  | int => exact Or.inr ⟨.i64, rfl, rfl⟩
+  | float => exact Or.inr ⟨.f64, rfl, rfl⟩
+  | bool => exact Or.inr ⟨.i32, rfl, rfl⟩
+  | wnone => exact Or.inl ⟨rfl, Or.inl rfl⟩
+  | void => exact Or.inl ⟨rfl, Or.inr rfl⟩
+  | _ => simp [isScalarWasmReturn] at h
+
+/-! ### Exhaustiveness — the finite table covers the whole representable
+    domain -/
+
+/-- The arg-conversion expressions the table witnesses. -/
+def tableArgExprs : List String :=
+  marshalAlphabet.filterMap (fun p => (toWasmType p.2).map jsToWasmExpr)
+
+/-- The ret-conversion expressions the table witnesses. -/
+def tableRetExprs : List String :=
+  marshalAlphabet.filterMap (fun p => (toWasmType p.2).map wasmToJsExpr)
+
+/-- **Exhaustiveness.** EVERY representable boundary type (the whole infinite
+    `WasmRepr` domain, any nesting) marshals by an expression the finite
+    table already witnesses: the conversion depends only on the head
+    constructor + element kind, and the alphabet hits them all. So checking
+    the 56 committed rows checks the entire boundary. -/
+theorem marshal_exhaustive (r : WasmRepr) :
+    jsToWasmExpr r ∈ tableArgExprs ∧ wasmToJsExpr r ∈ tableRetExprs := by
+  cases r
+  case ptrList i =>
+    cases i <;> refine ⟨?_, ?_⟩ <;>
+      simp only [jsToWasmExpr, wasmToJsExpr, listElemKind] <;> decide
+  all_goals refine ⟨?_, ?_⟩ <;>
+    simp only [jsToWasmExpr, wasmToJsExpr] <;> decide
+
+/-! ### Non-vacuity + anti-forgery pins -/
+
+-- The table is non-empty, has exactly the committed shape (46 conversion
+-- rows + 10 fault rows), and every disposition class is witnessed.
+#guard (marshallingTable.splitOn "\n").length = 57  -- 56 rows + trailing newline
+#guard (marshallingTable.splitOn "arg ").length = 24    -- 23 arg rows
+#guard (marshallingTable.splitOn "ret ").length = 24    -- 23 ret rows
+#guard (marshallingTable.splitOn "fault ").length = 11  -- 10 fault rows
+#guard (marshallingTable.splitOn "reroute-twin").length = 5   -- 4 twin reroutes
+#guard (marshallingTable.splitOn "throw-range").length = 3
+#guard (marshallingTable.splitOn "throw-overflow").length = 2
+#guard (marshallingTable.splitOn "propagate-trap").length = 2
+#guard (marshallingTable.splitOn "propagate-py").length = 3
+#guard (marshallingTable.splitOn "-> 1 ;").length = 12  -- 11 admitted rows (6 arg + 5 ret)
+#guard (marshallingTable.splitOn " ; -").length = 17    -- 16 no-marshal rows (no repr / void ret)
+
+-- Anti-forgery: the byte-equality check REJECTS a single drifted disposition
+-- row (the checker gates — a forged silent-wrap row cannot pass).
+#guard marshallingTable
+    ≠ marshallingTable.replace "fault list-elem-i64-oob twins -> reroute-twin"
+        "fault list-elem-i64-oob twins -> silent-wrap"
+#guard (marshallingTable.splitOn "silent-wrap").length = 1  -- and none is present
+
+-- Executable pins of the value model at the discriminating witnesses.
+#guard i64ArgMarshal .twins (.big (2 ^ 63)) = .rerouteTwin          -- oob → twin
+#guard i64ArgMarshal .notwins (.big (2 ^ 63)) = .throwRange         -- oob → loud
+#guard i64ArgMarshal .twins (.big (2 ^ 63 - 1)) = .pass (2 ^ 63 - 1) -- max passes exactly
+#guard i64ArgMarshal .twins (.num 5) = .pass 5
+#guard i64ArgMarshal_unguarded (.big (2 ^ 63)) = .pass (-(2 ^ 63))  -- the PoC wrap (pre-fix)
+#guard i64RetMarshal (2 ^ 53) = .big (2 ^ 53)                       -- past safe: stays BigInt
+#guard i64RetMarshal (2 ^ 53 - 1) = .num (2 ^ 53 - 1)               -- safe: Number
+#guard wrap32 (2 ^ 32 + 1) = 1                                      -- the i32-slot wrap class
+
+/-- SPOT (through `marshal_param_admitted_sound`, not a `#guard`): the
+    admitted `list[int]` boundary lowers to the i64-slot list class — fails
+    if the theorem is weakened to not pin the representation class. -/
+example : ∃ r, toWasmType (.list .int) = some r ∧ argValueExact r = true :=
+  marshal_param_admitted_sound _ rfl
+
+/-- SPOT (through `i64ArgMarshal_exact`): a pass at the i64 edge is pinned to
+    EXACTLY the value — fails if exactness is weakened to range-only. -/
+example (w : Int) (h : i64ArgMarshal .twins (.big (2 ^ 63 - 1)) = .pass w) :
+    w = 2 ^ 63 - 1 :=
+  (i64ArgMarshal_exact .twins _ w rfl h).1
+
+/-- SPOT (through `i64_boundary_roundtrip`): what crosses and returns is the
+    same integer. -/
+example (w : Int) (h : i64ArgMarshal .twins (.num 41) = .pass w) :
+    (i64RetMarshal w).val = 41 :=
+  i64_boundary_roundtrip .twins (.num 41) w rfl h
+
+/-- info: 'PythExpandVerify.marshal_param_admitted_sound' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms marshal_param_admitted_sound
+
+/-- info: 'PythExpandVerify.marshal_ret_admitted_sound' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms marshal_ret_admitted_sound
+
+/-- info: 'PythExpandVerify.i64ArgMarshal_exact' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms i64ArgMarshal_exact
+
+/-- info: 'PythExpandVerify.i64RetMarshal_exact' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms i64RetMarshal_exact
+
+/-- info: 'PythExpandVerify.i64_boundary_roundtrip' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms i64_boundary_roundtrip
+
+/-- info: 'PythExpandVerify.i64Marshal_unguardedStub_fails' does not depend on any axioms -/
+#guard_msgs in
+#print axioms i64Marshal_unguardedStub_fails
+
+/-- info: 'PythExpandVerify.listInt_i32KindStub_fails' does not depend on any axioms -/
+#guard_msgs in
+#print axioms listInt_i32KindStub_fails
+
+/-- info: 'PythExpandVerify.listI64Marshal_exact' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms listI64Marshal_exact
+
+/-- info: 'PythExpandVerify.listI64Marshal_unguardedStub_fails' does not depend on any axioms -/
+#guard_msgs in
+#print axioms listI64Marshal_unguardedStub_fails
+
+/-- info: 'PythExpandVerify.bool_boundary_roundtrip' does not depend on any axioms -/
+#guard_msgs in
+#print axioms bool_boundary_roundtrip
+
+/-- info: 'PythExpandVerify.marshal_exhaustive' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms marshal_exhaustive
 
 end PythExpandVerify

@@ -272,6 +272,9 @@ pub fn infer_literal_type(expr: &Expr) -> Option<Type> {
 /// Infer the result type of a binary operation.
 pub fn infer_binop_type(left: &Type, op: BinOp, right: &Type) -> Type {
     match op {
+        // `@` (matmul) is pure dunder dispatch on user classes; no builtin
+        // operand types, so nothing useful to infer.
+        BinOp::MatMul => Type::Any,
         // Arithmetic operators
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Pow => {
             match (left, right) {

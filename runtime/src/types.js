@@ -1,6 +1,8 @@
 // PythScribe Runtime — Type classes
 // Implements Python-compatible container types.
 
+import { __pyOwnKeys, __pyBytesKind } from "./runtime.js"; // r6: symbol-aware dict emptiness; bytes authority
+
 /**
  * Python truthiness check.
  * Empty containers, 0, null, undefined, empty string, false → falsy.
@@ -12,11 +14,14 @@ export function pyBool(x) {
     if (typeof x === "string") return x.length > 0;
     if (Array.isArray(x)) return x.length > 0;
     if (x instanceof Set || x instanceof Map) return x.size > 0;
+    // #457: bytes/bytearray truthiness is emptiness — routed through the
+    // bytes dispatch authority (bool(b"") is False, like CPython).
+    if (__pyBytesKind(x) !== null) return x.length > 0;
     if (typeof x.__bool__ === "function") return x.__bool__();
     if (typeof x.__len__ === "function") return x.__len__() > 0;
     // Plain dict literal: `{}` is truthy in JS but falsy in Python.
     if (typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype) {
-        return Object.keys(x).length > 0;
+        return __pyOwnKeys(x).length > 0; // r6: a symbol-only dict is truthy
     }
     return true;
 }
@@ -102,3 +107,5 @@ export class PyTuple {
         return `(${items})`;
     }
 }
+
+//# sourceMappingURL=types.js.map

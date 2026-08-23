@@ -200,9 +200,9 @@ following three are **non-blocking follow-ups**, recorded here rather than fixed
   declaration that DOES use an unpermitted axiom (e.g. a `sorry`) into the export and
   confirm nanoda hard-errors (or lists it as USED, not merely SKIPPED) — turning the
   "skip list = unused" inference into a positively-tested guarantee.
-- **F-8 — reference-app validators.** The `spec_validate_*.py` / `spec_lean_drift.py`
-  CPython-differential validators live in `verification/`; the reference-app-side harnesses
-  they mirror (`experiments/pbt-ps/*_shipped_binding.py`) live in the app repo. Follow-up:
+- **F-8 — cross-repo validators.** The `spec_validate_*.py` / `spec_lean_drift.py`
+  CPython-differential validators live in `verification/`; the shipping-binding harnesses
+  they mirror (`*_shipped_binding.py`) live in a separate app repo. Follow-up:
   vendor or symlink a canonical copy (or document the exact paths) so the differential
   provenance is self-contained from the pythscribe repo alone.
 

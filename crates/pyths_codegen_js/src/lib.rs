@@ -10,6 +10,11 @@ pub mod sourcemap;
 
 pub use emit::JsCodegen;
 pub use emit::{take_emit_overflow, MAX_EMIT_DEPTH};
+// delta4: the checked manifest of every compiler-emittable runtime symbol —
+// consumed by the cli_test.rs export-surface drift guard.
+pub use emit::EMITTABLE_RUNTIME_SYMBOLS;
+#[doc(hidden)]
+pub use emit::inline_runtime_for_test;
 pub use sourcemap::SourceMapBuilder;
 
 /// Result of compilation with optional source map.
@@ -153,6 +158,26 @@ pub fn codegen_inline_with_sourcemap(
     }
 }
 
+/// Inline-runtime codegen returning the RAW resolved source mappings (final-JS
+/// positions) instead of serialized JSON — used by `pyths bundle --sourcemap`
+/// to compose per-module maps into one multi-source bundle map.
+pub struct InlineRawMapOutput {
+    pub js: String,
+    pub mappings: Vec<sourcemap::Mapping>,
+}
+
+pub fn codegen_inline_with_raw_map(
+    module: &pyths_syntax::ast::Module,
+    source: &str,
+    source_file: &str,
+) -> InlineRawMapOutput {
+    let mut gen = JsCodegen::new_inline();
+    gen.enable_sourcemap(source, source_file, source_file);
+    gen.emit_module(module);
+    let (js, mappings) = gen.finish_with_raw_map();
+    InlineRawMapOutput { js, mappings }
+}
+
 /// Generate TypeScript declaration file (.d.ts) from an AST module.
 pub fn codegen_dts(module: &pyths_syntax::ast::Module) -> String {
     let mut gen = dts::DtsGenerator::new();
@@ -212,14 +237,55 @@ pub fn codegen_with_sourcemap_and_options(
     worker_runtime: bool,
     omit_sources_content: bool,
 ) -> CodegenOutput {
+    let opts = CodegenOptions {
+        npm_imports: Some(npm_imports),
+        worker_runtime,
+        ..Default::default()
+    };
+    codegen_with_sourcemap_full(
+        module,
+        source,
+        source_file,
+        output_file,
+        &opts,
+        omit_sources_content,
+    )
+}
+
+/// Sourcemap codegen with the FULL [`CodegenOptions`] set — closes the
+/// `--sourcemap` + auto/kernel gap where the sourcemap path ignored
+/// `wasm_skip`/`wasm_glue_filename` (and `react_refresh`), so a kernel
+/// module's `--sourcemap` output did not route through the WASM glue while
+/// the non-sourcemap output did. The bridge re-exports are appended after the
+/// mapped body and carry no mappings (they are generated shim lines, not
+/// user code), so `.ps` frame resolution is unaffected.
+pub fn codegen_with_sourcemap_full(
+    module: &pyths_syntax::ast::Module,
+    source: &str,
+    source_file: &str,
+    output_file: &str,
+    options: &CodegenOptions,
+    omit_sources_content: bool,
+) -> CodegenOutput {
     let mut gen = JsCodegen::new();
-    gen.set_npm_imports(npm_imports.clone());
-    if worker_runtime {
+    if let Some(imports) = options.npm_imports {
+        gen.set_npm_imports(imports.clone());
+    }
+    if options.react_refresh {
+        gen.enable_react_refresh();
+    }
+    if options.worker_runtime {
         gen.set_runtime_pkg("pyths-runtime/core");
+    }
+    if let Some(skip) = options.wasm_skip {
+        gen.set_wasm_skip(skip.iter().cloned().collect());
     }
     gen.enable_sourcemap(source, source_file, output_file);
     gen.set_omit_sources_content(omit_sources_content);
     gen.emit_module(module);
+    if let (Some(_), Some(glue)) = (options.wasm_skip, options.wasm_glue_filename) {
+        gen.emit_wasm_reexports(glue);
+    }
     let (js, source_map) = gen.finish_with_sourcemap();
     CodegenOutput {
         js,

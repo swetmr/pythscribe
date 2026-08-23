@@ -1,6 +1,12 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import {
+    makePrivateTempDir,
+    removePrivateTempDir,
+    resolvePythsCommand,
+    runPyths,
+    writeGeneratedSibling,
+} from "./pyths-safe.js";
 
 /**
  * Vite plugin for PythScribe (.ps and .psc files).
@@ -32,7 +38,7 @@ import { dirname, resolve } from "node:path";
  * @returns {import("vite").Plugin}
  */
 export default function pyths(options = {}) {
-    let pythsBin = options.pythsBin || null;
+    let pythsCmd = null;
     const reactRefreshOpt = options.reactRefresh ?? "auto";
     const emitDts = options.emitDts ?? true;
     let isDev = false;
@@ -42,9 +48,12 @@ export default function pyths(options = {}) {
         enforce: "pre",
 
         configResolved(config) {
-            // Auto-detect pyths binary if not specified
-            if (!pythsBin) {
-                pythsBin = findPythsBinary();
+            // SECURITY (#1, CWE-426): resolve the compiler to an ABSOLUTE command
+            // here. Never hand a bare name to execFileSync — the platform search
+            // can include the current directory, letting a hostile repo's
+            // `./pyths.exe` be selected. See pyths-safe.js.
+            if (!pythsCmd) {
+                pythsCmd = resolvePythsCommand({ pythsBin: options.pythsBin });
             }
             isDev = config.command === "serve";
         },
@@ -93,7 +102,7 @@ export default function pyths(options = {}) {
 
             try {
                 const { code: jsCode, map } = compilePsFile(
-                    pythsBin,
+                    pythsCmd || (pythsCmd = resolvePythsCommand({ pythsBin: options.pythsBin })),
                     id,
                     { reactRefresh: refreshEnabled, emitDts },
                 );
@@ -224,88 +233,96 @@ if (import.meta.hot && !inWebWorker) {
  * When `emitDts` is set, also passes --dts and persists the emitted
  * declaration as the TS arbitrary-extension sibling (`Foo.d.ps.ts`),
  * so `.ts` consumers of `import './Foo.ps'` get precise types.
+ *
+ * SECURITY (#6, CWE-73): all transient output (`<stem>.js`, `.js.map`,
+ * `<stem>.d.ts`) is directed into a PRIVATE per-invocation directory via
+ * `-o`, and that whole directory is removed afterwards. Previously the CLI
+ * wrote those three files beside the SOURCE and a `finally` block unlinked
+ * them "if they exist" — which deleted a developer's hand-written
+ * `Counter.js` (a file the CLI itself refuses to overwrite) on every build.
+ * Nothing is created or deleted next to the user's source any more.
+ *
+ * SECURITY (#2, CWE-59): the one file that must land beside the source — the
+ * `.d.ps.ts` declaration sibling — goes through `writeGeneratedSibling`,
+ * which refuses to follow a symlink and refuses to clobber a file that lacks
+ * the generated marker.
  */
-function compilePsFile(bin, filePath, { reactRefresh = false, emitDts = false } = {}) {
-    // The CLI emits `<stem>.js` for both `.ps` and `.psc` inputs.
-    const jsPath = filePath.replace(/\.psc?$/, ".js");
+function compilePsFile(cmd, filePath, { reactRefresh = false, emitDts = false } = {}) {
+    const workDir = makePrivateTempDir("vite");
+    // The CLI derives `.js.map` and `.d.ts` from `-o`, so one `-o` inside the
+    // private directory relocates every transient artifact at once.
+    const jsPath = join(workDir, "mod.js");
     const mapPath = jsPath + ".map";
-    // `--dts` emits `<stem>.d.ts`; we relocate it to the arbitrary-extension
-    // form TS resolves for `import './Foo.ps'` — `Foo.d.ps.ts` (or `.d.psc.ts`).
-    const dtsTmpPath = filePath.replace(/\.psc?$/, ".d.ts");
+    const dtsTmpPath = join(workDir, "mod.d.ts");
+    // We relocate the declaration to the arbitrary-extension form TS resolves
+    // for `import './Foo.ps'` — `Foo.d.ps.ts` (or `.d.psc.ts`).
     const declPath = filePath.endsWith(".psc")
         ? filePath.replace(/\.psc$/, ".d.psc.ts")
         : filePath.replace(/\.ps$/, ".d.ps.ts");
-    const compileArgs = ["compile", filePath, "--sourcemap"];
+    // Pin `--target js`: the compiler's no-flag default is auto-routing
+    // (js+wasm) as of 0.2.2, which emits .wasm/.glue.js sidecars for
+    // numeric-kernel modules. The bundler plugin does not yet manage those
+    // sidecars, so it stays explicitly JS-only. Teaching the plugin to carry
+    // the WASM sidecars (keep auto-routing live in the browser build) is the
+    // 0.2.3 follow-up (spec 17-07-26 §4.7.5).
+    const compileArgs = ["compile", filePath, "-o", jsPath, "--sourcemap", "--target", "js"];
     const stdoutArgs = ["compile", "--stdout", filePath];
     if (reactRefresh) {
         compileArgs.push("--react-refresh");
         stdoutArgs.push("--react-refresh");
     }
+    // `.d.ts` is default-ON in the compiler as of 0.2.2, so honoring
+    // `emitDts: false` now requires an explicit `--no-dts` (a bare omission
+    // would still emit the declaration). `--dts` when true is redundant but
+    // kept for clarity / older compiler pins.
     if (emitDts) {
         compileArgs.push("--dts");
+    } else {
+        compileArgs.push("--no-dts");
     }
 
+    let compiled;
     try {
-        // Compile to file with source map
-        execFileSync(bin, compileArgs, {
-            encoding: "utf-8",
-            timeout: 30000,
-        });
+        // Compile into the private dir with a source map
+        runPyths(cmd, compileArgs);
 
         const code = readFileSync(jsPath, "utf-8");
         let map = null;
         if (existsSync(mapPath)) {
             map = JSON.parse(readFileSync(mapPath, "utf-8"));
         }
-
-        // Persist the declaration sibling (write-if-changed → no watcher churn).
+        compiled = { code, map, dts: null };
         if (emitDts && existsSync(dtsTmpPath)) {
-            const dts = readFileSync(dtsTmpPath, "utf-8");
-            const prev = existsSync(declPath) ? readFileSync(declPath, "utf-8") : null;
-            if (prev !== dts) writeFileSync(declPath, dts);
+            compiled.dts = readFileSync(dtsTmpPath, "utf-8");
         }
-
-        return { code, map };
     } catch {
         // Fall back: --stdout without source map (no dts on this path).
         try {
-            const code = execFileSync(bin, stdoutArgs, {
-                encoding: "utf-8",
-                timeout: 30000,
-            });
-            return { code, map: null };
-        } catch (err) {
-            throw err;
+            compiled = { code: runPyths(cmd, stdoutArgs), map: null, dts: null };
+        } finally {
+            removePrivateTempDir(workDir);
         }
-    } finally {
-        // Clean up transient generated files; keep the `.d.ps.ts` sibling.
-        try { if (existsSync(jsPath)) unlinkSync(jsPath); } catch {}
-        try { if (existsSync(mapPath)) unlinkSync(mapPath); } catch {}
-        try { if (existsSync(dtsTmpPath)) unlinkSync(dtsTmpPath); } catch {}
+        return { code: compiled.code, map: null };
     }
+    // Only this invocation's private directory is removed — never a file
+    // beside the user's source (#6).
+    removePrivateTempDir(workDir);
+
+    // Persist the declaration sibling through the no-follow, ownership-aware
+    // writer (#2). A refusal must not fail the build: types are a nicety, and
+    // the diagnostic tells the user which file is in the way.
+    if (compiled.dts !== null) {
+        try {
+            writeGeneratedSibling(declPath, compiled.dts, { markerAware: true });
+        } catch (err) {
+            console.warn(`[vite-plugin-pyths] skipped .d.ts emission: ${err.message}`);
+        }
+    }
+
+    return { code: compiled.code, map: compiled.map };
 }
 
-/**
- * Find the pyths binary.
- * Checks: local cargo target, PATH, npx.
- */
-function findPythsBinary() {
-    // SECURITY (CWE-426 untrusted search path): do NOT probe cwd-relative `target/`
-    // paths by default, and NEVER execute a candidate just to test it — a hostile
-    // project could ship `./target/release/pyths` and gain code execution the moment
-    // a developer runs the build. Resolution order:
-    //   1. explicit PYTHS_BIN env (trusted, user-set)
-    //   2. opt-in local dev build via PYTHS_DEV_BIN (existence check only, no exec)
-    //   3. the `pyths` command on PATH / node_modules/.bin (npm puts .bin on PATH)
-    if (process.env.PYTHS_BIN) return process.env.PYTHS_BIN;
-    if (process.env.PYTHS_DEV_BIN) {
-        for (const rel of [
-            "target/release/pyths", "target/release/pyths.exe",
-            "target/debug/pyths", "target/debug/pyths.exe",
-        ]) {
-            const p = resolve(process.cwd(), rel);
-            if (existsSync(p)) return p;
-        }
-    }
-    return "pyths";
-}
+// Compiler resolution now lives in `pyths-safe.js::resolvePythsCommand`, which
+// always yields an ABSOLUTE command (#1, CWE-426) and is shared byte-for-byte
+// with next-plugin-pyths.
+export { compilePsFile as __compilePsFileForTests };

@@ -164,6 +164,17 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// Semantic-generation salt for the cache key. Bump whenever compile
+/// SEMANTICS change without a version bump (the package version alone is not
+/// enough: dev binaries share it with released ones). Generation 2 =
+/// the 0.2.2 default flips (auto-routing default + strict `@wasm`): a record
+/// written by a soft-`@wasm` binary must never satisfy a build that would now
+/// hard-error. Generation 3 was the (reverted) Option A int=BigInt value
+/// model. Generation 4 = Option B minimal int/float fidelity: integer-valued
+/// floats are boxed (PyFloat carrier), so records emitted by ANY earlier
+/// value model (hybrid gen2 or Option A gen3) must never be served.
+const CACHE_KEY_GENERATION: &str = "gen4";
+
 /// Build the cache key for a source/target combo.
 pub fn cache_key(source_text: &str, target: &str) -> u64 {
     let mut combined = String::with_capacity(source_text.len() + 64);
@@ -172,6 +183,8 @@ pub fn cache_key(source_text: &str, target: &str) -> u64 {
     combined.push_str(target);
     combined.push('\0');
     combined.push_str(env!("CARGO_PKG_VERSION"));
+    combined.push('\0');
+    combined.push_str(CACHE_KEY_GENERATION);
     fnv1a64(combined.as_bytes())
 }
 

@@ -46,6 +46,21 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
+      # Node is required by the TS-.d.ts-run interop lane (npm ci below +
+      # the lane's `node <repo-local>/tsc` invocations). Pinned to 22 to match
+      # the other jobs, so the `test` job no longer relies on ambient node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Provision pinned TypeScript (TS-.d.ts-run interop lane)
+        # The int/float Option-B battery's lane 5 (crates/pyths_cli/tests/
+        # int_float_optb.rs) type-checks AND runs a TS consumer against the
+        # emitted .d.ts. It invokes ONLY this pinned, lockfile-frozen
+        # TypeScript — never PATH tsc/tsgo, never an npx download — and
+        # FAILS (not skips) if this install is missing.
+        run: npm ci --prefix crates/pyths_cli/tests/ts-toolchain
+
       - name: Test (Rust workspace, all crates)
         run: cargo test --workspace
 
@@ -175,6 +190,12 @@ jobs:
       - name: decimal / fractions stdlib unit tests (27)
         run: node --test runtime/src/stdlib/decimal.test.mjs runtime/src/stdlib/fractions.test.mjs
 
+      - name: Numeric value-boundary guard (4-form × op matrix, #38/#460/#461/#464)
+        run: node --test runtime/src/numeric_boundary.test.mjs
+
+      - name: Operand-type guard (binary-op TypeError matrix, E2/#466)
+        run: node --test runtime/src/operand_type.test.mjs
+
       - name: Format-spec differential vs CPython (30)
         run: node --test crates/pyths_runtime/js/format_diff_test.mjs
 
@@ -260,6 +281,19 @@ jobs:
 
       - name: Auto-routing E2E (8) — JS for DOM, WASM for compute
         run: node --test tests/differential/auto_route_test.mjs
+
+      # Build-plugin safety: the security-scan reproducers for findings
+      # #1 (CWE-426 cwd exe hijack), #2 (CWE-59 symlink/unowned .d.ts write)
+      # and #6 (CWE-73 unowned sibling deletion), plus the byte-parity gate on
+      # the duplicated `pyths-safe.js` and the existing refresh-shim /
+      # import-rewrite suites. The e2e files drive the REAL compiler.
+      - name: Build-plugin suites — vite-plugin-pyths
+        working-directory: packages/vite-plugin-pyths
+        run: node --test test-safe-api.mjs test-safe-parity.mjs test-e2e-outputs.mjs test-refresh-shim.js
+
+      - name: Build-plugin suites — next-plugin-pyths
+        working-directory: packages/next-plugin-pyths
+        run: node --test test-safe-api.mjs test-safe-parity.mjs test-e2e-outputs.mjs test-rewrite-imports.mjs
 
       - name: Class components / error boundaries — real react render (A3)
         working-directory: tests/differential/react_render_pkg
@@ -467,6 +501,25 @@ jobs:
       - name: WASM-admission table binding (Lean WasmAdmission vs committed fixture)
         working-directory: verification
         run: ./.lake/build/bin/expanddiff --check-wasm-admission-table wasm-admission-table.txt
+
+      # JS<->WASM marshalling boundary: the finite conversion/disposition
+      # table must match between the Lean MarshalTable model (proving
+      # marshal_param_admitted_sound / i64ArgMarshal_exact / marshal_exhaustive)
+      # and the shipping bridge (`convert_js_to_wasm` / `convert_wasm_to_js` /
+      # the guard+ladder snippets, checked by cargo test
+      # marshalling_table_matches_committed_fixture in the `test` job). Both
+      # compare against the same committed fixture; the runtime semantics is
+      # bound by verification/marshalling_shipped_binding.py (below).
+      - name: Marshalling-table binding (Lean MarshalTable vs committed fixture)
+        working-directory: verification
+        run: ./.lake/build/bin/expanddiff --check-marshalling-table marshalling-table.txt
+
+      # Shipping-binding differential for the marshalling table: real pyths
+      # js+wasm vs CPython over boundary-crossing values (oob args, oob list
+      # elements, result overflow, exceptions), with a false-world control
+      # (guard-deleted glue must diverge).
+      - name: Marshalling boundary shipped-binding differential
+        run: python verification/marshalling_shipped_binding.py
 
       - name: Trust-base audit — no sorry/admit/axiom/native_decide
         working-directory: verification
@@ -690,7 +743,7 @@ jobs:
   # verify the Iron Rule over the 7 clone .psc pairs, then run the
   # Playwright behavioral e2e against the built Vite track. The Next
   # track e2e stays local-only for CI-cost control (documented choice —
-  # the Vite track is the primary per CLAUDE.md).
+  # the Vite track is the primary).
   # --------------------------------------------------------------------
   clones:
     name: Clone parity (tri-track)

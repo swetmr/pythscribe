@@ -4,3 +4,5 @@
 // (runtime_package_files / inliner) and the JS unit tests (runtime.test.js)
 // exercise exactly one runtime. Do not add divergent code here.
 export * from "../../../runtime/src/runtime.js";
+
+//# sourceMappingURL=runtime.js.map

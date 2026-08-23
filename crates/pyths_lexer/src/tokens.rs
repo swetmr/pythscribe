@@ -142,13 +142,29 @@ fn parse_imag(lex: &mut logos::Lexer<Token>) -> Option<f64> {
     s.parse::<f64>().ok()
 }
 
+/// Universal-newline normalization for multi-line string-literal BODIES.
+///
+/// CPython reads source files in universal-newlines mode, so by the time the
+/// tokenizer sees a triple-quoted literal (raw included), every physical
+/// `\r\n` / lone `\r` line ending inside it is already `\n`. Our lexer works
+/// on the raw file bytes, so a Windows (CRLF) checkout used to silently embed
+/// `\r` into every multi-line string value. Normalizing here — at the single
+/// point where the token VALUE is built — fixes the whole class without
+/// disturbing byte spans (the bump lengths still cover the raw source).
+fn normalize_universal_newlines(s: &str) -> String {
+    if !s.contains('\r') {
+        return s.to_string();
+    }
+    s.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// Lex a triple-double-quoted string: scan until closing `"""`
 fn lex_triple_double_string(lex: &mut logos::Lexer<Token>) -> Option<String> {
     let remainder = lex.remainder();
     if let Some(end) = remainder.find("\"\"\"") {
         let content = &remainder[..end];
         lex.bump(end + 3); // consume content + closing """
-        Some(decode_py_escapes(content))
+        Some(decode_py_escapes(&normalize_universal_newlines(content)))
     } else {
         None
     }
@@ -160,31 +176,35 @@ fn lex_triple_single_string(lex: &mut logos::Lexer<Token>) -> Option<String> {
     if let Some(end) = remainder.find("'''") {
         let content = &remainder[..end];
         lex.bump(end + 3);
-        Some(decode_py_escapes(content))
+        Some(decode_py_escapes(&normalize_universal_newlines(content)))
     } else {
         None
     }
 }
 
-/// Raw triple-double-quoted string (`r"""..."""`) — body verbatim (#100).
+/// Raw triple-double-quoted string (`r"""..."""`) — body verbatim (#100)
+/// modulo universal-newline normalization (raw-ness suppresses ESCAPE
+/// processing, not source-decoding: CPython gives `r'''a<CRLF>b'''` the value
+/// `'a\nb'` too).
 fn lex_triple_double_raw_string(lex: &mut logos::Lexer<Token>) -> Option<String> {
     let remainder = lex.remainder();
     if let Some(end) = remainder.find("\"\"\"") {
         let content = &remainder[..end];
         lex.bump(end + 3);
-        Some(content.to_string())
+        Some(normalize_universal_newlines(content))
     } else {
         None
     }
 }
 
-/// Raw triple-single-quoted string (`r'''...'''`) — body verbatim (#100).
+/// Raw triple-single-quoted string (`r'''...'''`) — body verbatim (#100)
+/// modulo universal-newline normalization (see above).
 fn lex_triple_single_raw_string(lex: &mut logos::Lexer<Token>) -> Option<String> {
     let remainder = lex.remainder();
     if let Some(end) = remainder.find("'''") {
         let content = &remainder[..end];
         lex.bump(end + 3);
-        Some(content.to_string())
+        Some(normalize_universal_newlines(content))
     } else {
         None
     }
@@ -280,7 +300,7 @@ fn lex_triple_double_fstring(lex: &mut logos::Lexer<Token>) -> Option<String> {
     if let Some(end) = remainder.find("\"\"\"") {
         let content = &remainder[..end];
         lex.bump(end + 3);
-        Some(content.to_string())
+        Some(normalize_universal_newlines(content))
     } else {
         None
     }
@@ -292,7 +312,7 @@ fn lex_triple_single_fstring(lex: &mut logos::Lexer<Token>) -> Option<String> {
     if let Some(end) = remainder.find("'''") {
         let content = &remainder[..end];
         lex.bump(end + 3);
-        Some(content.to_string())
+        Some(normalize_universal_newlines(content))
     } else {
         None
     }
@@ -395,9 +415,12 @@ pub enum Token {
     // too (`0xFF`, `0o17`, `0b101`). Truly-unbounded (>i128) is a documented
     // residual. Base prefixes are matched before the decimal rule so `0x…`
     // isn't split as Integer(0) + identifier.
-    #[regex(r"0[xX][0-9a-fA-F][0-9a-fA-F_]*", |lex| i128::from_str_radix(&lex.slice()[2..].replace('_', ""), 16).ok())]
-    #[regex(r"0[oO][0-7][0-7_]*", |lex| i128::from_str_radix(&lex.slice()[2..].replace('_', ""), 8).ok())]
-    #[regex(r"0[bB][01][01_]*", |lex| i128::from_str_radix(&lex.slice()[2..].replace('_', ""), 2).ok())]
+    // The optional `_` right after the base prefix follows CPython's grammar
+    // (`"0" ("x"|"X") (["_"] hexdigit)+`): `0x_ff_ff_ff` / `0b_1010` / `0o_17`
+    // are legal (autotester `dashed_numbers`).
+    #[regex(r"0[xX]_?[0-9a-fA-F][0-9a-fA-F_]*", |lex| i128::from_str_radix(&lex.slice()[2..].replace('_', ""), 16).ok())]
+    #[regex(r"0[oO]_?[0-7][0-7_]*", |lex| i128::from_str_radix(&lex.slice()[2..].replace('_', ""), 8).ok())]
+    #[regex(r"0[bB]_?[01][01_]*", |lex| i128::from_str_radix(&lex.slice()[2..].replace('_', ""), 2).ok())]
     #[regex(r"[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<i128>().ok())]
     Integer(i128),
 
@@ -468,6 +491,18 @@ pub enum Token {
     })]
     String_(String),
 
+    // Bytes literals (autotester byte_arrays): `b'...'` / `b"..."` with the
+    // same escape decoding as str; the parser narrows code points to bytes.
+    #[regex(r#"[bB]"([^"\\]|\\.)*""#, |lex| {
+        let s = lex.slice();
+        Some(decode_py_escapes(&s[2..s.len()-1]))
+    })]
+    #[regex(r#"[bB]'([^'\\]|\\.)*'"#, |lex| {
+        let s = lex.slice();
+        Some(decode_py_escapes(&s[2..s.len()-1]))
+    })]
+    BytesString(String),
+
     // Triple-quoted f-strings
     #[regex(r#"f""""#, lex_triple_double_fstring)]
     #[regex(r"f'''", lex_triple_single_fstring)]
@@ -509,6 +544,8 @@ pub enum Token {
     Percent,
     #[token("@")]
     At,
+    #[token("@=")]
+    AtEq,
 
     #[token("==")]
     EqEq,
@@ -620,6 +657,7 @@ impl std::fmt::Display for Token {
             Token::Float(n) => write!(f, "{}", n),
             Token::Imaginary(n) => write!(f, "{}j", n),
             Token::String_(s) => write!(f, "\"{}\"", s),
+            Token::BytesString(s) => write!(f, "b\"{}\"", s),
             Token::FString(s) => write!(f, "f\"{}\"", s),
             Token::Identifier(s) => write!(f, "{}", s),
             Token::True_ => write!(f, "True"),
@@ -666,6 +704,7 @@ impl std::fmt::Display for Token {
             Token::DoubleSlash => write!(f, "//"),
             Token::Percent => write!(f, "%"),
             Token::At => write!(f, "@"),
+            Token::AtEq => write!(f, "@="),
             Token::EqEq => write!(f, "=="),
             Token::NotEq => write!(f, "!="),
             Token::Lt => write!(f, "<"),

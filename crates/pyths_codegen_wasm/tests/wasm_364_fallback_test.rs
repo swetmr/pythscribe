@@ -3,7 +3,7 @@
 //!
 //! These exercise the codegen/analysis half of the #364 wave directly (the
 //! JS-glue half — the runtime try/catch + `__pyparams__` kwarg binding — is
-//! covered by the real-code forced-WASM differential in the reference-app repo,
+//! covered by a real-code forced-WASM differential suite,
 //! which this wave drove from 29 miscompiles to 0). Each test pins one of the
 //! four root causes the differential surfaced:
 //!

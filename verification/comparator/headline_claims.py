@@ -12,7 +12,7 @@
 #                 teeth), or None + a `witness_note` if genuinely absent.
 #   witness_note: rationale when witness is None (why no refuter is expected).
 #   paper_claim : which Paper-C claim / lattice component it backs
-#                 (cross-ref reference-app/semantic_preservance.md + TRUST.md).
+#                 (cross-ref the C3/C4 arithmetic-type-safety workstream + TRUST.md).
 #
 # `file`, `line`, `sorry_count`, and `axioms` are filled in mechanically by
 # axiom_footprint.py from the live source + `#print axioms` output.
@@ -118,6 +118,51 @@ _ROUTING = [
          witness="wasmRouteSafe_wrapStub_fails",
          witness_note=None,
          paper_claim="Paper C 7b boundary composition (js+wasm twin corollary; trust boundary); semantic_preservance 7b."),
+]
+
+# The JS<->WASM value-marshalling boundary as a finite table (MarshalTable) —
+# the third table-gate (route-table / wasm-admission-table / marshalling-table).
+# Bound two-sided to bridge.rs (convert_js_to_wasm / convert_wasm_to_js /
+# list_elem_kind + the guard/ladder snippets) via verification/
+# marshalling-table.txt: Lean `expanddiff --check-marshalling-table` AND cargo
+# `marshalling_table_matches_committed_fixture` (fault rows DERIVED from real
+# probe bridges with loud-panic snippet assertions). Runtime semantics bound by
+# verification/marshalling_shipped_binding.py (real pyths js+wasm vs CPython
+# over boundary-crossing values, with a guard-deleted FALSE-WORLD control).
+# Enumerating this table found + fixed a REAL shipping bug: the __list_to_wasm
+# i64 ELEMENT path silently wrapped mod 2**64 (pick([2**63+7]) ->
+# -9223372036854775801); the scalar path was already __i64Oob-guarded.
+_MARSHALLING = [
+    dict(decl="marshal_param_admitted_sound",
+         name="Every boundary type the #364 admission accepts as a WASM parameter marshals ONLY through a value-exact numeric converter class (guarded-i64 / f64-identity / bool-i32 / matching-slot numeric list) — never a pointer marshaller or a mismatched element slot. Finitely witnessed by every `arg .. -> 1` row of marshalling-table.txt (cargo admitted_arg_rows_use_exact_marshallers).",
+         witness="listInt_i32KindStub_fails",
+         witness_note=None,
+         paper_claim="Paper C JS<->WASM boundary table (soundness of the admitted marshalling surface); semantic_preservance 7b."),
+    dict(decl="marshal_ret_admitted_sound",
+         name="Every #364-admitted return type is a genuine no-value return or lowers to a value-exact scalar normalization (__i64ToJs / f64 / Boolean) — an admitted return NEVER marshals through a pointer converter.",
+         witness=None,
+         witness_note="Finite-class soundness over the return admission; the value teeth live in i64RetMarshal_exact (+ the i64 stubs), and the excluded pointer classes are witnessed as bit-0 rows of the committed table (two-sided gate).",
+         paper_claim="Paper C JS<->WASM boundary table (return side); semantic_preservance 7b."),
+    dict(decl="i64ArgMarshal_exact",
+         name="The i64 crossing (the only lossy-prone scalar) either passes the EXACT value (in i64 range) or diverts (reroute-to-twin / RangeError) — NEVER a silently wrapped pass, under the runtime int-representation invariant (JsInt.wf, differential-exercised).",
+         witness="i64Marshal_unguardedStub_fails",
+         witness_note=None,
+         paper_claim="Paper C JS<->WASM boundary table (i64 crossing exactness); semantic_preservance 7b."),
+    dict(decl="i64_boundary_roundtrip",
+         name="Boundary round-trip: any value the i64 crossing passes in and __i64ToJs normalizes back out is the SAME integer — the js+wasm i64 boundary is the identity on everything it lets through.",
+         witness="i64Marshal_unguardedStub_fails",
+         witness_note=None,
+         paper_claim="Paper C JS<->WASM boundary table (round-trip); semantic_preservance 7b."),
+    dict(decl="marshal_exhaustive",
+         name="The finite 56-row table is EXHAUSTIVE over the whole (infinite) representable domain: every WasmRepr's conversion (any nesting) equals a table row's, because the conversion depends only on head constructor + element kind, all witnessed in the alphabet.",
+         witness=None,
+         witness_note="Exhaustiveness/coverage theorem (no wrong-lowering to refute; the per-class teeth are the i64/i32-kind stubs). Makes 'check the 56 committed rows' equivalent to 'check the entire boundary'.",
+         paper_claim="Paper C JS<->WASM boundary table (finite => exhaustively checkable); semantic_preservance 7b."),
+    dict(decl="i64Marshal_unguardedStub_fails",
+         name="The guard is load-bearing: the UNGUARDED conversion (raw ES ToBigInt64, wrapI64) passes wrap(2^63) = -2^63 for a legal BigInt — REFUTED. This stub IS the real pre-fix shipped behavior of the __list_to_wasm i64 element path (PoC 2026-08-16), fixed by the element RangeError guard (table rows list-elem-i64-oob).",
+         witness=None,
+         witness_note="This decl IS itself the discriminating refuter (axiom-free); documents the real shipping bug the table enumeration found. The differential's false-world control (guard-deleted glue) is its runtime counterpart.",
+         paper_claim="Paper C JS<->WASM boundary table (the bug-finding payoff); semantic_preservance 7b."),
 ]
 
 _CORE = [
@@ -327,7 +372,7 @@ _COMPOSITION = [
 # (tag = fn(value), C2 subset C1; order & termination share the eager knob), NOT
 # independent axes; each carries a per-projection refuter (teeth). Bound to the SHIPPED
 # pyths by experiments/pbt-ps/union_shipped_binding.py (model==pyths==CPython, DRY).
-# See semantic_preservance.md 5/6.
+# See the design notes 5/6.
 _UNION = [
     dict(decl="preservationUnion",
          name="THE UNION (Paper-C centrepiece): ONE equation evalUjs fuel e = evalUpy fuel e over the combined arith(//,% - the % arm is a genuine ufmod constructor, jsFmod-lowered, proved via jsFmod_eq_fmod)+subscript+short-circuit+recursion fragment, carrier PyResult UVal x trace fuel-indexed. The HONEST composite claim, in two parts stated exactly: (1) preservationUnion is UNIVERSAL over the Lean model fragment (forall UExpr, forall fuel, in Lean) - BROAD observational preservation (value, type mod-D1, error-occurrence, error-KIND, effect-order, termination agree at every fuel); (2) it is BOUND to the shipped compiler by a full-observation pyths<->CPython differential over an N-program INT-typed corpus (union_shipped_binding.py: obs_sig(eval_model)==parse(pyths)==parse(CPython) on all axes at once for SCALAR values - container final values coarsen to their type-name; the D1 whole-float cases are bound SEPARATELY as model-derived tag+repr witnesses, not the full signature - plus a Lean<->Python drift guard via `lake env lean`), modulo the documented exception set {D1 whole-float type TAG - shipped type(2.0)->int, bound THROUGH the model obsTagModD1 (the separate repr-2.0 retention is a runtime fact, unmodeled); message text (unmodeled)}. The finite corpus is NOT claimed exhaustive - universality lives in the Lean proof, the differential binds it to the runtime. NOT six independent axes: the slices are DEPENDENT projections (tag=fn(value), C2 subset C1; order & termination share the eager knob). The Lean theorem is universal over UExpr (incl. ufloat, which stays float-tagged under jsUL = CPython-faithful); the SHIPPING differential is the int-typed corpus + separate partial D1 witnesses; lift to 16 waves is CONJECTURED-mechanical future work. Two documented out-of-fragment divergences (str % -> NotImplementedError vs TypeError; raise-by-name -> NameError) noted in the harness, outside the modeled domain.",
@@ -380,6 +425,7 @@ def _flatten():
     out = []
     out += _EXPANDER
     out += _ROUTING
+    out += _MARSHALLING
     out += _CORE
     for entry in _WAVES:
         if len(entry) == 5:

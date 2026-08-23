@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use pyths_syntax::ast::{DictItem, Expr, ExprKind, FStringPart, Module, Param, Stmt, StmtKind};
+use pyths_syntax::ast::{
+    DictItem, ExceptHandler, Expr, ExprKind, FStringPart, Module, Param, Stmt, StmtKind,
+};
 use pyths_syntax::operators::{BinOp, UnaryOp};
 use pyths_types::types::{resolve_type, Type};
 
@@ -300,7 +302,7 @@ fn collect_called_functions(body: &[Stmt], out: &mut Vec<String>) {
 /// general data the backend miscompiles, so such functions stay on the correct
 /// JS path. (`str`-returning functions can only produce their value via string
 /// operations, which the body whitelist also rejects.)
-fn is_scalar_wasm_return(ty: &Type) -> bool {
+pub fn is_scalar_wasm_return(ty: &Type) -> bool {
     matches!(
         ty,
         Type::Int | Type::Float | Type::Bool | Type::NoneType | Type::Void
@@ -312,7 +314,7 @@ fn is_scalar_wasm_return(ty: &Type) -> bool {
 /// (`list[int]` / `list[float]` / `list[bool]`) — the proven-safe marshalling
 /// surface (similarity's `list[float]`, Livermore's scalar params). Strings,
 /// dicts, sets, tuples, nested lists, Optional/Callable/Any stay JS.
-fn is_numeric_kernel_param(ty: &Type) -> bool {
+pub fn is_numeric_kernel_param(ty: &Type) -> bool {
     match ty {
         Type::Int | Type::Float | Type::Bool => true,
         Type::List(inner) => matches!(**inner, Type::Int | Type::Float | Type::Bool),
@@ -689,6 +691,7 @@ pub fn max_subscript_depth(expr: &Expr) -> usize {
         | ExprKind::FloatLiteral(_)
         | ExprKind::ImagLiteral(_)
         | ExprKind::StringLiteral(_)
+        | ExprKind::BytesLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::NoneLiteral
         | ExprKind::Name(_) => 0,
@@ -738,6 +741,117 @@ fn check_body(
         ));
     }
     Ok(())
+}
+
+/// Review D: does any `return <expr>` directly inside this try body (descending
+/// through nested if/while/for bodies, but NOT into a nested `try` — which has
+/// its own handlers — nor into nested defs) return an expression that can raise
+/// a subscript IndexError? Such a return bypasses the enclosing handler on the
+/// WASM backend, so the function must stay on JS.
+fn try_body_has_raising_return(body: &[Stmt]) -> bool {
+    body.iter().any(stmt_has_raising_return)
+}
+
+/// Review D (over-rejection fix): could any of these handlers actually CATCH an
+/// `IndexError`? A bare `except:`, or a handler naming IndexError or one of its
+/// superclasses (LookupError / Exception / BaseException), can. `except
+/// ValueError` cannot, so the return-bypass is harmless (the IndexError
+/// propagates out either way) and the function stays WASM-eligible.
+fn handlers_catch_indexerror(handlers: &[ExceptHandler]) -> bool {
+    fn expr_catches(e: &Expr) -> bool {
+        match &e.kind {
+            // `except (A, B):` — any element may catch it.
+            ExprKind::Tuple(elts) => elts.iter().any(expr_catches),
+            _ => matches!(
+                exception_name_from_expr(e).as_deref(),
+                Some("IndexError" | "LookupError" | "Exception" | "BaseException")
+            ),
+        }
+    }
+    handlers.iter().any(|h| match &h.exc_type {
+        None => true, // bare `except:` catches everything
+        Some(e) => expr_catches(e),
+    })
+}
+
+fn stmt_has_raising_return(stmt: &Stmt) -> bool {
+    let any = |b: &[Stmt]| b.iter().any(stmt_has_raising_return);
+    let any_opt = |b: &Option<Vec<Stmt>>| b.as_ref().is_some_and(|b| any(b));
+    match &stmt.kind {
+        StmtKind::Return(Some(v)) => expr_contains_subscript(v),
+        StmtKind::If {
+            body,
+            elif_clauses,
+            else_body,
+            ..
+        } => {
+            any(body)
+                || elif_clauses.iter().any(|(_, b)| any(b))
+                || any_opt(else_body)
+        }
+        // Loops: the `else` body also runs (and can hold a raising return).
+        StmtKind::While {
+            body, else_body, ..
+        }
+        | StmtKind::For {
+            body, else_body, ..
+        } => any(body) || any_opt(else_body),
+        StmtKind::With { body, .. } => any(body),
+        StmtKind::Match { cases, .. } => cases.iter().any(|c| any(&c.body)),
+        // A nested try is independently admission-checked, but descend anyway so
+        // no body is left unvisited (a return in its body/handler/finally has the
+        // same handler-bypass bug).
+        StmtKind::Try {
+            body,
+            handlers,
+            else_body,
+            finally_body,
+        } => {
+            any(body)
+                || handlers.iter().any(|h| any(&h.body))
+                || any_opt(else_body)
+                || any_opt(finally_body)
+        }
+        // FuncDef / ClassDef are separate scopes — their returns are not this
+        // try's. Everything else binds no nested body.
+        _ => false,
+    }
+}
+
+/// Whether an expression contains a subscript read anywhere (the WASM raising
+/// operation). Conservative: any `x[i]` — the emitter's bounds check may raise.
+fn expr_contains_subscript(e: &Expr) -> bool {
+    use pyths_syntax::ast::ExprKind as E;
+    match &e.kind {
+        E::Subscript { .. } => true,
+        E::BinOp { left, right, .. } => {
+            expr_contains_subscript(left) || expr_contains_subscript(right)
+        }
+        E::UnaryOp { operand, .. } => expr_contains_subscript(operand),
+        E::Compare { left, comparisons } => {
+            expr_contains_subscript(left)
+                || comparisons.iter().any(|(_, e)| expr_contains_subscript(e))
+        }
+        E::Call {
+            func, args, kwargs, ..
+        } => {
+            expr_contains_subscript(func)
+                || args.iter().any(expr_contains_subscript)
+                || kwargs.iter().any(|k| expr_contains_subscript(&k.value))
+        }
+        E::Attribute { value, .. } => expr_contains_subscript(value),
+        E::IfExpr {
+            test,
+            body,
+            else_body,
+        } => {
+            expr_contains_subscript(test)
+                || expr_contains_subscript(body)
+                || expr_contains_subscript(else_body)
+        }
+        E::Tuple(elts) | E::List(elts) => elts.iter().any(expr_contains_subscript),
+        _ => false,
+    }
 }
 
 fn check_stmt(
@@ -878,28 +992,56 @@ fn check_stmt(
             }
             check_body(body, eligible_names, extended_excs)?;
             for h in handlers {
-                let exc_name = match &h.exc_type {
-                    Some(e) => exception_name_from_expr(e),
-                    None => Some("Exception".into()), // bare except: catches everything
+                // Review finding 6: a TUPLE handler `except (A, B):` catches
+                // several types — validate EACH element (a bare `except:`
+                // catches everything). Previously the whole tuple was rejected
+                // as "not a built-in", so it never reached the D gating below.
+                let exc_names: Vec<Option<String>> = match &h.exc_type {
+                    None => vec![Some("Exception".into())],
+                    Some(e) => match &e.kind {
+                        ExprKind::Tuple(elts) => {
+                            elts.iter().map(exception_name_from_expr).collect()
+                        }
+                        _ => vec![exception_name_from_expr(e)],
+                    },
                 };
-                match exc_name {
-                    Some(n) if extended_excs.iter().any(|e| e == &n) => {}
-                    Some(n) => {
-                        return Err(format!(
-                            "except handler for '{}' is not supported in WASM (only built-ins)",
-                            n
-                        ));
-                    }
-                    None => {
-                        return Err(
-                            "except handler type must reference a built-in exception".into()
-                        );
+                for exc_name in exc_names {
+                    match exc_name {
+                        Some(n) if extended_excs.iter().any(|e| e == &n) => {}
+                        Some(n) => {
+                            return Err(format!(
+                                "except handler for '{}' is not supported in WASM (only built-ins)",
+                                n
+                            ));
+                        }
+                        None => {
+                            return Err(
+                                "except handler type must reference a built-in exception".into(),
+                            );
+                        }
                     }
                 }
                 if h.name.is_some() {
                     return Err("'except E as name' binding is not supported in WASM".into());
                 }
                 check_body(&h.body, eligible_names, extended_excs)?;
+            }
+            // WASM-error-model limitation (review D): a subscript read inside a
+            // `return` expression within a try body sets the global err_code
+            // mid-expression, but the WASM `return` executes BEFORE the
+            // post-statement error dispatch — so a local handler that WOULD
+            // catch the IndexError is bypassed and the error escapes. The JS
+            // backend handles this correctly, so reject such functions from
+            // WASM. Only when a handler could actually catch IndexError: an
+            // `except ValueError` cannot, so the IndexError propagates either
+            // way (WASM behaves correctly) and the function stays eligible.
+            if try_body_has_raising_return(body) && handlers_catch_indexerror(handlers) {
+                return Err(
+                    "a subscript inside a `return` within a try/except that catches IndexError is \
+                     not supported on the WASM fast path (the IndexError would bypass the handler); \
+                     function stays on the JS backend"
+                        .into(),
+                );
             }
             Ok(())
         }
@@ -1070,6 +1212,9 @@ fn check_expr(expr: &Expr, eligible_names: &[String]) -> Result<(), String> {
         ),
         ExprKind::StringLiteral(_) => Err(
             "string literals are not supported on the WASM fast path (function stays JS)".into(),
+        ),
+        ExprKind::BytesLiteral(_) => Err(
+            "bytes literals are not supported on the WASM fast path (function stays JS)".into(),
         ),
         ExprKind::FString { .. } => {
             Err("f-strings are not supported on the WASM fast path (function stays JS)".into())

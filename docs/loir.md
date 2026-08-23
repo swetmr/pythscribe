@@ -64,7 +64,7 @@ measured numbers.
 | **Semantic precision** | One meaning per program, and one *spelling* per meaning: the canonical printer (`pyths_print`) defines the single normal form, so semantically identical programs normalize to identical text. Python semantics (not JavaScript's) are carried through codegen and pinned by differential tests. |
 | **Evolvable structure** | The canonical form is stable under round-trip (parse → print → reparse, `crates/pyths_print/tests/corpus_roundtrip.rs`), which makes diffs and reviews meaningful as the language grows; compression tiers evolve independently of the canonical surface because the `auto` expand mode guarantees `.ps` files are never touched by the expander. |
 | **Reproducible derivation** | `pyths expand --verify` enforces the Iron Rule per file; the `$NAME` dictionary and `%NAME` idiom table live in a committed `pyths.toml`, so the `.psc` → `.ps` derivation is a pure, replayable function of repo contents. |
-| **Operational assurance** | 2,000+ automated tests, including the 1,318-entry CPython differential oracle (fully green, cross-checked on a second JS engine), the panic-resistance fuzz harness (`crates/pyths_cli/tests/fuzz_inputs.rs`) plus weekly coverage-guided `cargo-fuzz`, and the end-to-end clone apps (`examples/clones/` — six shared demos mounted in both Vite and Next.js shells). |
+| **Operational assurance** | 4,000+ automated tests, including the 1,376-entry CPython differential oracle (fully green, cross-checked on a second JS engine), the panic-resistance fuzz harness (`crates/pyths_cli/tests/fuzz_inputs.rs`) plus weekly coverage-guided `cargo-fuzz`, and the end-to-end clone apps (`examples/clones/` — six shared demos mounted in both Vite and Next.js shells). |
 
 ## Bi-directionality status
 

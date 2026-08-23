@@ -324,6 +324,7 @@ from pyths import random
 
 | Function | Description |
 |----------|-------------|
+| `random.seed(n)` | Seed the module PRNG — reproducible sequences (see note) |
 | `random.random()` | Float in [0.0, 1.0) |
 | `random.randint(a, b)` | Integer in [a, b] |
 | `random.randrange(start, stop=None, step=1)` | Random from range |
@@ -337,6 +338,13 @@ from pyths import random
 | `random.triangular(low=0, high=1, mode=None)` | Triangular distribution |
 | `random.betavariate(alpha, beta)` | Beta distribution |
 | `random.gammavariate(alpha, beta)` | Gamma distribution |
+| `random.Random(seed)` | Independent seedable PRNG instance |
+
+> **Seeding note (by-design deviation):** `random.seed(n)` makes every
+> `random.*` call deterministic *within PythScribe* (same seed → same
+> sequence). The generator is mulberry32, not CPython's Mersenne Twister, so
+> the values do **not** match CPython's for the same seed — same class of
+> deviation as the ≤4-ULP transcendentals. See `docs/known-limitations.md`.
 
 #### Example
 

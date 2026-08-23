@@ -9,6 +9,9 @@ pyths_types = { workspace = true }
 pyths_hir = { workspace = true }
 wasm-encoder = { workspace = true }
 wasmparser = "0.225"
+# SEC round-4 (P2 root fix): private per-invocation wasm-opt dir — random name,
+# 0700 atomically at creation, RAII cleanup bound to the handle.
+tempfile = { workspace = true }
 
 [dev-dependencies]
 pyths_parser = { workspace = true }

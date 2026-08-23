@@ -22,7 +22,7 @@ import {
     pyBool,
     ValueError, ZeroDivisionError,
     PyDict, PySet, PyTuple,
-    PyObject, __pyClass,
+    PyObject, __pyClass, __pyF,
 } from "./core.js";
 import { Decimal } from "./stdlib/decimal.js";
 import { Fraction } from "./stdlib/fractions.js";
@@ -31,7 +31,11 @@ import { Fraction } from "./stdlib/fractions.js";
 
 test("pyAdd: int + int, float + float, string concat", () => {
     assert.equal(pyAdd(1, 2), 3);
-    assert.equal(pyAdd(1.5, 2.5), 4.0);
+    // Option B: an integer-valued float RESULT is boxed (PyFloat brand) so
+    // 4.0 reprs as a float; its numeric value is native via valueOf().
+    const r = pyAdd(1.5, 2.5);
+    assert.equal(r.__pyfloat__, true);
+    assert.equal(Number(r), 4);
     assert.equal(pyAdd("a", "b"), "ab");
 });
 
@@ -266,13 +270,22 @@ test("pyRepr: non-integral floats unaffected", () => {
 });
 
 test("pyRepr: scientific notation floats match CPython e+NN / e-NN format", () => {
-    assert.equal(pyRepr(1e16), "1e+16");
+    // Value-boundary authority (#38/#464): an integer-valued float carries
+    // the PyFloat box (that's its runtime form — codegen boxes 1e16 at
+    // creation); a RAW integer-valued Number is the inbound-int form and
+    // reprs as an int. Non-integer floats stay native.
+    assert.equal(pyRepr(__pyF(1e16)), "1e+16");
     assert.equal(pyRepr(1e-5), "1e-05");
     assert.equal(pyRepr(5e-7), "5e-07");
-    assert.equal(pyRepr(1.5e300), "1.5e+300");
+    // 1.5e300 is integer-VALUED at double precision, so its float form is
+    // the box too (the codegen boxes any float literal with fract() == 0).
+    assert.equal(pyRepr(__pyF(1.5e300)), "1.5e+300");
     // CPython keeps 16-digit whole floats in fixed notation (decpt==16 is
     // the boundary, not scientific until decpt>16).
-    assert.equal(pyRepr(9999999999999998.0), "9999999999999998.0");
+    assert.equal(pyRepr(__pyF(9999999999999998.0)), "9999999999999998.0");
+    // The raw (unboxed) forms are ints — exact digits, no exponent (#464).
+    assert.equal(pyRepr(1e16), "10000000000000000");
+    assert.equal(pyRepr(9999999999999998), "9999999999999998");
 });
 
 test("pyRepr: list literals — Python True/None/quotes, not JS formatting", () => {
@@ -386,4 +399,40 @@ test("pyPrint: plain string still prints unquoted (existing behavior, no regress
 
 test("pyPrint: multiple args space-joined (Python print(a, b) default sep)", () => {
     assert.equal(captured(() => pyPrint(1n, "a", true)), "1 a True\n");
+});
+
+// ---- FULL_SURFACE #4: random.seed() — deterministic within PythScribe ----
+// BY DESIGN the sequence does NOT match CPython (mulberry32, not Mersenne
+// Twister — see docs/known-limitations.md); the contract is determinism:
+// same seed → same sequence, different seed → different sequence.
+test("random.seed gives reproducible sequences", async () => {
+    const random = await import("./stdlib/random.js");
+    random.seed(0);
+    const a = [random.random(), random.random(), random.randint(1, 100),
+               random.choice([1, 2, 3, 4, 5]), random.uniform(0, 10)];
+    random.seed(0);
+    const b = [random.random(), random.random(), random.randint(1, 100),
+               random.choice([1, 2, 3, 4, 5]), random.uniform(0, 10)];
+    assert.deepEqual(a, b);
+    random.seed(1);
+    assert.notEqual(random.random(), a[0]);
+    // shuffle: deterministic under a seed AND still a permutation
+    const arr = [1, 2, 3, 4, 5, 6];
+    random.seed(7);
+    const s1 = random.shuffle([...arr]);
+    random.seed(7);
+    const s2 = random.shuffle([...arr]);
+    assert.deepEqual(s1, s2);
+    assert.deepEqual([...s1].sort((x, y) => x - y), arr);
+    // module functions and the Random class share the algorithm
+    const r1 = new random.Random(5), r2 = new random.Random(5);
+    assert.equal(r1.random(), r2.random());
+    // values stay in range
+    random.seed(123);
+    for (let i = 0; i < 50; i++) {
+        const v = random.random();
+        assert.ok(v >= 0 && v < 1);
+        const n = random.randint(3, 9);
+        assert.ok(n >= 3 && n <= 9);
+    }
 });

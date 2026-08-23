@@ -553,6 +553,7 @@ impl Resolver {
             | ExprKind::FloatLiteral(_)
             | ExprKind::ImagLiteral(_)
             | ExprKind::StringLiteral(_)
+            | ExprKind::BytesLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::NoneLiteral => {}
         }

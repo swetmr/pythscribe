@@ -9,3 +9,5 @@
 export const maxsize = 9223372036854775807;
 export const float_info = { max: Number.MAX_VALUE, min: Number.MIN_VALUE, epsilon: Number.EPSILON };
 export const version = "3.12 (PythScribe)";
+
+//# sourceMappingURL=sys.js.map

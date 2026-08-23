@@ -1,6 +1,12 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
-import { dirname, resolve as resolvePath } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import {
+    makePrivateTempDir,
+    removePrivateTempDir,
+    resolvePythsCommand,
+    runPyths,
+    writeGeneratedSibling,
+} from "./pyths-safe.js";
 
 /**
  * Rewrite extensionless RELATIVE import specifiers in compiled output to
@@ -68,16 +74,32 @@ export function rewritePsImports(code, importerPath) {
  */
 export default function pythsLoader(source) {
     const options = this.getOptions();
-    const bin = options.pythsBin || "pyths";
+    // SECURITY (#1, CWE-426): `loader.js` is a PUBLIC export — a project can
+    // wire it into webpack/Turbopack directly and pass any `pythsBin`, bare
+    // name included. So the loader NEVER trusts the option: it re-resolves
+    // through `resolvePythsCommand`, which only ever yields an absolute
+    // command. The one exception is the pair `index.js` itself hands down
+    // (`pythsPrefixArgs` present), which is already resolved — re-resolving it
+    // would drop the launcher prefix. `runPyths` refuses a non-absolute
+    // command either way, so a bare name can never reach `execFileSync`.
+    const cmd = Array.isArray(options.pythsPrefixArgs)
+        ? { command: options.pythsBin, prefixArgs: options.pythsPrefixArgs }
+        : resolvePythsCommand({ pythsBin: options.pythsBin });
     const refreshOpt = options.reactRefresh ?? "auto";
     const filePath = this.resourcePath;
-    const jsPath = filePath.replace(/\.psc?$/, ".js");
+    // SECURITY (#6, CWE-73): compile into a PRIVATE per-invocation directory.
+    // The old code let the CLI write `<stem>.js` / `.js.map` / `<stem>.d.ts`
+    // beside the SOURCE and then unlinked them "if they exist" in `finally`,
+    // which deleted hand-written project files of the same stem. Nothing is
+    // created or deleted next to the user's source any more.
+    const workDir = makePrivateTempDir("next");
+    const jsPath = join(workDir, "mod.js");
     const mapPath = jsPath + ".map";
     // Emit a TS declaration sibling (default on) so .ts consumers of
     // `import './Foo.ps'` get precise types instead of `any`. Opt out with
     // `emitDts: false` in the plugin options.
     const emitDts = options.emitDts ?? true;
-    const dtsTmpPath = filePath.replace(/\.psc?$/, ".d.ts");
+    const dtsTmpPath = join(workDir, "mod.d.ts");
     const declPath = filePath.endsWith(".psc")
         ? filePath.replace(/\.psc$/, ".d.psc.ts")
         : filePath.replace(/\.ps$/, ".d.ps.ts");
@@ -89,28 +111,38 @@ export default function pythsLoader(source) {
     const refreshEnabled = refreshOpt === true
         || (refreshOpt === "auto" && isDev);
 
-    const compileArgs = ["compile", filePath, "--sourcemap"];
+    // Pin `--target js`: the compiler's no-flag default is auto-routing
+    // (js+wasm) as of 0.2.2, which emits .wasm/.glue.js sidecars for
+    // numeric-kernel modules. The bundler loader does not yet manage those
+    // sidecars, so it stays explicitly JS-only. Teaching the loader to carry
+    // the WASM sidecars (keep auto-routing live in the browser build) is the
+    // 0.2.3 follow-up (spec 17-07-26 §4.7.5).
+    const compileArgs = ["compile", filePath, "-o", jsPath, "--sourcemap", "--target", "js"];
     const stdoutArgs = ["compile", "--stdout", filePath];
     if (refreshEnabled) {
         compileArgs.push("--react-refresh");
         stdoutArgs.push("--react-refresh");
     }
+    // `.d.ts` is default-ON in the compiler as of 0.2.2, so honoring
+    // `emitDts: false` now requires an explicit `--no-dts` (a bare omission
+    // would still emit the declaration). `--dts` when true is redundant but
+    // kept for clarity / older compiler pins.
     if (emitDts) {
         compileArgs.push("--dts");
+    } else {
+        compileArgs.push("--no-dts");
     }
 
-    try {
-        // Compile with source map
-        execFileSync(bin, compileArgs, {
-            encoding: "utf-8",
-            timeout: 30000,
-        });
+    // Deferred until after the private dir is torn down: the `.d.ps.ts`
+    // sibling is the only file we write beside the user's source.
+    let pendingDts = null;
 
-        // Persist the declaration sibling (write-if-changed → no rebuild loop).
+    try {
+        // Compile into the private dir with a source map
+        runPyths(cmd, compileArgs);
+
         if (emitDts && existsSync(dtsTmpPath)) {
-            const dts = readFileSync(dtsTmpPath, "utf-8");
-            const prev = existsSync(declPath) ? readFileSync(declPath, "utf-8") : null;
-            if (prev !== dts) writeFileSync(declPath, dts);
+            pendingDts = readFileSync(dtsTmpPath, "utf-8");
         }
 
         const rawCode = rewritePsImports(readFileSync(jsPath, "utf-8"), filePath);
@@ -127,10 +159,7 @@ export default function pythsLoader(source) {
     } catch (err) {
         // Fall back: --stdout without source map
         try {
-            const rawCode = rewritePsImports(execFileSync(bin, stdoutArgs, {
-                encoding: "utf-8",
-                timeout: 30000,
-            }), filePath);
+            const rawCode = rewritePsImports(runPyths(cmd, stdoutArgs), filePath);
             return refreshEnabled
                 ? wrapWithRefreshShim(rawCode, filePath)
                 : rawCode;
@@ -141,10 +170,18 @@ export default function pythsLoader(source) {
             return "";
         }
     } finally {
-        // Clean up transient generated files; keep the `.d.ps.ts` sibling.
-        try { if (existsSync(jsPath)) unlinkSync(jsPath); } catch {}
-        try { if (existsSync(mapPath)) unlinkSync(mapPath); } catch {}
-        try { if (existsSync(dtsTmpPath)) unlinkSync(dtsTmpPath); } catch {}
+        // Only this invocation's private directory is removed (#6).
+        removePrivateTempDir(workDir);
+        // SECURITY (#2, CWE-59): the declaration sibling goes through the
+        // no-follow, ownership-aware writer. A refusal must not fail the build
+        // — types are a nicety; the diagnostic names the file in the way.
+        if (pendingDts !== null) {
+            try {
+                writeGeneratedSibling(declPath, pendingDts, { markerAware: true });
+            } catch (e) {
+                console.warn(`[next-plugin-pyths] skipped .d.ts emission: ${e.message}`);
+            }
+        }
     }
 }
 

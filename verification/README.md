@@ -700,3 +700,45 @@ Modeling scope: the Lean twin covers the binary-tuple / unary-callable shapes
 the table enumerates (the Rust functions handle arbitrary arity; the
 all-inner argument is identical at every arity, and the n-ary residual is
 covered by the corpus certificate + `admission_table_is_sound_on_every_row`).
+
+## JS↔WASM value-marshalling boundary table (added 2026-08-16)
+
+The third table-gate: the JS↔WASM VALUE boundary (bridge.rs
+`convert_js_to_wasm` / `convert_wasm_to_js` / `list_elem_kind` + the
+`__i64Oob` argument guard, the `__list_to_wasm` i64 element guard, the sticky
+`__ovf` flag and the #364 fault ladder), enumerated as the finite
+`verification/marshalling-table.txt` — 56 rows: 23 shapes × (arg + ret) with
+the LITERAL emitted conversion expression + the #364 admission bit, plus 10
+explicit failure-disposition rows (`fault <event> <mode> -> <action>`).
+
+- **Theorems** (MarshalTable section of `PythExpandVerify.lean`):
+  `marshal_param_admitted_sound` / `marshal_ret_admitted_sound` (the admitted
+  boundary marshals ONLY through value-exact numeric converter classes;
+  pointer marshalling is formally excluded), `i64ArgMarshal_exact` +
+  `i64_boundary_roundtrip` (the i64 crossing passes the EXACT value or
+  diverts — never a silent wrap; `[propext, Quot.sound]`), and
+  `marshal_exhaustive` (the finite table covers the whole infinite
+  representable domain — conversion depends only on head constructor +
+  element kind). Stubs: `i64Marshal_unguardedStub_fails` (raw ToBigInt64
+  wraps 2⁶³ → −2⁶³; axiom-free) and `listInt_i32KindStub_fails` (a mis-kinded
+  int list truncates 2³²+1 → 1; axiom-free).
+- **Two-sided binding**: Lean `lake exe expanddiff --check-marshalling-table`,
+  Rust `cargo test marshalling_table_matches_committed_fixture` — the Rust
+  side DERIVES every row from the shipping code (the fault rows from real
+  probe bridges with loud-panic snippet assertions). Plus
+  `admitted_arg_rows_use_exact_marshallers`,
+  `marshalling_table_checker_rejects_forged_row`, and
+  `every_disposition_class_is_witnessed`.
+- **Shipping binding**: `verification/marshalling_shipped_binding.py` — real
+  `pyths --target js+wasm` vs CPython over boundary-crossing values (22
+  observations: exact passes at the i64 edges, oob scalar args, oob list
+  elements, in-WASM result overflow, exceptions), with a FALSE-WORLD control
+  (guard-deleted glue must diverge, reproducing the pre-fix wrap).
+- **A real silent-wrap bug it caught + fixed.** The `__list_to_wasm` i64
+  ELEMENT path had no range guard — `DataView.setBigInt64` wraps mod 2⁶⁴, so
+  `pick([2**63+7])` crossed as −9223372036854775801 (scalars were already
+  `__i64Oob`-guarded). Fixed by the element RangeError guard (twins mode:
+  fault ladder → exact JS twin; edge: loud throw), pinned by the
+  `list-elem-i64-oob` rows + `list_i64_elements_are_oob_guarded`.
+- **Scope**: this is the JS↔WASM boundary only. The client↔server (RPC) and
+  JS↔TS boundaries are the same table shape but 0.3.x scope — not built.

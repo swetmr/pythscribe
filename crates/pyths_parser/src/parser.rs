@@ -809,7 +809,21 @@ impl<'a> Parser<'a> {
         self.expect(&Token::For)?;
         let target = self.parse_target_list()?;
         self.expect(&Token::In)?;
-        let iter = self.parse_expr()?;
+        // The iterable is an exprlist: `for obj in c, cc:` iterates a bare
+        // (unparenthesized) tuple, like CPython (autotester data_classes).
+        let mut iter = self.parse_expr()?;
+        if self.at(&Token::Comma) {
+            let start_span = iter.span;
+            let mut elts = vec![iter];
+            while self.eat(&Token::Comma) {
+                if self.at(&Token::Colon) {
+                    break; // trailing comma: `for x in a, b,:`
+                }
+                elts.push(self.parse_expr()?);
+            }
+            let end_span = elts.last().map(|e| e.span).unwrap_or(start_span);
+            iter = Expr::new(ExprKind::Tuple(elts), start_span.merge(end_span));
+        }
         self.expect_colon_for("for")?;
         // B12: `break`/`continue` legal inside the loop body, not the `else`.
         self.loop_depth += 1;
@@ -1732,6 +1746,7 @@ impl<'a> Parser<'a> {
             Token::DoubleSlashEq => Some(AugAssignOp::FloorDiv),
             Token::PercentEq => Some(AugAssignOp::Mod),
             Token::DoubleStarEq => Some(AugAssignOp::Pow),
+            Token::AtEq => Some(AugAssignOp::MatMul),
             Token::AmpEq => Some(AugAssignOp::BitAnd),
             Token::PipeEq => Some(AugAssignOp::BitOr),
             Token::CaretEq => Some(AugAssignOp::BitXor),
@@ -1942,8 +1957,18 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         loop {
             let start = self.peek_span();
+            // autotester lambda_functions: `lambda *args:` / `lambda **kw:` —
+            // varargs/kwargs markers are legal in lambda parameter lists,
+            // exactly as in `def` signatures.
+            let (is_args, is_kwargs) = if self.eat(&Token::DoubleStar) {
+                (false, true)
+            } else if self.eat(&Token::Star) {
+                (true, false)
+            } else {
+                (false, false)
+            };
             let (name, _) = self.expect_identifier()?;
-            let default = if self.eat(&Token::Eq) {
+            let default = if !is_args && !is_kwargs && self.eat(&Token::Eq) {
                 Some(self.parse_expr()?)
             } else {
                 None
@@ -1952,8 +1977,8 @@ impl<'a> Parser<'a> {
                 name,
                 annotation: None,
                 default,
-                is_args: false,
-                is_kwargs: false,
+                is_args,
+                is_kwargs,
                 span: start,
             });
             if !self.eat(&Token::Comma) {
@@ -2179,6 +2204,10 @@ impl<'a> Parser<'a> {
                 Token::Slash => BinOp::Div,
                 Token::DoubleSlash => BinOp::FloorDiv,
                 Token::Percent => BinOp::Mod,
+                // PEP 465 `a @ b` (matmul). No ambiguity with decorators:
+                // a decorator's `@` is in STATEMENT position; this one
+                // follows an operand inside an expression.
+                Token::At => BinOp::MatMul,
                 _ => break,
             };
             self.advance();
@@ -2455,26 +2484,18 @@ impl<'a> Parser<'a> {
 
     fn parse_subscript_index(&mut self) -> Result<Expr, ParseError> {
         let start = self.peek_span();
+        let first = self.parse_subscript_item()?;
 
-        // Check for slice syntax
-        if self.at(&Token::Colon) {
-            return self.parse_slice(None, start);
-        }
-
-        let first = self.parse_expr()?;
-
-        if self.at(&Token::Colon) {
-            return self.parse_slice(Some(first), start);
-        }
-
-        // Handle comma-separated indexes as tuple (e.g., Dict[str, int])
+        // Comma-separated items form a TUPLE index — each item may itself
+        // be a slice (autotester extended_slices: `a[1:2:3, 4:5:6]`,
+        // `e[1, 1:2:3, 3]`) or a plain expression (Dict[str, int]).
         if self.at(&Token::Comma) {
             let mut elements = vec![first];
             while self.eat(&Token::Comma) {
                 if self.at(&Token::RBracket) {
                     break; // trailing comma
                 }
-                elements.push(self.parse_expr()?);
+                elements.push(self.parse_subscript_item()?);
             }
             let end = elements.last().map(|e| e.span).unwrap_or(start);
             return Ok(Expr::new(ExprKind::Tuple(elements), start.merge(end)));
@@ -2483,17 +2504,34 @@ impl<'a> Parser<'a> {
         Ok(first)
     }
 
+    /// One subscript item: a slice (`[lower]:[upper][:step]`) or an expr.
+    fn parse_subscript_item(&mut self) -> Result<Expr, ParseError> {
+        let start = self.peek_span();
+        if self.at(&Token::Colon) {
+            return self.parse_slice(None, start);
+        }
+        let first = self.parse_expr()?;
+        if self.at(&Token::Colon) {
+            return self.parse_slice(Some(first), start);
+        }
+        Ok(first)
+    }
+
     fn parse_slice(&mut self, lower: Option<Expr>, start: Span) -> Result<Expr, ParseError> {
         self.expect(&Token::Colon)?;
 
-        let upper = if !self.at(&Token::Colon) && !self.at(&Token::RBracket) {
+        // Comma also terminates a slice bound (tuple-of-slices subscripts).
+        let upper = if !self.at(&Token::Colon)
+            && !self.at(&Token::RBracket)
+            && !self.at(&Token::Comma)
+        {
             Some(Box::new(self.parse_expr()?))
         } else {
             None
         };
 
         let step = if self.eat(&Token::Colon) {
-            if !self.at(&Token::RBracket) {
+            if !self.at(&Token::RBracket) && !self.at(&Token::Comma) {
                 Some(Box::new(self.parse_expr()?))
             } else {
                 None
@@ -2556,6 +2594,20 @@ impl<'a> Parser<'a> {
             Token::Imaginary(n) => {
                 self.advance();
                 Ok(Expr::new(ExprKind::ImagLiteral(n), start))
+            }
+            Token::BytesString(b) => {
+                self.advance();
+                // Decoded code points narrow to bytes (a >255 code point in
+                // a bytes literal is a CPython SyntaxError; truncate — the
+                // lexer's escape decoding only yields >255 via unicode
+                // escapes, which CPython rejects in bytes literals anyway).
+                let mut bytes: Vec<u8> = b.chars().map(|c| (c as u32) as u8).collect();
+                // Implicit concatenation of ADJACENT bytes literals.
+                while let Token::BytesString(more) = self.peek().clone() {
+                    bytes.extend(more.chars().map(|c| (c as u32) as u8));
+                    self.advance();
+                }
+                Ok(Expr::new(ExprKind::BytesLiteral(bytes), start))
             }
             Token::String_(s) => {
                 self.advance();
@@ -2967,6 +3019,10 @@ fn parse_fstring_parts(s: &str, _base_span: Span) -> Result<Vec<FStringPart>, Pa
                 let expr = match conversion {
                     Some('r') => wrap_fstring_helper("pyRepr", expr, _base_span),
                     Some('s') => wrap_fstring_helper("pyStr", expr, _base_span),
+                    // public #3: `!a` now has a real ascii() runtime helper
+                    // (pyAscii) — previously it silently fell through to the
+                    // plain str() interpolation.
+                    Some('a') => wrap_fstring_helper("pyAscii", expr, _base_span),
                     _ => expr,
                 };
                 let final_expr = if let Some(spec_str) = format_spec {
@@ -3047,14 +3103,14 @@ fn split_fstring_format_spec(body: &str) -> (&str, Option<&str>) {
 
 /// Split a trailing f-string conversion (`!r` / `!s` / `!a`) off the
 /// expression body (after the format-spec split). Pythonic-checks sweep.
-/// `!a` is left in place (unsupported — ascii() escaping is not
-/// implemented; it will surface as a lex error like before).
+/// public #3: `!a` now splits too — the pyAscii runtime helper implements
+/// real ascii() escaping (it previously surfaced as a lex error).
 fn split_fstring_conversion(body: &str) -> (&str, Option<char>) {
     let b = body.trim_end();
     let bytes = b.as_bytes();
     if b.len() >= 2 && bytes[b.len() - 2] == b'!' {
         let last = bytes[b.len() - 1];
-        if last == b'r' || last == b's' {
+        if last == b'r' || last == b's' || last == b'a' {
             return (&b[..b.len() - 2], Some(last as char));
         }
     }

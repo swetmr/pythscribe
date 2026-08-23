@@ -120,7 +120,7 @@ pub static TABLE: &[Entry] = &[
     Entry::rt("center", ReceiverKind::Str, "pyStrCenter"),
     Entry::rt("count", ReceiverKind::Multi, "pyCount"), // shared with list/tuple — runtime dispatches
     Entry::u("encode", ReceiverKind::Str, "encode() returns bytes; not yet supported. Use TextEncoder().encode(s) directly."),
-    Entry::r("endswith", ReceiverKind::Str, "endsWith"),
+    Entry::rt("endswith", ReceiverKind::Str, "pyStrEndswith"),
     Entry::rt("expandtabs", ReceiverKind::Str, "pyStrExpandtabs"),
     // #301: `.find` collides with Array.prototype.find(callback) — the old
     // Rename→indexOf silently broke JS array searches (`xs.find(lambda ...)`
@@ -151,7 +151,13 @@ pub static TABLE: &[Entry] = &[
     Entry::rt("partition", ReceiverKind::Str, "pyStrPartition"),
     Entry::i("removeprefix", ReceiverKind::Str, InlineSpec::Removeprefix),
     Entry::i("removesuffix", ReceiverKind::Str, InlineSpec::Removesuffix),
-    Entry::rt("replace", ReceiverKind::Str, "pyStrReplace"),
+    // WB-18: route through the runtime smart dispatcher so a regex held in a
+    // VARIABLE (invisible to the WB-10 syntactic arg check) is applied as a
+    // regex, not mis-routed to Python str.replace. Plain-string args keep
+    // Python replace-all semantics (pyStrReplaceSmart falls back to
+    // pyStrReplace); inline regex/fn still short-circuits to a verbatim native
+    // `.replace` via container_dispatch_prefers_verbatim before reaching here.
+    Entry::rt("replace", ReceiverKind::Str, "pyStrReplaceSmart"),
     // Wave-19 verification fix: raw lastIndexOf returns UTF-16 code-unit
     // offsets; Python counts code points ('𝔸x𝔸x'.rfind('x') is 3, not 5).
     Entry::rt("rfind", ReceiverKind::Str, "pyStrRfind"),
@@ -162,7 +168,9 @@ pub static TABLE: &[Entry] = &[
     Entry::h("rstrip", ReceiverKind::Str, InlineSpec::Rstrip, "pyStrRstrip"),
     Entry::rt("split", ReceiverKind::Str, "pyStrSplit"),
     Entry::rt("splitlines", ReceiverKind::Str, "pyStrSplitlines"),
-    Entry::r("startswith", ReceiverKind::Str, "startsWith"),
+    // Full CPython spec (tuple prefixes + start/end): runtime helper —
+    // the bare .startsWith rename dropped every optional argument.
+    Entry::rt("startswith", ReceiverKind::Str, "pyStrStartswith"),
     Entry::h("strip", ReceiverKind::Str, InlineSpec::Strip, "pyStrStrip"),
     Entry::rt("swapcase", ReceiverKind::Str, "pyStrSwapcase"),
     Entry::rt("title", ReceiverKind::Str, "pyStrTitle"),
@@ -211,7 +219,11 @@ pub static TABLE: &[Entry] = &[
     // dict methods (11) — docs.python.org/3/library/stdtypes.html#mapping-types-dict
     // ============================================================
     // clear, copy, pop — shared with list/set (above).
-    Entry::u("fromkeys", ReceiverKind::Dict, "fromkeys() is a classmethod, not an instance method. Use Object.fromEntries() or a comprehension."),
+    // dict.fromkeys(it[, v]) / d.fromkeys(...) — CPython classmethod,
+    // callable from the type or an instance; the receiver is ignored.
+    Entry::rt("fromkeys", ReceiverKind::Dict, "pyDictFromkeys"),
+    // autotester complex_numbers: x.conjugate() on ints/floats/complex.
+    Entry::rt("conjugate", ReceiverKind::Multi, "pyConjugate"),
     // Always via the runtime helper (not a simple-receiver inline): `.get`
     // must dispatch on receiver shape so FormData / Map / URLSearchParams /
     // Headers (where `.get` is a real method) work as well as plain-object
@@ -268,6 +280,91 @@ pub static TABLE: &[Entry] = &[
     // (always integral) report True.
     Entry::i("is_integer", ReceiverKind::Num, InlineSpec::IsInteger),
 ];
+
+/// Valid POSITIONAL-argument arity for the Python container method of a
+/// given name, plus the container receiver kind(s) the method belongs to.
+///
+/// This is the **source of truth** for the receiver-context + arity
+/// dispatch in `emit.rs` (the F2 root fix). A method call whose positional
+/// arity is impossible for the Python container method CANNOT be that
+/// method — so codegen emits it verbatim (preserving every argument)
+/// instead of the container lowering, which would silently drop or corrupt
+/// arguments (`FormData().append("k", v)` lowered as 1-arg `list.append`
+/// dropped `v`). One uniform table closes the whole collision class rather
+/// than patching each method.
+///
+/// Only methods with a **well-defined positional arity** are listed.
+/// Variadic set operations (`update`, `union`, `intersection`,
+/// `difference`, `symmetric_difference`, their `_update` variants,
+/// `isdisjoint`/`issubset`/`issuperset`) take `*others` and thus cannot be
+/// arity-discriminated — they are intentionally omitted (documented
+/// residual; the receiver-shape runtime helper still dispatches them).
+#[derive(Debug, Clone, Copy)]
+pub struct ContainerArity {
+    /// Minimum positional args (excluding the receiver).
+    pub min: usize,
+    /// Inclusive maximum positional args; `None` = unbounded.
+    pub max: Option<usize>,
+    /// Receiver container kinds for which this name IS the Python method.
+    /// If the receiver is provably one of these, keep the container
+    /// lowering regardless of the (still-valid) arity.
+    pub containers: &'static [ReceiverKind],
+}
+
+impl ContainerArity {
+    /// Is `argc` a legal positional-argument count for this Python method?
+    pub fn accepts(&self, argc: usize) -> bool {
+        argc >= self.min && self.max.is_none_or(|m| argc <= m)
+    }
+}
+
+/// Positional-arity signature for a collision-prone container method, or
+/// `None` if the name is not arity-gated (str-only methods, variadic set
+/// ops, or names absent from the container catalog).
+///
+/// Authority for arities: docs.python.org/3/library/stdtypes.html and
+/// docs.python.org/3/tutorial/datastructures.html.
+pub fn container_method_arity(name: &str) -> Option<ContainerArity> {
+    use ReceiverKind::{Dict, List, Set, Tuple};
+    const fn ca(
+        min: usize,
+        max: Option<usize>,
+        containers: &'static [ReceiverKind],
+    ) -> ContainerArity {
+        ContainerArity { min, max, containers }
+    }
+    Some(match name {
+        // --- list mutators (fixed arity; the F2 arg-drop class) ---
+        "append" => ca(1, Some(1), &[List]),
+        "extend" => ca(1, Some(1), &[List]),
+        "insert" => ca(2, Some(2), &[List]),
+        "reverse" => ca(0, Some(0), &[List]),
+        // --- shared list/set mutator ---
+        "remove" => ca(1, Some(1), &[List, Set]),
+        // --- set mutators ---
+        "add" => ca(1, Some(1), &[Set]),
+        "discard" => ca(1, Some(1), &[Set]),
+        // --- shared list/dict/set (0-arg) ---
+        "clear" => ca(0, Some(0), &[List, Dict, Set]),
+        "copy" => ca(0, Some(0), &[List, Dict, Set]),
+        // --- pop: list[i]? 0-1, dict(k[,d]) 1-2, set() 0 → combined 0-2 ---
+        "pop" => ca(0, Some(2), &[List, Dict, Set]),
+        // --- dict (0-arg views / popitem) ---
+        "keys" => ca(0, Some(0), &[Dict]),
+        "values" => ca(0, Some(0), &[Dict]),
+        "items" => ca(0, Some(0), &[Dict]),
+        "popitem" => ca(0, Some(0), &[Dict]),
+        // --- dict (k[, default]) ---
+        "get" => ca(1, Some(2), &[Dict]),
+        "setdefault" => ca(1, Some(2), &[Dict]),
+        // --- count/index: list/tuple 1 / str 1-3 → combined 1-3 (str
+        //     receiver is a scalar, never "provably container" here, so the
+        //     wider str arity is what the range must admit) ---
+        "count" => ca(1, Some(3), &[List, Tuple]),
+        "index" => ca(1, Some(3), &[List, Tuple]),
+        _ => return None,
+    })
+}
 
 /// Look up an entry by Python method name. O(N) linear scan over a small
 /// static table — N ≈ 80, fast enough that hashing isn't worth the

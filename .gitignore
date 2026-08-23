@@ -45,6 +45,13 @@ examples/cloudflare-bench/bench/.memscratch/
 __pycache__/
 .claude/settings.local.json
 m2target/
+# Mutation-testing M2 measurement scaffolding — deliberately uncommitted (shells
+# to `cargo build` + node; would run a nested build on every `cargo test`).
+**/tests/m2_livermore.rs
+# Generated example compile outputs (source is the sibling .ps/.psc)
+examples/next-app/app/counter/Counter.js
+# Second-engine cross-check runner scratch (compiled corpus programs)
+tests/differential/.xengine_scratch/
 ..pythscribe-docs2/
 
 # Generated skill bundles (prepack copies repo-root SKILL*.md here; source stays at root)

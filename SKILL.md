@@ -50,6 +50,30 @@ return div(class_name="card")(                 # curry — don't
 # e.prevent_default()  ← compiles literally and throws at runtime
 ```
 
+3. **HTML-tag names are RESERVED element intrinsics — never name your own identifiers after them.**
+   Lowercase HTML/React element tags (`div`, `span`, `pre`, `img`, `a`, `p`, `ul`, `li`,
+   `table`, `input`, `form`, `button`, …) are lowered to `createElement("tag", …)` **only
+   inside `@psx` and `@component`** (both admit elements; a Capitalized name inside PSX is a
+   user *component*, never an intrinsic). **Do not** define a function, variable, or import
+   with a lowercase HTML-tag name anywhere — it collides with the intrinsic. **Guideline:**
+   author a PSX-returning helper with **`@psx`** (lighter than `@component`); use a
+   **Capitalized** name for a component; otherwise pick a **distinct** name
+   (`make_div`, `div_box`). Using an element tag *outside* `@psx`/`@component` is not valid
+   PSX — decorate the function. (The compiler must diagnose both collisions; never rely on
+   the silent behavior.)
+
+```python
+# ✅ a PSX-returning helper is decorated @psx — elements are only admitted inside @psx/@component
+@psx
+def field_row(label, child):
+    return div(class_name="row", span(label), child)   # intrinsics OK here
+
+# ❌ never name your own identifier after an HTML tag
+def div(x):                 # collides with the <div> intrinsic
+    return wrap(x)          # inside a component this is silently shadowed by <div>;
+                            # in a plain (undecorated) helper, div(...) is undefined at runtime
+```
+
 ---
 
 ## Installation
@@ -200,14 +224,16 @@ cd my-app && npm link pyths-runtime && npm install && npm run dev
 ## CLI Reference
 
 ```bash
-pyths compile <file.ps>                  # → file.js
+pyths compile <file.ps>                  # → file.js + file.d.ts (auto-routes numeric kernels to .wasm + glue)
 pyths compile app.ps -o dist/app.js      # custom output path
-pyths compile app.ps --stdout            # print JS to stdout
+pyths compile app.ps --target js         # pin JS-only (no WASM sidecars)
+pyths compile app.ps --no-dts            # skip the default .d.ts declaration
+pyths compile app.ps --stdout            # print JS to stdout (single module, no sidecars)
 pyths compile app.ps --sourcemap         # emit .js.map
-pyths compile app.ps --dts               # emit .d.ts (TypeScript declarations)
+pyths compile app.ps --dts               # emit .d.ts (default-on; explicit form)
 pyths compile app.ps --timings           # print per-phase timing
-pyths compile app.ps --target wasm       # compile numeric functions to .wasm
-pyths compile app.ps --target js+wasm    # emit both .js and .wasm
+pyths compile app.ps --target wasm       # compile numeric functions to .wasm only
+pyths compile app.ps --target js+wasm    # explicit JS + WASM (the default for kernel modules)
 
 pyths check <file.ps>                    # type-check only (no output)
 pyths run <file.ps>                      # compile + execute via Node.js
@@ -403,7 +429,7 @@ button(on_click=cb, "Click me")
 
 ## WASM Compilation
 
-PythScribe compiles eligible **numeric-kernel** functions to WebAssembly for near-native performance. Eligibility is auto-detected (no annotation needed), but emission is **opt-in via `--target`** — the default `js` target is pure JavaScript with no WASM. Targets: `wasm` (`.wasm` only), `js+wasm` (`.js` + `.wasm` + `.glue.js` browser glue), `wasm-edge` (Cloudflare Workers), `wasi`, `deno`.
+PythScribe compiles eligible **numeric-kernel** functions to WebAssembly for near-native performance. Eligibility is auto-detected (no annotation needed), and emission is **automatic by default**: with no `--target`, `pyths compile` uses automatic routing (`js+wasm` semantics) — a module with a numeric kernel emits `.js` + `.wasm` + `.glue.js`, and a module with none degrades to a single `.js`. Pin the axis with `--target`: `js` (pure JavaScript, no WASM), `wasm` (`.wasm` only), `js+wasm` (explicit JS + WASM), `wasm-edge` (Cloudflare Workers), `wasi`, `deno`. (The Vite/Next bundler plugins pin `--target js` for now; WASM-through-the-bundler is a follow-up.) A user-written `@wasm` is a **strict assertion** — it hard-errors if the function cannot be admitted, or if combined with an explicit JS-only `--target`.
 
 ### Eligible functions — the numeric-kernel whitelist
 
@@ -824,8 +850,13 @@ import reduxjs.toolkit         # → import ... from "@reduxjs/toolkit"
 | `round(x)` | `Math.round(x)` | int |
 | `map(f, x)` / `filter(f, x)` | `x.map(f)` / `x.filter(f)` | list |
 | `any(x)` / `all(x)` | `x.some(Boolean)` / `x.every(Boolean)` | bool |
-| `input(prompt)` | `prompt(msg)` | str |
 | `repr(x)` | `JSON.stringify(x)` | str |
+| `format(v, spec)` / `slice(...)` / `ascii(x)` / `vars(obj)` | runtime helpers (CPython semantics) | — |
+
+Unimplemented builtins (`open`, `input`, `eval`, `exec`, `hash`, `id`,
+`globals`, `locals`, `memoryview`, …) are a **compile error** naming the
+builtin — never a silent runtime `ReferenceError`. Use JS interop
+(`window.prompt`, `fetch`, `node:fs`) for the environment-shaped ones.
 
 ---
 

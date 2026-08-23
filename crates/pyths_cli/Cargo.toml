@@ -24,3 +24,15 @@ pyths_print = { workspace = true }
 pyths_runtime = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }
+# SEC round-4: the ONE private-temp-dir mechanism (OS-RNG name, 0700 applied
+# atomically at mkdir) — procutil::make_private_temp_dir wraps it.
+tempfile = { workspace = true }
+
+# SEC round-4: per-arch-correct O_NOFOLLOW for the no-follow output writer.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+# SEC round-5: best-effort hard-link count on Windows (safe wrapper around
+# GetFileInformationByHandle — keeps the compiler's zero-`unsafe` property).
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1"

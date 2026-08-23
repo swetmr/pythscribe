@@ -6,34 +6,152 @@
 // operators.js (which imports our exception classes) — both sides only
 // dereference the bindings at call time, never during module evaluation,
 // so ESM live bindings resolve it.
-import { pyStr, pyRepr, pyTuple, pyEq, pyFormatFloat } from "./operators.js";
+import {
+    pyStr, pyRepr, pyTuple, pyEq, pyFormatFloat,
+    pyInt, pyFloat, pyListOf, pyTupleOf, __pyF,
+    pyBytesOf, pyBytearrayOf,
+} from "./operators.js";
+import { pyBool } from "./types.js";
 
 /**
  * Python-compatible range() generator.
  * range(stop), range(start, stop), range(start, stop, step)
+ *
+ * SEC-11 (CWE-400) guards. This helper materializes the whole range into an
+ * array (see the note at the end of the function), so two argument shapes
+ * that CPython rejects outright used to become unbounded work here:
+ *
+ *   - a NON-FINITE bound (`Infinity`/`NaN`, e.g. from `float("inf")` or a
+ *     `0/0`-style computation) turned the fill loop into an infinite push
+ *     loop — a guaranteed hang/heap exhaustion needing NO attacker-chosen
+ *     size at all. CPython: `TypeError: 'float' object cannot be
+ *     interpreted as an integer`.
+ *   - an explicit ZERO step fell through `step || 1` and silently became 1,
+ *     so `range(0, 10, 0)` quietly yielded 10 items. CPython:
+ *     `ValueError: range() arg 3 must not be zero`.
+ *
+ * Only NON-FINITE numbers are rejected, not all floats: JS has a single
+ * number type, so rejecting every non-integer would break ordinary compiled
+ * arithmetic. See `experiments/codex-security-scan/poc/D-11.md`.
  */
-export function pyRange(startOrStop, stop, step) {
-    // Python: bool ⊆ int, so True/False are valid range bounds (1/0).
-    const __b = (v) => (typeof v === "boolean" ? (v ? 1 : 0) : v);
+// R2/R3/R4/R5 ROOT FIX: ONE guard/normalize source shared by BOTH the
+// materializing `pyRange` and the lazy `__pyRangeIter` the codegen's optimized
+// `for i in range(...)` loop iterates — so the fast path can NEVER diverge from
+// the canonical semantics (the previous hand-rolled C-loop did: BigInt/Number
+// mix crash, 2**53 non-progress hang, bool rejected).
+//
+// Normalizes bool→int and the 1/2/3-arg shape, then guards: zero step
+// (ValueError), non-Number/BigInt bound (TypeError), non-finite Number
+// (TypeError), and — matching CPython, which rejects float args — a
+// non-integer-valued Number (TypeError). After this, every bound is an
+// integer-valued Number or a BigInt, so `BigInt(v)` is always exact.
+function __pyRangeNorm(startOrStop, stop, step) {
+    const __b = (v) => (typeof v === "boolean" ? (v ? 1 : 0) : v); // bool ⊆ int
     startOrStop = __b(startOrStop); stop = __b(stop); step = __b(step);
     let start;
-    if (stop === undefined) {
-        start = 0;
-        stop = startOrStop;
-        step = 1;
-    } else {
+    if (stop === undefined) { start = 0; stop = startOrStop; step = 1; }
+    else {
         start = startOrStop;
-        step = step || 1;
+        if (step === undefined || step === null) step = 1;
+        else if (step === 0 || step === 0n) throw new ValueError("range() arg 3 must not be zero");
     }
+    const __numOrBig = (v) => typeof v === "number" || typeof v === "bigint";
+    // Option B: a boxed float (8.0) is now distinguishable — reject it the
+    // way CPython rejects ANY float in range() (the old whole-float
+    // deviation only remains for un-boxed natives that leaked in via JS).
+    for (const v of [start, stop, step]) {
+        if (v != null && v.__pyfloat__ === true) {
+            throw new TypeError_("'float' object cannot be interpreted as an integer");
+        }
+    }
+    if (!__numOrBig(start) || !__numOrBig(stop) || !__numOrBig(step)) {
+        const bad = !__numOrBig(start) ? start : !__numOrBig(stop) ? stop : step;
+        // #467: type name from the ONE value-model source, not ad-hoc typeof.
+        throw new TypeError_(`'${__pyTypeName(bad)}' object cannot be interpreted as an integer`);
+    }
+    // Non-finite and non-integer Numbers both raise (CPython rejects float args;
+    // integer-valued Numbers like 5.0 / -1e308 pass as the documented deviation).
+    for (const v of [start, stop, step]) {
+        if (typeof v === "number" && !Number.isInteger(v)) {
+            throw new TypeError_("'float' object cannot be interpreted as an integer");
+        }
+    }
+    return { start, stop, step };
+}
+
+/** BigInt length of range(start, stop, step); bounds are integer-valued. */
+function __pyRangeLen(start, stop, step) {
+    const bs = BigInt(start), bt = BigInt(stop), bp = BigInt(step);
+    return bp > 0n
+        ? (bt > bs ? (bt - bs + bp - 1n) / bp : 0n)
+        : (bs > bt ? (bs - bt + (-bp) - 1n) / (-bp) : 0n);
+}
+
+const __MAX_SAFE_BIG = 9007199254740991n; // Number.MAX_SAFE_INTEGER as BigInt
+
+/**
+ * Should this range yield BigInt values? Yes when ANY bound is already BigInt,
+ * or when the Number loop `start + i*step` could lose exactness ANYWHERE —
+ * not just at the endpoints. The loop's INTERMEDIATE product `i*step` reaches
+ * `|last - start|`, so even with both endpoints safe (e.g.
+ * `range(-2**53+1, 2**53-1, 3002399751580331)`) a span beyond 2**53-1 makes
+ * `i*step` inexact and yields WRONG interior values (delta4). Number-loop
+ * soundness proof: with |start|, |last| and |last-start| all ≤ 2**53-1,
+ * `i*step` is an exact integer product (|i*step| ≤ |last-start|) and
+ * `start + i*step` is an exact sum (every produced value lies between start
+ * and last) — so every yielded value is exact. All three checks run in
+ * BigInt, so the decision itself cannot round. `bs`/`bp` are BigInt bounds.
+ */
+function __pyRangeUseBig(start, stop, step, bs, bp, len) {
+    if (typeof start === "bigint" || typeof stop === "bigint" || typeof step === "bigint") return true;
+    if (len === 0n) return false;
+    const last = bs + (len - 1n) * bp;
+    const abs = (x) => (x < 0n ? -x : x);
+    return abs(bs) > __MAX_SAFE_BIG || abs(last) > __MAX_SAFE_BIG
+        || abs(last - bs) > __MAX_SAFE_BIG;
+}
+
+/**
+ * LAZY Python range iterator — the single source the codegen's optimized
+ * `for i in range(...)` loop iterates, so a huge finite range never
+ * materializes yet the guards + counted (2**53-safe, BigInt-safe) stepping are
+ * exactly pyRange's. No length guard here: iteration is lazy.
+ */
+export function* __pyRangeIter(startOrStop, stop, step) {
+    const n = __pyRangeNorm(startOrStop, stop, step);
+    const len = __pyRangeLen(n.start, n.stop, n.step);
+    const bs = BigInt(n.start), bp = BigInt(n.step);
+    // Strength-reduced (salvaged from Option A 06f3c353): one add per
+    // iteration (v += step) instead of a mul+add — this generator drives
+    // every optimized `for i in range(...)`. Exactness: on the Number arm
+    // every accumulated value IS a yielded value, and __pyRangeUseBig
+    // already guarantees all yielded values are safe integers.
+    if (__pyRangeUseBig(n.start, n.stop, n.step, bs, bp, len)) {
+        let v = bs;
+        for (let c = 0n; c < len; c++, v += bp) yield v; // exact beyond 2**53
+    } else {
+        const count = Number(len);
+        let v = n.start;
+        for (let i = 0; i < count; i++, v += n.step) yield v;
+    }
+}
+
+/**
+ * Python-compatible range() — MATERIALIZES into an array (with the >2**32-1
+ * length guard). Shares __pyRangeNorm/__pyRangeLen with __pyRangeIter, so the
+ * fast lazy path cannot diverge from this canonical one.
+ */
+export function pyRange(startOrStop, stop, step) {
+    const n = __pyRangeNorm(startOrStop, stop, step);
+    const len = __pyRangeLen(n.start, n.stop, n.step);
+    if (len > 4294967295n) throw new OverflowError("range() result has too many items");
     const result = [];
-    if (step > 0) {
-        for (let i = start; i < stop; i += step) {
-            result.push(i);
-        }
-    } else if (step < 0) {
-        for (let i = start; i > stop; i += step) {
-            result.push(i);
-        }
+    const bs = BigInt(n.start), bp = BigInt(n.step);
+    if (__pyRangeUseBig(n.start, n.stop, n.step, bs, bp, len)) {
+        for (let i = 0n; i < len; i++) result.push(bs + i * bp); // exact beyond 2**53
+    } else {
+        const count = Number(len);
+        for (let i = 0; i < count; i++) result.push(n.start + i * n.step);
     }
     return result;
 }
@@ -66,8 +184,12 @@ function __pyElemsIter(it) {
     if (it == null) throw new TypeError_("'NoneType' object is not iterable");
     if (it instanceof Map) return it.keys();
     if (typeof it[Symbol.iterator] === "function") return it[Symbol.iterator]();
-    if (typeof it === "object") return Object.keys(it)[Symbol.iterator]();
-    throw new TypeError_(`'${typeof it}' object is not iterable`);
+    // Option B: a boxed float is an object but NOT iterable — guard before
+    // the plain-object branch or `for x in 8.0` silently iterates nothing.
+    if (it.__pyfloat__ === true) throw new TypeError_("'float' object is not iterable");
+    if (typeof it === "object") return __pyOwnKeys(it)[Symbol.iterator](); // r6: symbol keys iterate too
+    // #467: CPython names the PYTHON type ('float', 'int', …), not the JS one.
+    throw new TypeError_(`'${__pyTypeName(it)}' object is not iterable`);
 }
 
 /**
@@ -193,8 +315,10 @@ export function pySeq(it) {
     if (typeof it === "string") return __hasSurrogate(it) ? [...it] : it.split("");
     if (it instanceof Map) return [...it.keys()]; // PyDict.keys() yields original key objects
     if (typeof it[Symbol.iterator] === "function") return [...it];
-    if (typeof it === "object") return Object.keys(it); // plain-object dict → keys
-    throw new TypeError_(`'${typeof it}' object is not iterable`);
+    // Option B: a boxed float must not read as a 0-key plain-object dict.
+    if (it.__pyfloat__ === true) throw new TypeError_("'float' object is not iterable");
+    if (typeof it === "object") return __pyOwnKeys(it); // plain-object dict → keys (r6: symbols too)
+    throw new TypeError_(`'${__pyTypeName(it)}' object is not iterable`); // #467
 }
 
 /**
@@ -275,6 +399,12 @@ function __pyStrFind(s, sub, start, end, last) {
 
 export function pyLen(obj) {
     if (obj == null) throw new TypeError("object of type 'NoneType' has no len()");
+    // Option B + fidelity: numeric primitives (and the boxed float) have no
+    // len() — CPython raises; the old plain-object fallback returned 0.
+    if (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean"
+        || obj.__pyfloat__ === true) {
+        throw new TypeError(`object of type '${__pyTypeName(obj)}' has no len()`); // #467
+    }
     if (typeof obj === "string") return __hasSurrogate(obj) ? [...obj].length : obj.length;
     if (Array.isArray(obj)) return obj.length;
     if (obj instanceof Set || obj instanceof Map) return obj.size;
@@ -287,7 +417,7 @@ export function pyLen(obj) {
     }
     if (typeof obj.length === "number") return obj.length;
     if (typeof obj.size === "number") return obj.size;
-    return Object.keys(obj).length;
+    return __pyOwnKeys(obj).length; // r6: symbol-keyed entries count
 }
 
 /**
@@ -323,6 +453,12 @@ export function pyRound(x, ndigits) {
     // Python: bool ⊆ int — round(True) == 1, round(x, True) uses ndigits=1.
     if (typeof x === "boolean") x = x ? 1 : 0;
     if (typeof ndigits === "boolean") ndigits = ndigits ? 1 : 0;
+    // Option-B spike: unwrap a boxed float; the 2-arg form re-boxes below.
+    const __wasF = x != null && x.__pyfloat__ === true;
+    if (__wasF) x = x.valueOf();
+    if (ndigits != null && ndigits.__pyfloat__ === true) {
+        throw new TypeError_("'float' object cannot be interpreted as an integer");
+    }
     // #318 (a): round(int, ndigits) returns an int for ANY magnitude,
     // including BigInt-routed huge ints (was a spurious TypeError from
     // mixing BigInt with the Number path). nd>=0 is a no-op; nd<0 rounds.
@@ -338,21 +474,23 @@ export function pyRound(x, ndigits) {
             if (Number.isNaN(x)) throw new ValueError("cannot convert float NaN to integer");
             throw new OverflowError("cannot convert float infinity to integer");
         }
-        return x; // 2-arg form: nan/inf pass through
+        return __pyF(x); // 2-arg form: nan/inf pass through (a float)
     }
     if (x == null || typeof x !== "number") {
         throw new TypeError("type cannot be interpreted as a number");
     }
+    // Option-B spike: the 2-arg form of a float input returns a float — box.
+    const __reF = ndigits != null && (__wasF || !Number.isInteger(x));
     const nd = ndigits == null ? 0 : Math.trunc(ndigits);
     // #318 (b): extreme ndigits. A finite double can't gain precision from a
     // huge positive nd, so rounding is a no-op → return x (the old code hit
     // Math.pow(10, 400) = Infinity → NaN). A huge negative nd rounds every
     // finite value to a signed 0.0.
     const factor = Math.pow(10, nd);
-    if (factor === 0) return x < 0 ? -0 : 0; // nd ≪ 0
-    if (!isFinite(factor)) return x;          // nd ≫ 0
+    if (factor === 0) return __reF ? __pyF(x < 0 ? -0 : 0) : (x < 0 ? -0 : 0); // nd ≪ 0
+    if (!isFinite(factor)) return __reF ? __pyF(x) : x;          // nd ≫ 0
     const scaled = x * factor;
-    if (!isFinite(scaled)) return x;          // scaled overflow → no-op
+    if (!isFinite(scaled)) return __reF ? __pyF(x) : x;          // scaled overflow → no-op
     // Round half to even.
     const floor = Math.floor(scaled);
     const diff = scaled - floor;
@@ -361,7 +499,7 @@ export function pyRound(x, ndigits) {
     else if (diff < 0.5) rounded = floor;
     else rounded = floor % 2 === 0 ? floor : floor + 1; // exactly .5 → nearest even
     const result = rounded / factor;
-    return result;
+    return __reF ? __pyF(result) : result;
 }
 
 /**
@@ -371,7 +509,9 @@ export function pyIter(obj) {
     if (obj == null) throw new TypeError("'NoneType' object is not iterable");
     if (typeof obj[Symbol.iterator] === "function") return obj[Symbol.iterator]();
     if (typeof obj.__iter__ === "function") return obj.__iter__();
-    throw new TypeError(`'${typeof obj}' object is not iterable`);
+    // Option B: name a boxed float correctly ('float', not 'object').
+    if (obj.__pyfloat__ === true) throw new TypeError("'float' object is not iterable");
+    throw new TypeError(`'${__pyTypeName(obj)}' object is not iterable`); // #467
 }
 
 /**
@@ -421,7 +561,7 @@ export function pyGenSend(g, value) {
         return r.value;
     }
     if (g != null && typeof g.send === "function") return g.send(value);
-    throw new AttributeError(`'${typeof g}' object has no attribute 'send'`);
+    throw new AttributeError(`'${__pyTypeName(g)}' object has no attribute 'send'`); // #467
 }
 
 /**
@@ -434,7 +574,7 @@ export function pyGenClose(g) {
         return null;
     }
     if (g != null && typeof g.close === "function") return g.close();
-    throw new AttributeError(`'${typeof g}' object has no attribute 'close'`);
+    throw new AttributeError(`'${__pyTypeName(g)}' object has no attribute 'close'`); // #467
 }
 
 /**
@@ -453,19 +593,77 @@ export function pyGenThrow(g, exc) {
         return r.value;
     }
     if (g != null && typeof g.throw === "function") return g.throw(exc);
-    throw new AttributeError(`'${typeof g}' object has no attribute 'throw'`);
+    throw new AttributeError(`'${__pyTypeName(g)}' object has no attribute 'throw'`); // #467
 }
 
 /**
  * Python-compatible slice.
  * pySlice(obj, start, stop, step)
  */
+// autotester extended_slices: a REAL slice object — CPython's
+// slice(start, stop, step) with .indices(len) (the exact clamping rules),
+// attribute access (missing bounds are None), repr, and ==. Handed to a
+// custom __getitem__/__setitem__, and constructed in value position for
+// tuple-of-slices subscripts (`a[1:2:3, 4:5:6]`).
+export class PySlice {
+    constructor(start, stop, step) {
+        this.start = start === undefined ? null : start;
+        this.stop = stop === undefined ? null : stop;
+        this.step = step === undefined ? null : step;
+        this.__pyslice__ = true;
+    }
+    indices(len) {
+        const n = Number(len);
+        let step = this.step === null ? 1 : Number(this.step);
+        if (step === 0) throw new ValueError("slice step cannot be zero");
+        const clamp = (i, neg) => {
+            i = Number(i);
+            if (i < 0) i += n;
+            if (i < 0) return neg ? -1 : 0;
+            if (i >= n) return neg ? n - 1 : n;
+            return i;
+        };
+        const neg = step < 0;
+        const start = this.start === null ? (neg ? n - 1 : 0) : clamp(this.start, neg);
+        const stop = this.stop === null ? (neg ? -1 : n) : clamp(this.stop, neg);
+        const out = [start, stop, step];
+        Object.defineProperty(out, "__pytuple__", { value: true, enumerable: false });
+        return out;
+    }
+    __repr__() {
+        const r = (x) => (x === null ? "None" : pyRepr(x));
+        return `slice(${r(this.start)}, ${r(this.stop)}, ${r(this.step)})`;
+    }
+    __eq__(o) {
+        return o instanceof PySlice && pyEq(this.start, o.start)
+            && pyEq(this.stop, o.stop) && pyEq(this.step, o.step);
+    }
+}
+export function __pySliceObj(start, stop, step) {
+    return new PySlice(start, stop, step);
+}
+
+// public #3: the slice() BUILTIN — CPython's argument forms:
+// slice(stop) / slice(start, stop) / slice(start, stop, step). Returns the
+// same PySlice object subscripts and custom __getitem__ receive; pyGetItem
+// dispatches a PySlice key through pySlice, so `xs[slice(1, 3)]` ≡ `xs[1:3]`.
+export function pySliceOf(...args) {
+    if (args.length === 0) {
+        throw new TypeError_("slice expected at least 1 argument, got 0");
+    }
+    if (args.length > 3) {
+        throw new TypeError_(`slice expected at most 3 arguments, got ${args.length}`);
+    }
+    if (args.length === 1) return new PySlice(null, args[0], null);
+    return new PySlice(args[0], args[1], args.length === 3 ? args[2] : null);
+}
+
 export function pySlice(obj, start, stop, step) {
     // crit-9: a custom object with __getitem__ handles the slice itself — don't
     // force it through the array/string path (which returns [] for a
-    // non-sequence). It receives a minimal slice object {start, stop, step}.
+    // non-sequence). It receives a real PySlice (with .indices()).
     if (obj != null && typeof obj !== "string" && !Array.isArray(obj) && typeof obj.__getitem__ === "function") {
-        return obj.__getitem__({ start, stop, step, __pyslice__: true });
+        return obj.__getitem__(new PySlice(start, stop, step));
     }
     // crit-10: BigInt bounds/step (from huge int literals) can't mix with the
     // Number index arithmetic below; demote to Number. A huge step becomes a
@@ -507,6 +705,13 @@ export function pySlice(obj, start, stop, step) {
         for (let i = start; i > stop; i += step) result.push(seq[i]);
     }
     if (isStr) return result.join("");
+    // BYTES AUTHORITY: a bytes/bytearray slice READ yields the SAME kind
+    // (CPython: b"abc"[1:] is bytes, bytearray(b"ab")[0:1] is a bytearray),
+    // not the plain int list this path used to materialize.
+    const __bk = __pyBytesKind(obj);
+    if (__bk !== null) {
+        return __bk === "bytearray" ? pyBytearrayOf(result) : pyBytesOf(result);
+    }
     // crit-9: slicing a tuple yields a tuple, not a list (preserve __pytuple__).
     if (Array.isArray(obj) && obj.__pytuple__) {
         Object.defineProperty(result, "__pytuple__", { value: true, enumerable: false });
@@ -520,6 +725,18 @@ export function pySlice(obj, start, stop, step) {
 // have exactly as many items as the slice selects. Index normalization mirrors
 // pySlice so reads and writes agree.
 export function pySetSlice(arr, start, stop, step, values) {
+    // autotester extended_slices: a custom __setitem__ object receives a
+    // real PySlice, mirroring pySlice's crit-9 branch.
+    if (arr != null && typeof arr !== "string" && !Array.isArray(arr) && typeof arr.__setitem__ === "function") {
+        arr.__setitem__(new PySlice(start, stop, step), values);
+        return;
+    }
+    // BYTES AUTHORITY (#455): a bytearray has __setitem__ and was routed
+    // above; any bytes-like value reaching here is immutable — CPython's
+    // TypeError, not the splice crash this path used to hit.
+    if (__pyBytesKind(arr) !== null) {
+        throw new TypeError_(`'${__pyBytesName(arr)}' object does not support item assignment`);
+    }
     const len = arr.length;
     const vals = [...values];
     if (step == null || step === 1) {
@@ -563,9 +780,15 @@ export function pySetSlice(arr, start, stop, step, values) {
 // removes the selected indices (walk descending so earlier splices don't
 // shift later targets).
 export function pyDelSlice(arr, start, stop, step) {
+    if (arr != null && !Array.isArray(arr) && typeof arr.__delitem__ === "function") {
+        arr.__delitem__(new PySlice(start, stop, step));
+        return;
+    }
     if (!Array.isArray(arr)) {
-        throw new TypeError_("'" + (arr == null ? "NoneType" : typeof arr)
-            + "' object does not support item deletion");
+        // BYTES AUTHORITY: name immutable bytes correctly (a bytearray has
+        // __delitem__ and was routed above). #467: the ONE type-name source
+        // covers null→NoneType and bytes/bytearray via pyType.
+        throw new TypeError_(`'${__pyTypeName(arr)}' object does not support item deletion`);
     }
     const len = arr.length;
     if (step == null || step === 1) {
@@ -601,6 +824,10 @@ export function pyDelSlice(arr, start, stop, step) {
  */
 export function pyContains(container, item) {
     if (container == null) throw new TypeError("argument of type 'NoneType' is not iterable");
+    // Option B: a boxed float container must raise, not read as an empty dict.
+    if (container.__pyfloat__ === true) {
+        throw new TypeError_("argument of type 'float' is not iterable");
+    }
     if (typeof container.__contains__ === "function") return container.__contains__(item);
     if (typeof container === "string") {
         // crit-18: `x in <str>` requires x to be a str in CPython (1 in "123"
@@ -618,7 +845,8 @@ export function pyContains(container, item) {
         if (container.has(item)) return true;
         // #241: bool≡int — a set built with `1` won't `.has(true)`; fall back
         // to a pyEq scan for numeric/bool items (only on a miss).
-        if (typeof item === "boolean" || typeof item === "number" || typeof item === "bigint") {
+        if (typeof item === "boolean" || typeof item === "number" || typeof item === "bigint"
+            || (item != null && item.__pyfloat__ === true)) {
             for (const x of container) if (pyEq(x, item)) return true;
         }
         return false;
@@ -638,10 +866,75 @@ export function pyContains(container, item) {
         }
         return false;
     }
+    // FULL_SURFACE #2: a CLASS object (or plain function) with no
+    // __contains__/__iter__ is NOT a container — CPython raises
+    // `TypeError: argument of type 'type' is not iterable` (Transcrypt's
+    // attr-name-membership behavior was the bug this replaces).
+    if (typeof container === "function") {
+        // #467: pyType classifies classes vs plain functions ('type'/'function').
+        throw new TypeError_(`argument of type '${__pyTypeName(container)}' is not iterable`);
+    }
     // Object dict — F3: use hasOwnProperty so inherited prototype members
     // (`hasOwnProperty`, `toString`, `constructor`, `__proto__`, ...) don't
-    // spuriously report as keys the way JS `in` would.
-    return Object.prototype.hasOwnProperty.call(container, item);
+    // spuriously report as keys the way JS `in` would. Coerce ONCE (delta).
+    // Only PLAIN-prototype objects are the dict representation (FULL_SURFACE
+    // #2); a class INSTANCE falls through to the protocol probes below.
+    const __cproto = Object.getPrototypeOf(container);
+    if (__cproto === Object.prototype || __cproto === null) {
+        const __cpk = __pyPropKey(item);
+        const __cpresent = Object.prototype.hasOwnProperty.call(container, __cpk);
+        // WB-20 analogue (see pyDictGet): perform the PLAIN property read
+        // unconditionally — even on a miss — so a host read-trap (MobX
+        // observable Proxy) registers a dependency on THIS key exactly as a
+        // native `k in d` read path would. hasOwnProperty goes through
+        // [[GetOwnProperty]], which fires no `get` at all on a missing key,
+        // so an observer testing membership never subscribed and never
+        // re-rendered when the key was later added. Reading a plain data
+        // dict's absent slot is side-effect-free, so the extra read is
+        // inert off the observable path.
+        void container[__cpk];
+        return __cpresent;
+    }
+    // Instance with an un-wired `__iter__` (the __pyClass path wires it to
+    // Symbol.iterator, which was handled above — this is the fallback).
+    // Accept both iterator shapes: JS `.next()` and Python `__next__()`.
+    if (typeof container.__iter__ === "function") {
+        const it = container.__iter__();
+        if (it != null && typeof it.next === "function") {
+            for (;;) {
+                const r = it.next();
+                if (r.done) return false;
+                if (pyEq(r.value, item)) return true;
+            }
+        }
+        if (it != null && typeof it.__next__ === "function") {
+            for (;;) {
+                let x;
+                try {
+                    x = it.__next__();
+                } catch (e) {
+                    if (e && e.name === "StopIteration") return false;
+                    throw e;
+                }
+                if (pyEq(x, item)) return true;
+            }
+        }
+    }
+    // CPython's legacy sequence protocol: __getitem__(0), __getitem__(1), …
+    // until IndexError.
+    if (typeof container.__getitem__ === "function") {
+        for (let i = 0; ; i++) {
+            let x;
+            try {
+                x = container.__getitem__(i);
+            } catch (e) {
+                if (e instanceof IndexError || (e && e.name === "IndexError")) return false;
+                throw e;
+            }
+            if (pyEq(x, item)) return true;
+        }
+    }
+    throw new TypeError_(`argument of type '${__pyTypeName(container)}' is not iterable`); // #467
 }
 
 // ── Python exception hierarchy ─────────────────────────────────────────
@@ -665,7 +958,13 @@ function __excStr(args) {
     return pyRepr(args); // args is tuple-marked → "('boom', 42)"
 }
 
-class Exception extends Error {
+// autotester exceptions: BaseException is the REAL root of CPython's
+// hierarchy (user code legitimately writes `class Table(BaseException)` and
+// `except BaseException` / `raise BaseException(...)`). It carries the same
+// introspection surface; Exception extends it, so isinstance(e,
+// BaseException) holds for every builtin/user exception.
+class BaseException extends Error {
+    static __name__ = "BaseException";
     constructor(...args) {
         const t = pyTuple(...args);
         super(__excStr(t));
@@ -674,10 +973,26 @@ class Exception extends Error {
     }
 }
 
-class ValueError extends Exception {}
-class TypeError_ extends Exception {}
-class AttributeError extends Exception {}
+class Exception extends BaseException {
+    static __name__ = "Exception";
+}
+
+class ValueError extends Exception {
+    static __name__ = "ValueError";
+}
+// autotester exceptions: raisable/catchable as a real class (the assert
+// statement itself throws a name-tagged Error; both match by name).
+class AssertionError extends Exception {
+    static __name__ = "AssertionError";
+}
+class TypeError_ extends Exception {
+    static __name__ = "TypeError";
+}
+class AttributeError extends Exception {
+    static __name__ = "AttributeError";
+}
 class StopIteration extends Exception {
+    static __name__ = "StopIteration";
     constructor(...args) {
         super(...args);
         // CPython: StopIteration.value is the generator's return value —
@@ -685,22 +1000,43 @@ class StopIteration extends Exception {
         this.value = args.length > 0 ? args[0] : null;
     }
 }
-class StopAsyncIteration extends Exception {}
-class RuntimeError extends Exception {}
-class NotImplementedError extends RuntimeError {}
-class LookupError extends Exception {}
-class IndexError extends LookupError {}
-class ArithmeticError extends Exception {}
-class ZeroDivisionError extends ArithmeticError {}
-class OverflowError extends ArithmeticError {}
+class StopAsyncIteration extends Exception {
+    static __name__ = "StopAsyncIteration";
+}
+class RuntimeError extends Exception {
+    static __name__ = "RuntimeError";
+}
+class NotImplementedError extends RuntimeError {
+    static __name__ = "NotImplementedError";
+}
+class LookupError extends Exception {
+    static __name__ = "LookupError";
+}
+class IndexError extends LookupError {
+    static __name__ = "IndexError";
+}
+class ArithmeticError extends Exception {
+    static __name__ = "ArithmeticError";
+}
+class ZeroDivisionError extends ArithmeticError {
+    static __name__ = "ZeroDivisionError";
+}
+class OverflowError extends ArithmeticError {
+    static __name__ = "OverflowError";
+}
 // PBT-2: reading a for-loop target after a zero-iteration loop must raise
 // (UnboundLocalError in a function, NameError at module scope), not yield
 // None. The codegen initializes such hoisted targets to the __UNBOUND
 // sentinel and routes reads through __pyChkLocal/__pyChkGlobal below.
-class NameError extends Exception {}
-class UnboundLocalError extends NameError {}
+class NameError extends Exception {
+    static __name__ = "NameError";
+}
+class UnboundLocalError extends NameError {
+    static __name__ = "UnboundLocalError";
+}
 
 class KeyError extends LookupError {
+    static __name__ = "KeyError";
     constructor(...args) {
         super(...args);
         // CPython quirk: str(KeyError(k)) is repr(k), not str(k).
@@ -708,22 +1044,11 @@ class KeyError extends LookupError {
     }
 }
 
-Exception.__name__ = "Exception";
-ValueError.__name__ = "ValueError";
-TypeError_.__name__ = "TypeError";
-AttributeError.__name__ = "AttributeError";
-StopIteration.__name__ = "StopIteration";
-StopAsyncIteration.__name__ = "StopAsyncIteration";
-RuntimeError.__name__ = "RuntimeError";
-NotImplementedError.__name__ = "NotImplementedError";
-LookupError.__name__ = "LookupError";
-IndexError.__name__ = "IndexError";
-ArithmeticError.__name__ = "ArithmeticError";
-ZeroDivisionError.__name__ = "ZeroDivisionError";
-OverflowError.__name__ = "OverflowError";
-NameError.__name__ = "NameError";
-UnboundLocalError.__name__ = "UnboundLocalError";
-KeyError.__name__ = "KeyError";
+// The __name__ stamps live INSIDE each class as a static field (below) so
+// the #170 inline extraction carries them with the class slice — the old
+// standalone `X.__name__ = ...` statement block attached to whatever slice
+// happened to precede it and got dropped when that slice wasn't needed
+// (type(e).__name__ then leaked the JS class name 'TypeError_').
 
 // PBT-2: sentinel marking a hoisted for-loop target that no iteration ever
 // assigned. Reads of such names route through the guards below; any real
@@ -743,6 +1068,19 @@ function __pyChkLocal(v, name) {
 // PBT-2: module-scope read guard — an unbound module name is a NameError.
 function __pyChkGlobal(v, name) {
     if (v === __UNBOUND) throw new NameError(`name '${name}' is not defined`);
+    return v;
+}
+
+// #452 (cross-scope sentinels): closure read of an ENCLOSING-function local
+// that no iteration/assignment ever bound — CPython raises NameError with
+// the free-variable message (UnboundLocalError is only for the scope that
+// owns the variable; a free variable is plain NameError — CPython 3.12).
+function __pyChkFree(v, name) {
+    if (v === __UNBOUND) {
+        throw new NameError(
+            `cannot access free variable '${name}' where it is not associated with a value in enclosing scope`,
+        );
+    }
     return v;
 }
 
@@ -769,14 +1107,80 @@ class __PyTypeObj {
         return `<class '${this.__name__}'>`;
     }
 }
-const __PyInt = new __PyTypeObj("int");
-const __PyFloat = new __PyTypeObj("float");
-const __PyBool = new __PyTypeObj("bool");
-const __PyStr = new __PyTypeObj("str");
-const __PyList = new __PyTypeObj("list");
-const __PyTuple = new __PyTypeObj("tuple");
-const __PySet = new __PyTypeObj("set");
-const __PyDict = new __PyTypeObj("dict");
+// Callable interned TYPE objects (autotester classes): CPython's builtin
+// type names are ONE object each — callable as a constructor AND usable as
+// a first-class type (isinstance/issubclass second arg, `type(x) == int`
+// by identity, repr `<class 'int'>`, stored in tuples of types). The
+// `__pytype__` marker is what __pyIsInstance/__pyIsSubclass/pyType key on.
+// pyType returns THESE singletons, so `type(5) is int` holds.
+function __mkPyType(name, call) {
+    Object.defineProperty(call, "name", { value: name, configurable: true });
+    call.__name__ = name;
+    call.__pytype__ = true;
+    call.__repr__ = () => `<class '${name}'>`;
+    call.__str__ = call.__repr__;
+    return call;
+}
+// The interned type objects carry a real `__mro__` (CPython:
+// `int.__mro__` → `(int, object)`, `bool.__mro__` → `(bool, int, object)`),
+// so `int.__mro__[-1]` is `object` instead of a None-subscript TypeError.
+// Each stamp sits DIRECTLY under its own singleton's declaration on purpose:
+// the #170 extraction slicer attaches trailing statements to the preceding
+// declaration's slice, so the stamp travels with its singleton into inline
+// `pyths run` output (and the identifiers it references pull the other
+// singletons in as transitive deps). `__pyTypeObject` is declared FIRST —
+// a `const` does not hoist, so a stamp referencing it before its
+// declaration would hit the TDZ at module init.
+export const __pyTypeObject = __mkPyType("object", () => ({}));
+__pyTypeObject.__mro__ = [__pyTypeObject];
+export const __pyTypeInt = __mkPyType("int", (...a) => (a.length === 0 ? 0 : pyInt(...a)));
+__pyTypeInt.__mro__ = [__pyTypeInt, __pyTypeObject];
+export const __pyTypeFloat = __mkPyType("float", (...a) => (a.length === 0 ? 0 : pyFloat(...a)));
+__pyTypeFloat.__mro__ = [__pyTypeFloat, __pyTypeObject];
+export const __pyTypeBool = __mkPyType("bool", (...a) => (a.length === 0 ? false : pyBool(a[0])));
+__pyTypeBool.__mro__ = [__pyTypeBool, __pyTypeInt, __pyTypeObject];
+export const __pyTypeStr = __mkPyType("str", (...a) => (a.length === 0 ? "" : pyStr(...a)));
+__pyTypeStr.__mro__ = [__pyTypeStr, __pyTypeObject];
+export const __pyTypeList = __mkPyType("list", (it) => (it === undefined ? [] : pyListOf(it)));
+__pyTypeList.__mro__ = [__pyTypeList, __pyTypeObject];
+export const __pyTypeTuple = __mkPyType("tuple", (it) => pyTupleOf(it));
+__pyTypeTuple.__mro__ = [__pyTypeTuple, __pyTypeObject];
+export const __pyTypeSet = __mkPyType("set", (...a) => pySetOf(...a));
+__pyTypeSet.__mro__ = [__pyTypeSet, __pyTypeObject];
+export const __pyTypeFrozenset = __mkPyType("frozenset", (...a) => pyFrozensetOf(...a));
+__pyTypeFrozenset.__mro__ = [__pyTypeFrozenset, __pyTypeObject];
+export const __pyTypeDict = __mkPyType("dict", (...a) => pyDict(...a));
+__pyTypeDict.__mro__ = [__pyTypeDict, __pyTypeObject];
+// dict.fromkeys(iterable[, value]) — classmethod on the dict type; also
+// reachable from an instance (d.fromkeys) via the pyBoundMethod switch.
+export function __pyDictFromkeys(it, value) {
+    const v = value === undefined ? null : value;
+    const out = {};
+    for (const k of pySeq(it)) __pyDictWrite(out, k, v);
+    return out;
+}
+__pyTypeDict.fromkeys = __pyDictFromkeys;
+// Method-table form: rt helpers receive the RECEIVER first; a classmethod
+// ignores it (works from the type object or any instance).
+export function pyDictFromkeys(_recv, it, value) {
+    return __pyDictFromkeys(it, value);
+}
+// BYTES AUTHORITY: interned bytes/bytearray type singletons (CPython:
+// `type(b'').__name__` is "bytes", `bytes.__mro__` is (bytes, object),
+// bytearray is NOT a bytes subclass). Callable like the other type
+// objects (`bytes(3)`, `bytearray(b'ab')` through a first-class value).
+export const __pyTypeBytes = __mkPyType("bytes", (...a) => pyBytesOf(...a));
+__pyTypeBytes.__mro__ = [__pyTypeBytes, __pyTypeObject];
+export const __pyTypeBytearray = __mkPyType("bytearray", (...a) => pyBytearrayOf(...a));
+__pyTypeBytearray.__mro__ = [__pyTypeBytearray, __pyTypeObject];
+const __PyInt = __pyTypeInt;
+const __PyFloat = __pyTypeFloat;
+const __PyBool = __pyTypeBool;
+const __PyStr = __pyTypeStr;
+const __PyList = __pyTypeList;
+const __PyTuple = __pyTypeTuple;
+const __PySet = __pyTypeSet;
+const __PyDict = __pyTypeDict;
 const __PyNoneType = new __PyTypeObj("NoneType");
 const __PyTypeMeta = new __PyTypeObj("type");
 const __PyFunction = new __PyTypeObj("function");
@@ -789,12 +1193,15 @@ const __PyFunction = new __PyTypeObj("function");
  */
 export function pyType(v) {
     if (v === null || v === undefined) return __PyNoneType;
+    if (v.__pyfloat__ === true) return __PyFloat;
     switch (typeof v) {
         case "boolean": return __PyBool; // BEFORE number — bool is not int here
         case "number": return Number.isInteger(v) ? __PyInt : __PyFloat;
         case "bigint": return __PyInt;
         case "string": return __PyStr;
         case "function":
+            // Interned callable type objects ARE types: type(int) → type.
+            if (v.__pytype__) return __PyTypeMeta;
             // Compiled Python classes emit as `class X ...`; type(cls) is
             // CPython's metaclass `type`. Plain functions stay 'function'.
             return /^class[\s{]/.test(Function.prototype.toString.call(v))
@@ -805,6 +1212,11 @@ export function pyType(v) {
     if (Array.isArray(v)) return v.__pytuple__ ? __PyTuple : __PyList;
     if (v instanceof Set) return __PySet;
     if (v instanceof Map) return __PyDict; // Map-backed PyDict
+    // BYTES AUTHORITY (#456): bytes/bytearray classify through __pyBytesKind
+    // and return the interned singletons — `type(b'').__name__` is "bytes"
+    // (not the JS class name) and `type(x) == bytes` holds by identity.
+    const __bk = __pyBytesKind(v);
+    if (__bk !== null) return __bk === "bytearray" ? __pyTypeBytearray : __pyTypeBytes;
     if (v instanceof Error) {
         // Runtime-raised builtins (pyGetItem's IndexError/KeyError, pyDiv's
         // ZeroDivisionError, native JS TypeError/ReferenceError, …) are plain
@@ -865,6 +1277,37 @@ export function __pyAsyncIter(obj) {
 }
 
 /**
+ * #463 (comprehension unification): CPython acquires `iter(outermost)` when
+ * a GENEXP OBJECT IS CREATED — dis shows GET_ITER running before the genexp
+ * function is called — which is observable with a side-effecting or throwing
+ * `__iter__`. Compiled genexps route their outermost iterable through here
+ * at creation time: the iterator is obtained NOW (Python iteration semantics
+ * via __pyElemsIter — dict shapes yield keys, protocol classes go through
+ * their bridged `__iter__`), and consumption hands back that same iterator,
+ * so `next(g)` followed by `list(g)` resume ONE iterator, like CPython.
+ */
+export function __pyEagerIter(x) {
+    const it = __pyElemsIter(x);
+    return { [Symbol.iterator]() { return it; } };
+}
+
+/**
+ * Async twin of __pyEagerIter — GET_AITER at async-genexp creation: the
+ * async iterator is acquired NOW through the __pyAsyncIter protocol bridge
+ * (a protocol object's `__aiter__` runs at creation, matching CPython). A
+ * sync-only iterable keeps __pyAsyncIter's permissive passthrough (JS
+ * for-await falls back to the sync protocol), acquired eagerly all the same.
+ */
+export function __pyEagerAIter(x) {
+    const src = __pyAsyncIter(x);
+    if (typeof src[Symbol.asyncIterator] === "function") {
+        const it = src[Symbol.asyncIterator]();
+        return { [Symbol.asyncIterator]() { return it; } };
+    }
+    return __pyEagerIter(src);
+}
+
+/**
  * Python-compatible subscript read.
  *
  * Matches CPython error wording so a Python developer reading the
@@ -879,19 +1322,98 @@ export function __pyAsyncIter(obj) {
  *   pyGetItem([1,2,3], -1)     → 3 (Python negative indexing)
  *   pyGetItem(null, 0)         → TypeError: 'NoneType' object is not subscriptable
  */
+/**
+ * Centralized Python container type-name for index/bounds diagnostics. ONE
+ * source so every message ("tuple index out of range", "tuple indices must be
+ * integers…") stays consistent and no path can hardcode "list" for a tuple.
+ */
+export function __pySeqName(obj) {
+    if (typeof obj === "string") return "string";
+    if (Array.isArray(obj)) return obj.__pytuple__ ? "tuple" : "list";
+    return "sequence";
+}
+
+// ============================================================
+// BYTES DISPATCH AUTHORITY (#455/#456/#457/#458 root fix)
+// ============================================================
+// ONE place recognizes "this value is bytes/bytearray" and classifies it.
+// Every bytes-typed decision routes through __pyBytesKind — truthiness
+// (pyBool), type()/`__name__` (pyType → the interned __pyTypeBytes /
+// __pyTypeBytearray singletons), isinstance (__pyIsInstance, both copies),
+// write/delete immutability arms (pySetItem/pySetSlice/pyDelSlice), and
+// diagnostics (__pyBytesName) — so a future bytes op cannot invent its own
+// recognition and drift. The METHOD surface has one home too: the PyBytes/
+// PyByteArray prototypes in operators.js, reached by both dispatch surfaces
+// through the uniform "receiver's own method wins" rule (direct calls via
+// the method-table runtime helpers, extraction via pyBoundMethod's
+// prototype-bind branch).
+//
+// Deliberately duck-typed (instanceof Uint8Array + the mutator surface)
+// rather than `instanceof PyBytes/PyByteArray`: referencing the classes
+// from here would pull them into every #170-sliced program, and a raw
+// interop Uint8Array should classify as bytes as well.
+
+/** "bytes" | "bytearray" for a bytes-like value, null for anything else.
+ *  THE recognizer — a bytearray exposes the mutating `append`, bytes does
+ *  not. */
+export function __pyBytesKind(v) {
+    if (!(v instanceof Uint8Array)) return null;
+    return typeof v.append === "function" ? "bytearray" : "bytes";
+}
+
+/** "bytearray" vs immutable "bytes" — the authority's name surface for
+ * error messages and repr (callers already know the value is bytes-like). */
+export function __pyBytesName(obj) {
+    return __pyBytesKind(obj) ?? "bytes";
+}
+
+/**
+ * Python `type(key).__name__` for a subscript KEY, for the CPython
+ * "indices must be integers or slices, not X" diagnostics on the list /
+ * bytearray write and delete paths. ONE source so every path renders the
+ * key's type name identically (mirrors the inline logic in pyGetItem).
+ */
+export function __pyIndexTypeName(key) {
+    if (key === null || key === undefined) return "NoneType";
+    if (key.__pyfloat__ === true) return "float"; // Option B boxed float
+    switch (typeof key) {
+        case "boolean": return "bool";
+        case "bigint": return "int";
+        case "number": return Number.isInteger(key) ? "int" : "float";
+        case "string": return "str";
+        case "symbol": return "symbol";
+        case "function": return "function";
+    }
+    if (Array.isArray(key)) return key.__pytuple__ ? "tuple" : "list";
+    if (key instanceof Map) return "dict";
+    if (key instanceof Set) return "set";
+    if (key instanceof Uint8Array) return __pyBytesName(key);
+    return "dict"; // a plain-object key reads as a dict (R8, matches pyGetItem)
+}
+
 export function pyGetItem(obj, key) {
     if (obj == null) {
         throw new TypeError_("'NoneType' object is not subscriptable");
+    }
+    // public #3: a real slice OBJECT as the key — `xs[slice(1, 3)]` must
+    // behave exactly like `xs[1:3]`. Route sequences (and custom
+    // __getitem__ receivers, which get handed the PySlice itself) through
+    // pySlice; a dict key of type slice is unhashable, like CPython.
+    if (key instanceof PySlice) {
+        if (typeof obj === "string" || Array.isArray(obj)
+            || typeof obj.__getitem__ === "function") {
+            return pySlice(obj, key.start, key.stop, key.step);
+        }
+        throw new TypeError_("unhashable type: 'slice'");
     }
     // Non-subscriptable primitives (int/float/bool). Without this guard a JS
     // number/bigint/boolean falls through to the interop passthrough below
     // (`Object.getPrototypeOf(5) !== Object.prototype`) and silently returns
     // `undefined` instead of raising — CPython raises TypeError. Found by the
     // lattice C4 shipping-binding (`5[0]`, `True[0]`, `(3.5)[0]`).
-    if (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean") {
-        const tn = typeof obj === "boolean" ? "bool"
-            : ((typeof obj === "bigint" || Number.isInteger(obj)) ? "int" : "float");
-        throw new TypeError_(`'${tn}' object is not subscriptable`);
+    if (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean"
+        || obj.__pyfloat__ === true) {
+        throw new TypeError_(`'${__pyTypeName(obj)}' object is not subscriptable`); // #467
     }
     // A set is not subscriptable (`{1,2}[0]` → TypeError). Sets route through
     // the helper now (cert::route), so guard here rather than fall through to
@@ -911,15 +1433,38 @@ export function pyGetItem(obj, key) {
         if (key >= -9007199254740991n && key <= 9007199254740991n) {
             key = Number(key);
         } else {
-            throw new IndexError(
-                (typeof obj === "string" ? "string" : "list") + " index out of range");
+            throw new IndexError(__pySeqName(obj) + " index out of range");
         }
     }
     // crit-8: a non-integer numeric index on a sequence is a TypeError in
     // CPython ([10,20][1.5]). A whole-valued float (1.0) is an indistinguishable
     // JS Number here and falls under the documented whole-float deviation (B1).
     if ((typeof obj === "string" || Array.isArray(obj)) && typeof key === "number" && !Number.isInteger(key)) {
-        throw new TypeError_((typeof obj === "string" ? "string" : "list") + " indices must be integers");
+        // R8: report tuple/list/string per the actual sequence type.
+        const on = __pySeqName(obj);
+        throw new TypeError_(on === "string"
+            ? "string indices must be integers"
+            : `${on} indices must be integers or slices, not float`);
+    }
+    // F7 (CVE-2026-15903 JS-path sibling): an index that is neither a number
+    // nor a string — None/undefined, a dict/list/set, a symbol — slips every
+    // check below (`null < 0` and `null >= n` are both false), so `obj[key]`
+    // silently returns undefined → None instead of CPython's TypeError. bool→int
+    // and in-range bigint were normalized above; str keys keep their dedicated
+    // messages in the per-type branches. See
+    // experiments/codex-security-scan/poc/A2-f7.md.
+    if ((typeof obj === "string" || Array.isArray(obj)) && typeof key !== "number" && typeof key !== "string") {
+        const tn = key === null || key === undefined ? "NoneType"
+            : key.__pyfloat__ === true ? "float" // Option B boxed float
+            : Array.isArray(key) ? (key.__pytuple__ ? "tuple" : "list")
+            : key instanceof Map ? "dict"
+            : key instanceof Set ? "set"
+            : typeof key === "object" ? "dict" // R8: a plain-object key is a dict
+            : typeof key;
+        const on = __pySeqName(obj);
+        throw new TypeError_(on === "string"
+            ? `string indices must be integers, not '${tn}'`
+            : `${on} indices must be integers or slices, not ${tn}`);
     }
     if (typeof obj === "string") {
         // A non-integer key (str, or a non-whole number) is a TypeError, not a
@@ -947,13 +1492,13 @@ export function pyGetItem(obj, key) {
         // silent `undefined` (`[1,2]["k"]`, `[1,2][1.5]`). Lattice C4 binding.
         if (typeof key === "string" || (typeof key === "number" && !Number.isInteger(key))) {
             throw new TypeError_(
-                "list indices must be integers or slices, not "
+                __pySeqName(obj) + " indices must be integers or slices, not "
                 + (typeof key === "string" ? "str" : "float"));
         }
         const n = obj.length;
         let i = key;
         if (i < 0) i += n;
-        if (i < 0 || i >= n) throw new IndexError("list index out of range");
+        if (i < 0 || i >= n) throw new IndexError(__pySeqName(obj) + " index out of range");
         return obj[i];
     }
     if (obj instanceof Map) {
@@ -975,16 +1520,22 @@ export function pyGetItem(obj, key) {
         const proto = Object.getPrototypeOf(obj);
         if (proto !== Object.prototype && proto !== null) return obj[key];
     }
-    // Plain object — treat as dict
-    if (!Object.prototype.hasOwnProperty.call(obj, key)) {
+    // Plain object — treat as dict. Coerce the key EXACTLY ONCE (delta4):
+    // `hasOwnProperty.call(obj, key)` runs ToPropertyKey(key) and `obj[key]`
+    // would run it AGAIN, so a `Symbol.toPrimitive` returning "safe" then
+    // "other" made the presence-check and the read disagree — the read
+    // returned the WRONG slot. Same invariant as the write path (pySetItem
+    // → __pyDictWrite): every subscript op computes __pyPropKey once.
+    const pk = __pyPropKey(key);
+    if (!Object.prototype.hasOwnProperty.call(obj, pk)) {
         throw new KeyError(key);
     }
-    return obj[key];
+    return obj[pk];
 }
 
-export { ValueError, IndexError, KeyError, TypeError_ as TypeError, AttributeError, StopIteration, StopAsyncIteration, ZeroDivisionError, Exception, OverflowError, RuntimeError, NotImplementedError, LookupError, ArithmeticError, NameError, UnboundLocalError };
+export { AssertionError, ValueError, IndexError, KeyError, TypeError_ as TypeError, AttributeError, StopIteration, StopAsyncIteration, ZeroDivisionError, BaseException, Exception, OverflowError, RuntimeError, NotImplementedError, LookupError, ArithmeticError, NameError, UnboundLocalError };
 // PBT-2: sentinel + read guards for possibly-unbound for-loop targets.
-export { __UNBOUND, __pyChkLocal, __pyChkGlobal };
+export { __UNBOUND, __pyChkLocal, __pyChkGlobal, __pyChkFree };
 
 /**
  * Python `del obj[key]` (issue #101). Lists splice (Python removes the
@@ -997,10 +1548,25 @@ export function pyDelItem(obj, key) {
         throw new TypeError_("'NoneType' object does not support item deletion");
     }
     if (Array.isArray(obj)) {
+        // F7: a tuple is immutable — `del t[i]` is a TypeError in CPython, not
+        // the silent splice this path used to perform.
+        if (obj.__pytuple__) {
+            throw new TypeError_("'tuple' object doesn't support item deletion");
+        }
+        // F7: a non-integer index TYPE is a TypeError (CPython), not the
+        // IndexError "... out of range" this path raised for EVERY non-integer
+        // key (wrong error KIND — C4 axis). bool ⊂ int; an in-range bigint is a
+        // valid integer index; only a genuinely out-of-range integer is an
+        // IndexError.
+        let i = typeof key === "boolean" ? (key ? 1 : 0)
+              : typeof key === "bigint" ? Number(key) : key;
+        if (typeof i !== "number" || !Number.isInteger(i)) {
+            throw new TypeError_(
+                "list indices must be integers or slices, not " + __pyIndexTypeName(key));
+        }
         const n = obj.length;
-        let i = typeof key === "bigint" ? Number(key) : key;
         if (i < 0) i += n;
-        if (!Number.isInteger(i) || i < 0 || i >= n) {
+        if (i < 0 || i >= n) {
             throw new IndexError("list assignment index out of range");
         }
         obj.splice(i, 1);
@@ -1016,10 +1582,27 @@ export function pyDelItem(obj, key) {
         obj.__delitem__(key);
         return;
     }
-    if (!Object.prototype.hasOwnProperty.call(obj, key)) {
+    // F7: a non-subscriptable / immutable object does NOT support item
+    // deletion — a TypeError in CPython, NOT the KeyError the plain-object
+    // property path below would raise (`del (5)[0]`, `del "abc"[0]`,
+    // `del {1,2}[0]`, `del b"AB"[0]`). Ints/floats/bools are not
+    // subscriptable; strings and bytes are immutable — all render
+    // "'<type>' object doesn't support item deletion". (A MUTABLE bytearray
+    // was already handled by the `__delitem__` branch above, so any Uint8Array
+    // reaching here is immutable bytes.)
+    if (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean"
+        || typeof obj === "string" || obj instanceof Set || obj instanceof Uint8Array
+        || obj.__pyfloat__ === true) {
+        throw new TypeError_(`'${__pyTypeName(obj)}' object doesn't support item deletion`); // #467
+    }
+    // Coerce ONCE (delta4) — same invariant as pyGetItem/pySetItem: a
+    // double-coercing key must not make the presence-check pass on one
+    // property and the delete remove a DIFFERENT one.
+    const pk = __pyPropKey(key);
+    if (!Object.prototype.hasOwnProperty.call(obj, pk)) {
         throw new KeyError(key);
     }
-    delete obj[key];
+    delete obj[pk];
 }
 
 /**
@@ -1094,7 +1677,7 @@ function __minmax(name, wantGreater, args) {
     let key = null;
     let dflt;
     let hasDefault = false;
-    if (args.length > 1) {
+    if (args.length >= 1) {
         const last = args[args.length - 1];
         if (last !== null && typeof last === "object"
             && Object.getPrototypeOf(last) === Object.prototype
@@ -1107,6 +1690,20 @@ function __minmax(name, wantGreater, args) {
             }
             args = args.slice(0, -1);
         }
+    }
+    // autotester module_builtin: `max()` / `max(default=5)` are TypeError in
+    // CPython ("expected at least 1 argument"), not the empty-iterable
+    // ValueError. (The options object was stripped above; a bare
+    // `max({'default': …})` dict-iteration remains ambiguous by design —
+    // the long-standing kwargs-object call convention.)
+    if (args.length === 0) {
+        throw new TypeError_(`${name} expected at least 1 argument, got 0`);
+    }
+    // CPython: default= is only valid with a single iterable argument.
+    if (hasDefault && args.length > 1) {
+        throw new TypeError_(
+            `Cannot specify a default for ${name}() with multiple positional arguments`,
+        );
     }
     const items = args.length === 1 ? [...pyForIter(args[0])] : args;
     if (items.length === 0) {
@@ -1373,6 +1970,12 @@ export function pyFixed(x, prec) {
  */
 export function pyFormatSpec(value, opts, isFloat) {
     opts = opts || {};
+    // Option B: a boxed (integer-valued) float unwraps ONCE at entry, and its
+    // floatness is remembered — `f"{8.0:>6}"` renders "   8.0", not "     8".
+    if (value != null && value.__pyfloat__ === true) {
+        isFloat = true;
+        value = value.valueOf();
+    }
     const ty = opts.type;
     // CPython: a numeric presentation type (f/e/g/d/x/b/o/n/c/%/…) applied to
     // a str raises `ValueError: Unknown format code 'X' for object of type
@@ -1387,6 +1990,7 @@ export function pyFormatSpec(value, opts, isFloat) {
     let s;
     let isNumeric = false;
     let neg = false;
+    let prefixStr = ""; // '#' base prefix — padded AFTER it, like the sign
 
     // Group a digit string from the right (CPython: `,`/`_` every 3 for
     // decimal, `_` every 4 for b/o/x/X). Digit-agnostic (hex letters).
@@ -1419,10 +2023,14 @@ export function pyFormatSpec(value, opts, isFloat) {
             // Grouping applies to the digits only; the #-prefix goes
             // OUTSIDE the grouped digits (0b1010_1010).
             if (opts.grouping) s = group(s, radix === 10 ? 3 : 4, opts.grouping);
+            // autotester string_format: the '#' prefix sits BETWEEN the sign
+            // and any '='/zero padding ('{:#08b}'.format(-15) → '-0b01111',
+            // not '-0000b1111'), so it is carried separately (prefixStr joins
+            // signStr below) instead of being glued onto the digits.
             if (opts.alt) {
-                if (radix === 2) s = "0b" + s;
-                else if (radix === 8) s = "0o" + s;
-                else if (radix === 16) s = (ty === "X" ? "0X" : "0x") + s;
+                if (radix === 2) prefixStr = "0b";
+                else if (radix === 8) prefixStr = "0o";
+                else if (radix === 16) prefixStr = ty === "X" ? "0X" : "0x";
             }
         }
     } else if (ty === "e" || ty === "E" || ty === "f" || ty === "F" || ty === "g" || ty === "G" || ty === "%" || ty === undefined) {
@@ -1432,28 +2040,50 @@ export function pyFormatSpec(value, opts, isFloat) {
         neg = n < 0 || Object.is(n, -0);
         n = Math.abs(n);
         const prec = opts.precision != null ? opts.precision : 6;
-        if (ty === "e" || ty === "E") {
+        if (!Number.isFinite(n)) {
+            // autotester string_format: non-finite floats format as inf/nan
+            // in every float presentation type ('{:.0f}'.format(float('-inf'))
+            // is '-inf', not DBL_MAX digits); E/F/G uppercase; '%' keeps its
+            // suffix; zero-padding still applies ('{:08f}' → '00000inf').
+            s = Number.isNaN(n) ? "nan" : "inf";
+            if (ty === "E" || ty === "F" || ty === "G") s = s.toUpperCase();
+            if (ty === "%") s += "%";
+        } else if (ty === "e" || ty === "E") {
             s = n.toExponential(prec);
             // CPython zero-pads the exponent to at least 2 digits
             // (e+03, e-04). JS toExponential produces e+3 / e-4. Patch
             // by normalizing the trailing exponent.
             s = s.replace(/e([+-])(\d)$/, "e$10$2");
             if (ty === "E") s = s.toUpperCase();
-        } else if (ty === "g" || ty === "G") {
+        } else if (ty === "g" || ty === "G" || (ty === undefined && opts.precision != null)) {
             // CPython 'g': with precision p (default 6; 0 → 1), let exp be
             // the decimal exponent of the value rounded to p significant
             // digits. If -4 <= exp < p → fixed notation, else scientific;
             // trailing zeros stripped (unless '#'), exponent >= 2 digits.
+            //
+            // autotester string_format: NO type char WITH a precision
+            // (`'{:.4}'.format(1485.1)`) is the None presentation type —
+            // like 'g', except fixed notation keeps at least one digit past
+            // the decimal point, and when adding it would exceed the
+            // precision's significant digits, scientific notation wins
+            // ('1.485e+03', not '1485'). The old chain routed this case to
+            // fixed-point ('1485.1000').
+            const noneType = ty === undefined;
             let p = prec;
             if (p === 0) p = 1;
             if (n === 0) {
-                s = "0";
+                s = noneType ? "0.0" : "0";
             } else if (!Number.isFinite(n)) {
                 s = n === Infinity ? "inf" : "nan";
             } else {
                 const m = /^(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(n.toExponential(p - 1));
                 const digits = m[1] + (m[2] || "");
                 const exp10 = parseInt(m[3], 10);
+                const sci = () => {
+                    let mant = opts.alt ? digits : digits.replace(/0+$/, "") || "0";
+                    const mantStr = mant.length > 1 ? mant[0] + "." + mant.slice(1) : mant;
+                    return mantStr + "e" + (exp10 < 0 ? "-" : "+") + String(Math.abs(exp10)).padStart(2, "0");
+                };
                 if (exp10 >= -4 && exp10 < p) {
                     if (exp10 >= 0) {
                         s = digits.length <= exp10 + 1
@@ -1463,18 +2093,24 @@ export function pyFormatSpec(value, opts, isFloat) {
                         s = "0." + "0".repeat(-exp10 - 1) + digits;
                     }
                     if (!opts.alt && s.includes(".")) s = s.replace(/\.?0+$/, "");
+                    if (noneType && !s.includes(".")) {
+                        // ≥1 digit past the decimal point; if that exceeds
+                        // the significant-digit budget, go scientific.
+                        s = exp10 + 2 > p ? sci() : s + ".0";
+                    }
                 } else {
-                    let mant = opts.alt ? digits : digits.replace(/0+$/, "") || "0";
-                    const mantStr = mant.length > 1 ? mant[0] + "." + mant.slice(1) : mant;
-                    s = mantStr + "e" + (exp10 < 0 ? "-" : "+") + String(Math.abs(exp10)).padStart(2, "0");
+                    s = sci();
                 }
             }
             if (ty === "G") s = s.toUpperCase();
         } else if (ty === "%") {
             // Round-half-even on the exact double, like CPython (#86).
             s = __fixedHalfEven(n, opts.precision != null ? opts.precision : 6) + "%";
-        } else if (ty === "f" || ty === "F" || opts.precision != null) {
+        } else if (ty === "f" || ty === "F") {
             s = __fixedHalfEven(n, prec);
+            // autotester string_format: '#' on a float presentation type
+            // forces the decimal point ('{:#.0f}'.format(-1552) → '-1552.').
+            if (opts.alt && !s.includes(".")) s += ".";
         } else if (isFloat) {
             // #347: no type char + a statically-float value → str(float): a
             // whole-valued float keeps its '.0' ('0.0', not the int '0'). n is
@@ -1495,13 +2131,15 @@ export function pyFormatSpec(value, opts, isFloat) {
         s = String(value);
     }
 
-    // Sign handling for numeric values
+    // Sign handling for numeric values. The '#' base prefix joins the sign
+    // area so '='/zero padding lands between '0b'/'0x' and the digits.
     let signStr = "";
     if (isNumeric) {
         if (neg) signStr = "-";
         else if (opts.sign === "+") signStr = "+";
         else if (opts.sign === " ") signStr = " ";
     }
+    signStr += prefixStr;
 
     // Width / fill / align
     const width = opts.width || 0;
@@ -1530,7 +2168,32 @@ export function pyFormatSpec(value, opts, isFloat) {
 // (crates/pyths_parser/src/format_spec.rs); pyFormatDynamic parses the
 // built spec and delegates to pyFormatSpec.
 export function pyFormatDynamic(value, specStr) {
+    // A user-defined __format__ receives the RAW spec string (CPython
+    // format(v, spec) protocol) — '{:custom_format}'.format(b).
+    if (value !== null && value !== undefined && typeof value.__format__ === "function") {
+        return value.__format__(String(specStr));
+    }
     return pyFormatSpec(value, parseFormatSpec(String(specStr)));
+}
+
+// public #3: the format(value[, format_spec]) BUILTIN — the same engine as
+// f-strings / str.format (pyFormatDynamic → pyFormatSpec), including the
+// __format__ protocol. format(x) with a missing/empty spec is str(x) unless
+// the value defines __format__ (CPython: format(v) ≡ type(v).__format__(v, '')
+// and object.__format__ with an empty spec is str).
+export function pyFormat(value, spec) {
+    if (spec === undefined || spec === null) spec = "";
+    if (typeof spec !== "string") {
+        throw new TypeError_(
+            `format() argument 2 must be str, not ${__pyTypeName(spec)}`,
+        );
+    }
+    if (spec === ""
+        && !(value !== null && value !== undefined
+            && typeof value.__format__ === "function")) {
+        return pyStr(value);
+    }
+    return pyFormatDynamic(value, spec);
 }
 
 export function parseFormatSpec(s) {
@@ -1644,11 +2307,15 @@ export function pyStrFormat(s, ...args) {
             let val = resolveField(namePart);
             if (conv === "r") val = pyRepr(val);
             else if (conv === "s") val = pyStr(val);
-            else if (conv === "a") val = pyRepr(val); // ascii(): non-ASCII escaping is a documented approximation
+            else if (conv === "a") val = pyAscii(val); // public #3: real ascii() (was a repr approximation)
             if (spec != null && spec !== "") {
                 // Resolve a nested (dynamic) spec's own fields first.
                 if (spec.includes("{")) spec = spec.replace(/\{([^{}]*)\}/g, (_, k) => pyStr(resolveField(k)));
-                out += pyFormatSpec(val, parseFormatSpec(spec));
+                if (val !== null && val !== undefined && typeof val.__format__ === "function") {
+                    out += val.__format__(spec); // CPython __format__ protocol
+                } else {
+                    out += pyFormatSpec(val, parseFormatSpec(spec));
+                }
             } else if (conv != null) {
                 // `!r`/`!s`/`!a` already produced a string; an empty spec is str().
                 out += val;
@@ -1682,7 +2349,7 @@ export function pyListRemove(xs, v) {
 export function pyAppend(xs, v) {
     if (Array.isArray(xs)) { xs.push(v); return; }
     if (xs != null && typeof xs.append === "function") return xs.append(v);
-    throw new TypeError_(`object of type '${typeof xs}' has no append()`);
+    throw new TypeError_(`object of type '${__pyTypeName(xs)}' has no append()`); // #467
 }
 
 /** #301: Python `xs.extend(iterable)` — receiver-dispatched. */
@@ -1692,7 +2359,7 @@ export function pyExtend(xs, other) {
         return;
     }
     if (xs != null && typeof xs.extend === "function") return xs.extend(other);
-    throw new TypeError_(`object of type '${typeof xs}' has no extend()`);
+    throw new TypeError_(`object of type '${__pyTypeName(xs)}' has no extend()`); // #467
 }
 
 /** #301: Python `xs.insert(i, v)` — receiver-dispatched. JS splice
@@ -1700,7 +2367,7 @@ export function pyExtend(xs, other) {
 export function pyInsert(xs, i, v) {
     if (Array.isArray(xs)) { xs.splice(i, 0, v); return; }
     if (xs != null && typeof xs.insert === "function") return xs.insert(i, v);
-    throw new TypeError_(`object of type '${typeof xs}' has no insert()`);
+    throw new TypeError_(`object of type '${__pyTypeName(xs)}' has no insert()`); // #467
 }
 
 /** #301: Python `s.find(sub[, start[, end]])` for strings — full CPython
@@ -1710,7 +2377,7 @@ export function pyInsert(xs, i, v) {
 export function pyFind(s, sub, start, end) {
     if (typeof s === "string") return __pyStrFind(s, sub, start, end, false);
     if (s != null && typeof s.find === "function") return s.find(sub, start, end);
-    throw new TypeError_(`object of type '${typeof s}' has no find()`);
+    throw new TypeError_(`object of type '${__pyTypeName(s)}' has no find()`); // #467
 }
 
 /** #301: Python `s.discard(v)` — Set removes-if-present; non-Set
@@ -1718,7 +2385,7 @@ export function pyFind(s, sub, start, end) {
 export function pyDiscard(s, v) {
     if (s instanceof Set) { s.delete(v); return; }
     if (s != null && typeof s.discard === "function") return s.discard(v);
-    throw new TypeError_(`object of type '${typeof s}' has no discard()`);
+    throw new TypeError_(`object of type '${__pyTypeName(s)}' has no discard()`); // #467
 }
 
 /** Python `xs.count(v)` — number of occurrences. Hybrid fallback. */
@@ -1758,11 +2425,43 @@ export function pyIndex(obj, v, start, end) {
 
 /** Python `pop` — ambiguous between list (0 or 1 args) and dict (1 or 2 args). */
 export function pyPop(obj, ...rest) {
+    // Item 3 (0.2.2 hold): only DICT-shaped receivers may reach the dict-pop
+    // fallthrough at the bottom. None, sets, and non-subscriptable/immutable
+    // primitives (int/float/bool/str/bytes) used to fall into it and raise
+    // KeyError (or crash) — the wrong KIND (C4): CPython raises
+    // AttributeError for receivers without a pop, and set.pop() is a real
+    // method. (A bytearray never reaches this guard: PyByteArray has its own
+    // pop, dispatched by the receiver branch below.)
+    if (obj == null) {
+        throw new AttributeError("'NoneType' object has no attribute 'pop'");
+    }
     // Custom receivers with their own pop (deque, user classes) — but not
     // Map subclasses (dict-style pop below handles Counter etc.).
-    if (obj != null && !Array.isArray(obj) && !(obj instanceof Map)
+    if (!Array.isArray(obj) && !(obj instanceof Map)
         && typeof obj.pop === "function") {
         return obj.pop(...rest);
+    }
+    // set.pop() — remove and return an arbitrary element (first in insertion
+    // order here); empty set → KeyError; any argument → TypeError (CPython).
+    if (obj instanceof Set) {
+        if (rest.length > 0) {
+            throw new TypeError_(`set.pop() takes no arguments (${rest.length} given)`);
+        }
+        for (const v of obj) {
+            obj.delete(v);
+            return v;
+        }
+        throw new KeyError("pop from an empty set");
+    }
+    if (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean"
+        || typeof obj === "string" || obj instanceof Uint8Array
+        || obj.__pyfloat__ === true) {
+        const tn = typeof obj === "string" ? "str"
+            : typeof obj === "boolean" ? "bool"
+            : obj.__pyfloat__ === true ? "float"
+            : obj instanceof Uint8Array ? __pyBytesName(obj)
+            : (typeof obj === "bigint" || Number.isInteger(obj)) ? "int" : "float";
+        throw new AttributeError(`'${tn}' object has no attribute 'pop'`);
     }
     if (Array.isArray(obj)) {
         // #346: CPython list.pop() bounds-checks — an empty list or an
@@ -1791,11 +2490,12 @@ export function pyPop(obj, ...rest) {
         if (rest.length >= 2) return rest[1];
         throw new KeyError(k);
     }
-    // dict (plain object)
+    // dict (plain object) — coerce ONCE (delta): pk for probe, read, delete.
     const k = rest[0];
-    if (Object.prototype.hasOwnProperty.call(obj, k)) {
-        const v = obj[k];
-        delete obj[k];
+    const pk = __pyPropKey(k);
+    if (Object.prototype.hasOwnProperty.call(obj, pk)) {
+        const v = obj[pk];
+        delete obj[pk];
         return v;
     }
     if (rest.length >= 2) return rest[1];
@@ -1838,6 +2538,9 @@ function __encodeTupleKey(t) {
     for (const el of t) {
         if (el === null || el === undefined) s += "N;";
         else if (typeof el === "boolean") s += "n:" + (el ? 1 : 0) + ";";
+        // Option B: a boxed float folds to its numeric value — (8,) and
+        // (8.0,) are the SAME dict/set key in CPython (hash(8)==hash(8.0)).
+        else if (el != null && el.__pyfloat__ === true) s += "n:" + String(el.valueOf()) + ";";
         else if (typeof el === "number" || typeof el === "bigint") s += "n:" + String(el) + ";";
         else if (typeof el === "string") s += "s:" + el.length + ":" + el + ";";
         else if (Array.isArray(el) && el.__pytuple__) s += __encodeTupleKey(el) + ";";
@@ -1858,6 +2561,9 @@ const __isPlainObj = (x) => {
 /** Canonical Map key for a Python dict key (CPython hash-equality). */
 function __pyKey(k) {
     if (typeof k === "boolean") return k ? 1 : 0;
+    // Option-B spike: a boxed float folds to its numeric value, so
+    // {1.0: v}[1] and {1: v}[1.0] hit like CPython (hash(1) == hash(1.0)).
+    if (k != null && k.__pyfloat__ === true) return k.valueOf();
     if (typeof k === "bigint") {
         // crit-16: fold with the equal Number when k is exactly representable
         // as a double, so int 2**53 and float 2.0**53 share one set/dict key
@@ -1889,14 +2595,15 @@ export class PyDict extends Map {
             } else if (typeof src[Symbol.iterator] === "function") {
                 for (const [k, v] of src) this.set(k, v);
             } else {
-                for (const k of Object.keys(src)) this.set(k, src[k]);
+                // r6: symbols survive dict() conversion
+                for (const k of __pyOwnKeys(src)) this.set(k, src[k]);
             }
         }
     }
     set(k, v) {
         const c = __pyKey(k);
         // CPython keeps the FIRST-inserted key object on re-assignment.
-        if ((typeof k === "boolean" || Array.isArray(k)) && !super.has(c)) {
+        if ((typeof k === "boolean" || Array.isArray(k) || (k != null && k.__pyfloat__ === true)) && !super.has(c)) {
             let m = __pyKeyObjs.get(this);
             if (!m) { m = new Map(); __pyKeyObjs.set(this, m); }
             m.set(c, k);
@@ -1948,7 +2655,7 @@ export class PySet extends Set {
     }
     add(v) {
         const c = __pyKey(v);
-        if ((typeof v === "boolean" || Array.isArray(v)) && !super.has(c)) {
+        if ((typeof v === "boolean" || Array.isArray(v) || (v != null && v.__pyfloat__ === true)) && !super.has(c)) {
             let m = __pyKeyObjs.get(this);
             if (!m) { m = new Map(); __pyKeyObjs.set(this, m); }
             m.set(c, v);
@@ -1979,12 +2686,25 @@ export class PySet extends Set {
     forEach(fn, thisArg) { for (const v of this.values()) fn.call(thisArg, v, v, this); }
 }
 
-/** Python `set(iterable)` / `set()` / `frozenset(iterable)` builtin —
- * canonicalizing constructor; iterates dicts as KEYS via pyForIter.
- * (frozenset immutability is not enforced — documented deviation.) */
+/** Python `set(iterable)` / `set()` builtin — canonicalizing constructor;
+ * iterates dicts as KEYS via pyForIter. */
 export function pySetOf(it) {
     if (it === undefined) return new PySet();
     return new PySet(pyForIter(it));
+}
+
+/** Python `frozenset(iterable)` builtin. Same canonicalizing PySet storage,
+ * plus a non-enumerable `__pyfrozen__` BRAND so the in-place aug-assign
+ * helpers (pyIBitOr/pyIBitAnd/pyIBitXor/pyISub) can tell it from `set` and
+ * REBIND instead of mutating — CPython's frozenset `|=`/`&=`/`-=`/`^=` is
+ * alias-safe (`b = a; a &= s` leaves `b` untouched, `a is b` False).
+ * Full immutability (blocking .add/.discard/…) is still NOT enforced — the
+ * pre-existing documented deviation; the brand only closes the silent
+ * aliasing-corruption class. */
+export function pyFrozensetOf(it) {
+    const s = pySetOf(it);
+    Object.defineProperty(s, "__pyfrozen__", { value: true, enumerable: false });
+    return s;
 }
 
 /** Non-enumerable tuple marker (local twin of operators.js pyTuple —
@@ -2008,15 +2728,50 @@ export function pyDict(src, kwargs) {
         else if (typeof src.keys === "function" && typeof src.__getitem__ === "function") {
             for (const k of src.keys()) entries.push([k, src.__getitem__(k)]);
         }
-        else if (typeof src[Symbol.iterator] === "function" && typeof src !== "string") {
-            for (const pair of src) entries.push([pair[0], pair[1]]);
+        else if (typeof src[Symbol.iterator] === "function") {
+            // autotester dictionaries: CPython validates every update-sequence
+            // element — a non-pair raises the numbered ValueError (this is how
+            // dict('asdf') fails: element #0 = 'a' has length 1), a
+            // non-sequence element raises TypeError. Strings take this branch
+            // too (dict(['ab', 'cd']) == {'a':'b','c':'d'} is legal CPython).
+            let i = 0;
+            for (const pair of src) {
+                let seq = pair;
+                if (typeof pair !== "string" && !Array.isArray(pair)) {
+                    if (
+                        pair !== null &&
+                        typeof pair === "object" &&
+                        typeof pair[Symbol.iterator] === "function"
+                    ) {
+                        seq = [...pair];
+                    } else {
+                        throw new TypeError_(
+                            `cannot convert dictionary update sequence element #${i} to a sequence`,
+                        );
+                    }
+                }
+                if (seq.length !== 2) {
+                    throw new ValueError(
+                        `dictionary update sequence element #${i} has length ${seq.length}; 2 is required`,
+                    );
+                }
+                entries.push([seq[0], seq[1]]);
+                i += 1;
+            }
         } else if (typeof src === "object") {
-            for (const k of Object.keys(src)) entries.push([k, src[k]]);
+            for (const k of __pyOwnKeys(src)) entries.push([k, src[k]]); // r6: symbols survive
         } else {
-            throw new TypeError_(`'${typeof src}' object is not iterable`);
+            throw new TypeError_(`'${__pyTypeName(src)}' object is not iterable`); // #467
         }
     }
-    if (kwargs != null) for (const k of Object.keys(kwargs)) entries.push([k, kwargs[k]]);
+    if (kwargs != null) {
+        // r7: dict(**m) keyword names must be strings (CPython TypeError) —
+        // a Symbol key now raises instead of being silently dropped.
+        for (const k of (kwargs instanceof Map ? kwargs.keys() : __pyOwnKeys(kwargs))) {
+            if (typeof k !== "string") throw new TypeError_("keywords must be strings");
+        }
+        for (const k of Object.keys(kwargs)) entries.push([k, kwargs[k]]);
+    }
     if (entries.every(([k]) => typeof k === "string")) {
         const out = {};
         for (const [k, v] of entries) {
@@ -2026,6 +2781,81 @@ export function pyDict(src, kwargs) {
         return out;
     }
     return new PyDict(entries);
+}
+
+/**
+ * SEC-7 (CWE-1321) — the single proto-safe plain-dict write primitive.
+ *
+ * `o[k] = v` with `k === "__proto__"` does NOT store a key: it invokes the
+ * inherited `Object.prototype.__proto__` SETTER, which silently reparents
+ * `o`. That is both
+ *   (a) a prototype-pollution primitive — `o` then inherits every property of
+ *       an attacker-supplied object, so a later `if (opts.isAdmin)` in any JS
+ *       consumer reads attacker data; and
+ *   (b) a Python-semantics break — in CPython `"__proto__"` is an ordinary
+ *       string key, so `d["__proto__"] = v; "__proto__" in d` is `True`.
+ *
+ * `Object.defineProperty` creates a real own data property in every case
+ * (plain, null-prototype, or exotic receiver), so this is a total function —
+ * no `__isPlainObj` gate is needed and none is wanted: the gate is exactly
+ * what a hostile receiver would try to slip past.
+ *
+ * EVERY plain-object dict/kwargs write in this file must route through here.
+ * See `experiments/codex-security-scan/poc/D-7.md` for the reproducer.
+ */
+/**
+ * Coerce a dict key to its effective property key EXACTLY ONCE. Every
+ * plain-object dict op (write/get/setdefault/pop/contains) must compute this
+ * one and reuse it, so a `Symbol.toPrimitive` key that returns different values
+ * on successive coercions cannot make the presence-check and the access
+ * disagree. Symbols pass through (they are valid keys and `String(sym)` throws).
+ */
+export function __pyPropKey(k) {
+    if (typeof k === "symbol") return k;
+    if ((typeof k === "object" && k !== null) || typeof k === "function") {
+        // delta4: full ToPropertyKey. `String(k)` runs ToPrimitive(k, string)
+        // and THROWS when that yields a Symbol — but a Symbol result is a
+        // valid property key that native `o[k]` would use. Evaluating the key
+        // in a computed-property position applies the exact spec coercion
+        // EXACTLY ONCE (Symbol.toPrimitive → valueOf → toString), symbols
+        // passing through instead of throwing.
+        return Reflect.ownKeys({ [k]: 0 })[0];
+    }
+    return String(k);
+}
+
+/**
+ * Own ENUMERABLE keys of a dict-shaped object — strings AND symbols.
+ * `Object.keys` silently DROPS Symbol keys (so a Symbol-keyed entry vanished
+ * through dict merge/update); bare `Reflect.ownKeys` would ADD non-enumerable
+ * ones. This matches Object.assign's source-key selection, which is Python's
+ * "every key of the dict". delta4.
+ */
+export function __pyOwnKeys(o) {
+    const out = Object.keys(o);
+    for (const s of Object.getOwnPropertySymbols(o)) {
+        const d = Object.getOwnPropertyDescriptor(o, s);
+        if (d && d.enumerable) out.push(s);
+    }
+    return out;
+}
+
+export function __pyDictWrite(o, k, v) {
+    // R1: `o[k] = v` applies ToPropertyKey(k) FIRST, so a key whose *string*
+    // form is "__proto__" — a boxed `new String("__proto__")`, a Map key, an
+    // object with that toString — invokes the inherited setter too. Compare the
+    // coerced key, not the raw one. (Symbols can never be "__proto__".)
+    const pk = __pyPropKey(k);
+    if (pk === "__proto__") {
+        Object.defineProperty(o, "__proto__", {
+            value: v, writable: true, enumerable: true, configurable: true,
+        });
+        return;
+    }
+    // R1: write the ALREADY-COERCED key. `o[k] = v` would run ToPropertyKey(k)
+    // a SECOND time, so a `Symbol.toPrimitive` that returns "__proto__" only on
+    // its second call would still hit the setter. `o[pk]` cannot re-coerce.
+    o[pk] = v;
 }
 
 /**
@@ -2048,22 +2878,30 @@ export function pySetItem(obj, key, value) {
             obj[i] = value;
             return;
         }
-        throw new TypeError_("list indices must be integers or slices");
+        // 2c: derive the container name from the ONE source (__pySeqName —
+        // always "list" here, since tuples were rejected above) and carry the
+        // ", not <type>" suffix CPython prints, instead of the truncated
+        // hardcoded "list indices must be integers or slices".
+        throw new TypeError_(
+            `${__pySeqName(obj)} indices must be integers or slices, not ${__pyIndexTypeName(key)}`);
     }
     // #297: hand PyDict the ORIGINAL key — its own __pyKey canonicalizes
     // (bool→0/1 included) AND records the first-inserted form for repr.
     // The old top-level bool pre-coercion (#258) destroyed that record
     // (`d[True] = x` printed `{1: x}`, CPython keeps `{True: x}`).
     if (obj instanceof Map) { obj.set(key, value); return; }
+    // BYTES AUTHORITY: immutable bytes reject item assignment (CPython
+    // TypeError — the old fallthrough to __pyDictWrite silently WROTE into
+    // the Uint8Array). A bytearray carries the __setitem__ protocol method
+    // (PyByteArray, operators.js) and dispatches below with byte validation.
+    if (__pyBytesKind(obj) === "bytes") {
+        throw new TypeError_("'bytes' object does not support item assignment");
+    }
     if (typeof key === "boolean") key = key ? 1 : 0; // #258: bool ⊂ int (plain shapes)
     if (typeof obj.__setitem__ === "function") { obj.__setitem__(key, value); return; }
-    if (__isPlainObj(obj) && key === "__proto__") {
-        // F3 sibling: a computed `__proto__` write must create a real own
-        // key, not mutate the prototype.
-        Object.defineProperty(obj, "__proto__", { value, writable: true, enumerable: true, configurable: true });
-        return;
-    }
-    obj[key] = value;
+    // F3 sibling / SEC-7: a computed `__proto__` write must create a real own
+    // key, not mutate the prototype. Centralized in __pyDictWrite.
+    __pyDictWrite(obj, key, value);
 }
 
 /** Python `d.keys()` (and bare dict iteration) — shape-dispatched, returns
@@ -2072,7 +2910,7 @@ export function pySetItem(obj, key, value) {
 export function pyDictKeys(d) {
     if (d == null) throw new TypeError_("'NoneType' object is not iterable");
     if (!Array.isArray(d) && typeof d.keys === "function") return [...d.keys()];
-    return Object.keys(d);
+    return __pyOwnKeys(d); // r6: symbol keys listed too
 }
 
 // #266: a Python method accessed as a VALUE (`g = d.get`, `key=d.get`) is a
@@ -2080,9 +2918,89 @@ export function pyDictKeys(d) {
 // Bind a native method to its receiver; synthesize a closure for a plain-object
 // dict's methods (which are lowered, not real properties). Gated so a class
 // instance's data field named like a dict method is returned as-is.
-export function pyBoundMethod(obj, name) {
-    if (obj == null) return obj && obj[name];
-    if (typeof obj[name] === "function") return obj[name].bind(obj);
+// S1 (bound-method identity): CPython bound methods compare EQUAL when they
+// wrap the same function and the same receiver (`a.f == a.f` is True) while
+// staying distinct objects (`a.f is a.f` is False — a fresh wrapper per
+// access). Stamp the wrapper with its (func, self) pair so pyEq can
+// recognize equality; the stamps are non-enumerable so dir()/keys stay clean.
+function __pyBind(func, self) {
+    const bound = func.bind(self);
+    Object.defineProperty(bound, "__pyboundfunc__", { value: func });
+    Object.defineProperty(bound, "__pyboundself__", { value: self });
+    return bound;
+}
+
+// `strict` (optional, codegen-driven): 1 when the compiler proved the
+// receiver is a Python DICT (a plain-object dict literal/local). At runtime
+// a plain object is indistinguishable from a JS-interop object (React
+// props, DOM options), so the absent-attribute AttributeError below only
+// fires for plain objects when the codegen vouches for the dict typing;
+// brand-carrying containers (Array/Map/Set) don't need the flag.
+export function pyBoundMethod(obj, name, strict) {
+    // autotester: None.attr is AttributeError in CPython, not a silent null
+    // (this helper is now the general value-position attribute-read path).
+    if (obj == null) {
+        throw new AttributeError(`'NoneType' object has no attribute '${name}'`);
+    }
+    // WB-16: `.constructor` is a CLASS reference, not a method. The
+    // function-binding branch below would `.bind(obj)` it and return a wrapper
+    // whose `.name` is "bound <Class>" (and which cannot be `new`-ed) —
+    // breaking the standard `obj.constructor.name` reflection idiom
+    // (`root.classList.add(this.constructor.name)`, fromJSON dispatch). A class
+    // constructor is never a bound method, so return it RAW.
+    if (name === "constructor") return obj.constructor;
+    // Python numeric attribute protocol on primitives: int/float/bool have
+    // .real/.imag/.conjugate() (autotester complex_numbers).
+    if (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean"
+        || obj.__pyfloat__ === true) {
+        // Option B: float attributes keep floatness — (8.0).real is 8.0 and
+        // float .imag is 0.0 (CPython), while int .imag stays int 0.
+        const isF = obj.__pyfloat__ === true
+            || (typeof obj === "number" && !Number.isInteger(obj));
+        switch (name) {
+            case "real": return typeof obj === "boolean" ? (obj ? 1 : 0) : obj;
+            case "imag": return isF ? __pyF(0) : 0;
+            case "conjugate": return () => (typeof obj === "boolean" ? (obj ? 1 : 0) : obj);
+        }
+        // Error-kind batch, review round 2: INT and BOOL also carry the
+        // Rational protocol — `.numerator` is the value itself (bool ⊂ int:
+        // True→1, False→0) and `.denominator` is 1. FLOAT does NOT
+        // (CPython: `(2.5).numerator` raises AttributeError), so these arms
+        // are gated on !isF and a float receiver falls through to the
+        // missing-attribute guard below. Without this, that guard
+        // over-raised on CPython-valid `(5).numerator`.
+        if (!isF) {
+            switch (name) {
+                case "numerator": return typeof obj === "boolean" ? (obj ? 1 : 0) : obj;
+                case "denominator": return 1;
+            }
+        }
+    }
+    // Option B: complex components are FLOATS in CPython — (8+0j).real is
+    // 8.0, .imag is 0.0. PyComplex stores raw natives internally (its
+    // arithmetic/repr depend on that), so the float tag is applied here at
+    // the Python attribute-read surface. Brand-based: covers both runtime
+    // copies' PyComplex (each carries __pycomplex__).
+    if (obj.__pycomplex__ === true && (name === "real" || name === "imag")) {
+        return __pyF(obj[name]);
+    }
+    // B1: read the attribute ONCE — a @property getter must fire exactly
+    // once per access (the old typeof-check + return pair ran it twice).
+    const v = obj[name];
+    if (typeof v === "function") {
+        // S3: a function stored as INSTANCE DATA (an own property, e.g.
+        // `self.cb = freefn`) is not a method — CPython does not bind
+        // instance-dict functions, so `obj.cb is freefn` stays True.
+        // Real methods live on the prototype (not own) and are bound.
+        if (Object.hasOwn(obj, name)) return v;
+        return __pyBind(v, obj);
+    }
+    // autotester docstrings: `C.g` — a method reached through the CLASS
+    // object is the (unbound) prototype function in Python 3.
+    if (v === undefined && typeof obj === "function" && obj.prototype
+        && typeof obj.prototype[name] === "function" && name !== "constructor") {
+        return obj.prototype[name];
+    }
     const isDict =
         obj instanceof Map ||
         (typeof obj === "object" && !Array.isArray(obj) && Object.getPrototypeOf(obj) === Object.prototype);
@@ -2093,9 +3011,294 @@ export function pyBoundMethod(obj, name) {
             case "values": return () => pyDictValues(obj);
             case "items": return () => pyDictItems(obj);
             case "pop": return (...a) => pyPop(obj, ...a);
+            case "fromkeys": return (it, v2) => __pyDictFromkeys(it, v2);
+            // Error-kind round 3: the rest of CPython's dict surface, so a
+            // plain-object dict's method REFERENCE resolves (a Map receiver
+            // reaches here only for the non-JS-member names — its JS clear()
+            // binds in the function branch above with equal semantics).
+            case "update": return (...o) => pyUpdate(obj, ...o);
+            case "setdefault": return (k, d) => pyDictSetdefault(obj, k, d);
+            case "popitem": return (last) => pyDictPopitem(obj, last);
+            case "clear": return () => pyClear(obj);
+            case "copy": return () => pyCopy(obj);
         }
     }
-    return obj[name];
+    // Error-kind round 3 (corpus deep-close): NATIVE CONTAINER method
+    // references resolve through the same runtime helpers the call-position
+    // lowering uses, so `m = xs.append; m(3)` works and — critically — the
+    // absent-attribute guard below cannot false-positive on a real Python
+    // method. Python-only names (no JS member) are listed; JS-backed members
+    // (list .pop/.sort/.reverse, set .add/.clear) already bound above.
+    if (Array.isArray(obj)) {
+        switch (name) {
+            case "index": return (x, s, e) => pyIndex(obj, x, s, e);
+            case "count": return (x) => pyCount(obj, x);
+        }
+        // tuple has ONLY count/index — `(1,).append` must fall through to
+        // the AttributeError guard, like CPython.
+        if (obj.__pytuple__ !== true) {
+            switch (name) {
+                case "append": return (x) => pyAppend(obj, x);
+                case "extend": return (it) => pyExtend(obj, it);
+                case "insert": return (i, x) => pyInsert(obj, i, x);
+                case "remove": return (x) => pyRemove(obj, x);
+                case "clear": return () => pyClear(obj);
+                case "copy": return () => pyCopy(obj);
+            }
+        }
+    }
+    if (obj instanceof Set) {
+        switch (name) {
+            case "discard": return (x) => pyDiscard(obj, x);
+            case "remove": return (x) => pyRemove(obj, x);
+            case "pop": return (...a) => pyPop(obj, ...a);
+            case "copy": return () => pyCopy(obj);
+            case "update": return (...o) => pyUpdate(obj, ...o);
+            case "union": return (...o) => pySetUnion(obj, ...o);
+            case "intersection": return (...o) => pySetIntersection(obj, ...o);
+            case "difference": return (...o) => pySetDifference(obj, ...o);
+            case "symmetric_difference": return (o) => pySetSymmetricDifference(obj, o);
+            case "intersection_update": return (...o) => pySetIntersectionUpdate(obj, ...o);
+            case "difference_update": return (...o) => pySetDifferenceUpdate(obj, ...o);
+            case "symmetric_difference_update": return (o) => pySetSymmetricDifferenceUpdate(obj, o);
+            case "isdisjoint": return (o) => pySetIsdisjoint(obj, o);
+            case "issubset": return (o) => pySetIssubset(obj, o);
+            case "issuperset": return (o) => pySetIssuperset(obj, o);
+        }
+    }
+    // Error-kind class (#471/#472/#473 batch + round-3 corpus): a receiver
+    // with a genuinely-absent attribute must raise CPython's AttributeError —
+    // previously the read silently yielded `undefined` (printed as None), a
+    // silent wrong value on the error path. Type name via __pyTypeName
+    // (#469 — the ONE source). Scope:
+    //   * primitives — int/bool/str + the float box (None arm is at the top);
+    //   * native containers by BRAND — Array (list/tuple), Map (dict),
+    //     Set/PySet (set); their real methods all resolved above, and
+    //     JS-backed/expando members pass the `in` check;
+    //   * plain-object dicts ONLY under the codegen `strict` flag (receiver
+    //     statically proven Dict) — an unproven plain object keeps the
+    //     undefined pass-through because it may be a JS-interop object
+    //     (React props), where absent-optional reads are legitimate.
+    // User class instances and other objects keep the pass-through (the
+    // hasattr idiom and interop reads must keep working).
+    if (v === undefined
+        && (typeof obj === "number" || typeof obj === "bigint" || typeof obj === "boolean"
+            || typeof obj === "string" || obj.__pyfloat__ === true
+            || Array.isArray(obj) || obj instanceof Map || obj instanceof Set
+            || (strict === 1 && isDict))
+        && !(name in Object(obj))) {
+        throw new AttributeError(`'${__pyTypeName(obj)}' object has no attribute '${name}'`);
+    }
+    return v;
+}
+
+// autotester callable_test: calling through a plain VARIABLE — the value
+// may be a real function (fast path) or an instance of a class defining
+// __call__ (CPython callable objects). The codegen routes Name-callee
+// calls here only when the name is a local variable (not a known def/
+// class/builtin), so direct function calls stay raw.
+export function __pyCall(f, args) {
+    if (typeof f === "function") {
+        // A CLASS reached through a variable (decorated class, class passed
+        // as an argument) constructs with `new`. Compiled classes carry
+        // __mro__; the source sniff covers native/dataclass classes.
+        if (f.__mro__ !== undefined
+            || (f.prototype !== undefined
+                && /^class[\s{(]/.test(Function.prototype.toString.call(f)))) {
+            return new f(...args);
+        }
+        return f(...args);
+    }
+    if (f !== null && f !== undefined && typeof f.__call__ === "function") {
+        return f.__call__(...args);
+    }
+    throw new TypeError_(`'${__pyTypeName(f)}' object is not callable`);
+}
+
+// autotester local_classes: an attribute CALL whose attribute is a class —
+// `a.B(9)` / `b.C(10)` reaching a NESTED class through an instance — must
+// construct with `new` (a plain call throws "Class constructor cannot be
+// invoked without 'new'"). A method attribute keeps its receiver. The
+// codegen routes an attribute call here only when the attribute name is a
+// known class name, so the common method-call path stays raw. One property
+// read (getters fire once).
+export function __pyAttrCall(obj, name, args) {
+    if (obj == null) {
+        throw new AttributeError(`'NoneType' object has no attribute '${name}'`);
+    }
+    const v = obj[name];
+    if (typeof v === "function") {
+        if (/^class[\s{(]/.test(Function.prototype.toString.call(v))) {
+            return new v(...args);
+        }
+        return v.apply(obj, args);
+    }
+    if (v === undefined && !(name in Object(obj))) {
+        throw new AttributeError(
+            `'${__pyTypeName(obj)}' object has no attribute '${name}'`,
+        );
+    }
+    return v(...args);
+}
+
+// ── autotester attribs_by_name: getattr/setattr/hasattr/delattr ────────────
+// #467: THE ONE value-model type-name source for runtime error messages.
+// CPython names the value's PYTHON type in diagnostics ("'float' object is
+// not iterable"), while JS `typeof` names the JS representation ('number',
+// 'object', …). Every "'X' object is not/has no/does not support …" message
+// routes through here so the name is right by construction: pyType covers
+// primitives (boxing-aware: an unboxed non-integer Number IS a float),
+// bigint→int, bytes/bytearray, containers, and compiled classes; fall back
+// to the JS typeof only for values pyType cannot name.
+export function __pyTypeName(o) {
+    if (o === null || o === undefined) return "NoneType";
+    const t = pyType(o);
+    return (t && (t.__name__ || t.name)) || typeof o;
+}
+const __ATTR_MISSING = Symbol("attr-missing");
+function __attrLookup(obj, name) {
+    if (obj === null || obj === undefined) return __ATTR_MISSING;
+    // WB-16 (residual): `.constructor` is a CLASS reference, not a method —
+    // return it RAW so `getattr(o, "constructor").name` is the bare class name.
+    // pyBoundMethod already special-cases this; the getattr/hasattr path
+    // (this helper) did NOT, so the bind branch below wrapped it into a
+    // function whose `.name` is "bound <Class>" (and which cannot be `new`-ed),
+    // breaking the standard reflection idiom via getattr.
+    if (name === "constructor") return obj.constructor;
+    const v = obj[name];
+    if (v === undefined && !(name in Object(obj))) return __ATTR_MISSING;
+    // Bound-method semantics: a function attribute read by name carries its
+    // receiver, matching direct `obj.m` access (pyBoundMethod discipline —
+    // same own-property split: instance-data functions stay unbound, and the
+    // wrapper carries the (func, self) identity stamps for pyEq).
+    if (typeof v === "function" && !Object.hasOwn(obj, name)) return __pyBind(v, obj);
+    return v;
+}
+
+/** Python `getattr(obj, name[, default])`. */
+export function pyGetattr(obj, name, ...dflt) {
+    const v = __attrLookup(obj, name);
+    if (v !== __ATTR_MISSING) return v;
+    if (dflt.length > 0) return dflt[0];
+    throw new AttributeError(
+        `'${__pyTypeName(obj)}' object has no attribute '${name}'`,
+    );
+}
+
+/** Python `setattr(obj, name, value)` — returns None. */
+export function pySetattr(obj, name, value) {
+    if (obj === null || obj === undefined) {
+        throw new AttributeError(
+            `'NoneType' object has no attribute '${name}'`,
+        );
+    }
+    obj[name] = value;
+    return null;
+}
+
+/** Python `hasattr(obj, name)`. */
+export function pyHasattr(obj, name) {
+    return __attrLookup(obj, name) !== __ATTR_MISSING;
+}
+
+/** Python `delattr(obj, name)` — AttributeError when absent, like CPython. */
+export function pyDelattr(obj, name) {
+    if (obj === null || obj === undefined || !(name in Object(obj))) {
+        throw new AttributeError(
+            `'${__pyTypeName(obj)}' object has no attribute '${name}'`,
+        );
+    }
+    delete obj[name];
+    return null;
+}
+
+// autotester general_functions: `dir()`. Approximates CPython's contract on
+// the compiled object model: for a CLASS, the own attributes of the
+// constructor chain + prototype methods; for an INSTANCE, its own attributes
+// plus everything its class chain contributes; sorted, deduplicated. JS
+// structural noise (length/name/prototype/...) is excluded; dunder-ish
+// compiler metadata (__mro__, __pyparams__, ...) survives like CPython's own
+// dunders and is filtered the same way user code filters them.
+const __DIR_NOISE = new Set([
+    "length", "name", "prototype", "constructor", "arguments", "caller", "toString",
+]);
+export function pyDir(x) {
+    if (x === null || x === undefined) return [];
+    const names = new Set();
+    const add = (o) => {
+        for (const k of Object.getOwnPropertyNames(o)) {
+            if (!__DIR_NOISE.has(k)) names.add(k);
+        }
+    };
+    if (typeof x === "function") {
+        let c = x;
+        while (c && c !== Function.prototype) {
+            add(c);
+            if (c.prototype) add(c.prototype);
+            c = Object.getPrototypeOf(c);
+        }
+    } else if (typeof x === "object") {
+        add(x);
+        let p = Object.getPrototypeOf(x);
+        while (p && p !== Object.prototype) {
+            add(p);
+            if (p.constructor && p.constructor !== Object) add(p.constructor);
+            p = Object.getPrototypeOf(p);
+        }
+    } else {
+        const p = Object.getPrototypeOf(Object(x));
+        if (p) add(p);
+    }
+    return [...names].sort();
+}
+
+// public #3: ascii(x) — repr() with every non-ASCII character escaped
+// (\xNN for U+0080..U+00FF, \uNNNN to U+FFFF, \UNNNNNNNN above), CPython
+// semantics. Iterating by code point keeps surrogate pairs one escape.
+export function pyAscii(x) {
+    let out = "";
+    for (const ch of pyRepr(x)) {
+        const cp = ch.codePointAt(0);
+        if (cp < 0x80) { out += ch; continue; }
+        const hex = cp.toString(16);
+        if (cp <= 0xff) out += "\\x" + hex.padStart(2, "0");
+        else if (cp <= 0xffff) out += "\\u" + hex.padStart(4, "0");
+        else out += "\\U" + hex.padStart(8, "0");
+    }
+    return out;
+}
+
+// public #3: vars(obj) — the instance __dict__ as a dict (own enumerable
+// data attributes). On the compiled object model instance attributes are
+// own JS properties, while methods and class attributes live on the
+// prototype chain — so "own props minus compiler markers" is exactly
+// CPython's instance __dict__. Non-instances (primitives, dicts, lists,
+// sets, None) raise TypeError like CPython. The zero-arg form
+// (vars() ≡ locals()) is rejected at compile time.
+export function pyVars(obj) {
+    const isInstance = obj !== null && obj !== undefined
+        && typeof obj === "object"
+        && !Array.isArray(obj)
+        && !(obj instanceof Map)
+        && !(obj instanceof Set)
+        && Object.getPrototypeOf(obj) !== Object.prototype;
+    if (!isInstance) {
+        throw new TypeError_("vars() argument must have __dict__ attribute");
+    }
+    const out = {};
+    for (const k of Object.keys(obj)) {
+        if (k.startsWith("__py")) continue; // compiler markers, not user attrs
+        out[k] = obj[k];
+    }
+    return out;
+}
+
+/** Python `callable(x)` — functions/classes, or instances with __call__. */
+export function pyCallable(x) {
+    return (
+        typeof x === "function" ||
+        (x !== null && x !== undefined && typeof x.__call__ === "function")
+    );
 }
 
 // #239: iterate an operand of UNKNOWN static type in a `for x in it:` — Python
@@ -2114,25 +3317,39 @@ export function pyForIter(x) {
     // no Symbol.iterator, so without this it fell to Object.keys() → [] (the
     // async-comprehension returned empty; #289 r4_a_async_comp).
     if (typeof x[Symbol.asyncIterator] === "function") return x;
-    if (typeof x === "object") return Object.keys(x); // plain-object dict → keys
-    return x;
+    // #467 / Option B parity: a boxed float is an object but NOT iterable —
+    // the same guard __pyElemsIter/pySeq/pyIter carry; without it
+    // `for x in 8.0` silently iterated the box's (zero) keys.
+    if (x.__pyfloat__ === true) throw new TypeError_("'float' object is not iterable");
+    if (typeof x === "object") return __pyOwnKeys(x); // plain-object dict → keys (r6: symbols too)
+    // #467: a non-iterable primitive used to pass through to for..of's
+    // JS-shaped native TypeError ("... is not iterable" naming the VALUE);
+    // raise CPython's message with the Python type name instead.
+    throw new TypeError_(`'${__pyTypeName(x)}' object is not iterable`);
 }
 
 /** Python `d.values()` — shape-dispatched, returns an array. */
 export function pyDictValues(d) {
     if (d == null) throw new TypeError_("'NoneType' object is not iterable");
     if (!Array.isArray(d) && typeof d.values === "function") return [...d.values()];
-    return Object.values(d);
+    return __pyOwnKeys(d).map((k) => d[k]); // r6: symbol-keyed values included
 }
 
 /** Python `d.items()` — shape-dispatched; returns an array of (k, v)
  * tuples (pyTuple-marked so repr shows `(k, v)` like CPython). */
 export function pyDictItems(d) {
     if (d == null) throw new TypeError_("'NoneType' object is not iterable");
+    // WB-6: a USER receiver with its own `items` method (user classes,
+    // mapping-likes) dispatches to it — the old `.entries`-keyed dispatch
+    // silently snapshotted the ATTRIBUTE dict instead. Containers never
+    // define `items` (Array/Map/PyDict/plain objects have no such method;
+    // FormData/URLSearchParams are `.entries`-native), so the container
+    // paths below are unreachable from here.
+    if (!__isPlainObj(d) && typeof d.items === "function") return d.items();
     if (!Array.isArray(d) && typeof d.entries === "function") {
         return [...d.entries()].map((pair) => __markTuple([pair[0], pair[1]]));
     }
-    return Object.entries(d).map((pair) => __markTuple(pair));
+    return __pyOwnKeys(d).map((k) => __markTuple([k, d[k]])); // r6: symbol-keyed items included
 }
 
 /** Dict-literal merge `{**a, "k": v, **b}` — shape-dispatched. Result is
@@ -2148,6 +3365,15 @@ export function pyDictItems(d) {
  * class methods) keep the legacy trailing-options-object convention.
  */
 export function __pyCallKw(fn, pos, kw) {
+    // autotester operator_overloading: a CPython callable OBJECT (instance
+    // of a class defining __call__) invoked with keywords — dispatch to the
+    // prototype's __call__ (which carries the __pyparams__/__pykw__
+    // metadata) with the instance as `this`.
+    if (typeof fn !== "function" && fn !== null && fn !== undefined
+        && typeof fn.__call__ === "function") {
+        const m = fn.__call__;
+        return m.call(fn, ...__pyKwArgs(m, pos, kw));
+    }
     return fn(...__pyKwArgs(fn, pos, kw));
 }
 
@@ -2161,11 +3387,35 @@ export function __pyCallKw(fn, pos, kw) {
  * options-object convention is preserved (JS interop, components).
  */
 export function __pyKwArgs(fn, pos, kw) {
+    // r7: CPython — a `**` mapping's keyword names MUST be strings
+    // (f(**{1: 2}) raises TypeError). Previously a plain-object spread
+    // silently DROPPED Symbol keys (Object.entries is string-only) and a
+    // Map-backed spread let non-string keys flow into parameter binding
+    // with a wrong error. Validate BEFORE binding, like CPython.
+    for (const k of (kw instanceof Map ? kw.keys() : __pyOwnKeys(kw))) {
+        if (typeof k !== "string") throw new TypeError_("keywords must be strings");
+    }
     const entries = kw instanceof Map ? Array.from(kw.entries()) : Object.entries(kw);
-    const names = fn ? fn.__pyparams__ : undefined;
+    // autotester arguments: for `new Cls(...)` the keyword metadata lives on
+    // the cooperative __init__ prototype method, not the class object.
+    let meta = fn;
+    if (fn && !fn.__pyparams__ && fn.prototype) {
+        const mro = fn.__mro__ || [fn];
+        for (const c of mro) {
+            if (c && c.prototype
+                && Object.prototype.hasOwnProperty.call(c.prototype, "__init__")
+                && c.prototype.__init__.__pyparams__) {
+                meta = c.prototype.__init__;
+                break;
+            }
+        }
+    }
+    const names = meta ? meta.__pyparams__ : undefined;
     if (!names) {
         const legacy = {};
-        for (const [k, v] of entries) legacy[k] = v;
+        // SEC-7: `f(**remote)` must not let a "__proto__" key reparent the
+        // options object handed to a JS/React consumer.
+        for (const [k, v] of entries) __pyDictWrite(legacy, k, v);
         return [...pos, legacy];
     }
     const fname = (fn && fn.name) || "function";
@@ -2178,14 +3428,137 @@ export function __pyKwArgs(fn, pos, kw) {
                 throw new TypeError(`${fname}() got multiple values for argument '${k}'`);
             }
             args[idx] = v;
-        } else if (fn.__pykw__) {
-            (rest = rest || {})[k] = v;
+        } else if (meta.__pykw__) {
+            __pyDictWrite(rest = rest || {}, k, v); // SEC-7
         } else {
             throw new TypeError(`${fname}() got an unexpected keyword argument '${k}'`);
         }
     }
-    if (fn.__pykw__) args[names.length] = rest || {};
+    if (meta.__pykw__) {
+        // autotester arguments/decorators: a VARIADIC signature (`*args` —
+        // fn.__pyva__) has no fixed keyword slot; the keyword channel
+        // travels as a Symbol-marked trailing carrier that the callee's
+        // prologue pops (__pyTakeKw). Fixed-arity keeps the names.length slot.
+        // The carrier must land BEYOND every named slot (not merely at the
+        // end of `args`): with fewer positionals than named params, a bare
+        // push would let a named param swallow the carrier (g(1, n=5) put it
+        // in `y`). Sparse holes spread as undefined → JS defaults apply.
+        if (meta.__pyva__) {
+            args[Math.max(args.length, names.length)] = __pyMarkKw(rest || {});
+        } else {
+            args[names.length] = rest || {};
+        }
+    }
     return args; // sparse holes spread as undefined -> JS defaults apply
+}
+
+// ── autotester arguments/decorators: varargs keyword channel ──────────────
+// JS cannot declare parameters after a rest param, so `def f(*args, m, n=1,
+// **kwargs)` compiles to `function f(...args)` plus a prologue:
+//   const kwargs = __pyTakeKw(args);              // pops the marked carrier
+//   let m = __pyKwPop(kwargs, "m", "f");          // kw-only, required
+//   let n = __pyKwPop(kwargs, "n", "f", 1);       // kw-only, defaulted
+//   __pyNoExtraKw(kwargs, "f");                   // only when no **kwargs
+// Call sites with keywords append __pyMarkKw(rest) via __pyKwArgs above;
+// plain positional calls carry no marker, so the prologue sees {}.
+const __PYKW_MARK = Symbol("pyths.kwargs");
+export function __pyMarkKw(obj) {
+    Object.defineProperty(obj, __PYKW_MARK, { value: true, enumerable: false });
+    return obj;
+}
+export function __pyTakeKw(args) {
+    const last = args.length > 0 ? args[args.length - 1] : undefined;
+    if (last !== null && typeof last === "object" && last[__PYKW_MARK] === true) {
+        args.pop();
+        return last;
+    }
+    return {};
+}
+// S2: a `*args` rest parameter is a TUPLE in Python — `type(args)` is
+// tuple, `isinstance(args, tuple)` is True, repr is `(1, 2)`. The JS rest
+// array is freshly allocated per call, so marking it in place is safe.
+export function __pyMarkTuple(a) {
+    if (Array.isArray(a) && !a.__pytuple__) {
+        Object.defineProperty(a, "__pytuple__", { value: true, enumerable: false });
+    }
+    return a;
+}
+
+export function __pyKwPop(kw, name, fname, ...dflt) {
+    if (Object.prototype.hasOwnProperty.call(kw, name)) {
+        const v = kw[name];
+        delete kw[name];
+        return v;
+    }
+    if (dflt.length > 0) return dflt[0];
+    throw new TypeError_(
+        `${fname}() missing 1 required keyword-only argument: '${name}'`,
+    );
+}
+export function __pyNoExtraKw(kw, fname, allowed) {
+    // Called BEFORE the kw-only pops (CPython reports an unexpected keyword
+    // ahead of a missing keyword-only one), so `allowed` lists the kw-only
+    // names that are legitimately still present at this point.
+    for (const k of Object.keys(kw)) {
+        if (allowed === undefined || !allowed.includes(k)) {
+            throw new TypeError_(`${fname}() got an unexpected keyword argument '${k}'`);
+        }
+    }
+}
+
+// autotester method_and_class_decorators: apply a USER decorator to an
+// instance method. Compiled methods carry `self` as JS `this`, but a Python
+// decorator expects a plain function whose FIRST parameter is self
+// (`def deco(f): def inner(*args): ... f(*args)`). Bridge both shapes:
+//   as_fn : python-shaped view of the original (self as first arg)
+//   dec(as_fn) : whatever the user decorator builds
+//   returned  : method-shaped — forwards `this` as the first argument
+// so `a.m(3)` reaches inner as args=(a, 3), exactly like CPython.
+export function __pyDecorateMethod(dec, orig) {
+    const as_fn = function (self, ...a) {
+        return orig.apply(self, a);
+    };
+    // Carry keyword-binding metadata (self prepended) so keyword calls
+    // through the decorator still bind by name.
+    if (orig.__pyparams__) {
+        as_fn.__pyparams__ = ["self", ...orig.__pyparams__];
+        if (orig.__pykw__) as_fn.__pykw__ = true;
+        if (orig.__pyva__) as_fn.__pyva__ = true;
+    }
+    // The decorator itself may be a callable INSTANCE (`@adeco(t=1)` — a
+    // class whose __call__ returns the wrapper).
+    const w = typeof dec === "function" ? dec(as_fn) : dec.__call__(as_fn);
+    return function (...a) {
+        return w(this, ...a);
+    };
+}
+
+// autotester method_and_class_decorators: decorate a @classmethod — the
+// decorator's wrapper signature is (cls, ...); thread the class the way
+// __pyDecorateMethod threads self. `this` is the class for Cls.m(...)
+// calls; instance-alias calls fall back to the defining class.
+export function __pyDecorateClassMethod(dec, orig, cls) {
+    const as_fn = function (c, ...a) { return orig.apply(c, a); };
+    if (orig.__pyparams__) {
+        as_fn.__pyparams__ = ["cls", ...orig.__pyparams__];
+        if (orig.__pykw__) as_fn.__pykw__ = true;
+        if (orig.__pyva__) as_fn.__pyva__ = true;
+    }
+    const w = typeof dec === "function" ? dec(as_fn) : dec.__call__(as_fn);
+    return function (...a) {
+        const c = typeof this === "function" ? this : cls;
+        return w(c, ...a);
+    };
+}
+
+// Metadata attacher for function EXPRESSIONS (lambdas) — statements attach
+// __pyparams__/__pykw__/__pyva__ as post-declaration assignments, but a
+// lambda has no name to assign onto; wrap instead.
+export function __pyFnMeta(fn, names, pykw, pyva) {
+    fn.__pyparams__ = names;
+    if (pykw) fn.__pykw__ = true;
+    if (pyva) fn.__pyva__ = true;
+    return fn;
 }
 
 export function pyDictMerge(...parts) {
@@ -2194,17 +3567,17 @@ export function pyDictMerge(...parts) {
         for (const p of parts) {
             if (p == null) continue;
             if (p instanceof Map) { for (const [k, v] of p.entries()) out.set(k, v); }
-            else { for (const k of Object.keys(p)) out.set(k, p[k]); }
+            // delta4: __pyOwnKeys, not Object.keys — Symbol-keyed entries survive.
+            else { for (const k of __pyOwnKeys(p)) out.set(k, p[k]); }
         }
         return out;
     }
     const out = {};
     for (const p of parts) {
         if (p == null) continue;
-        for (const k of Object.keys(p)) {
-            if (k === "__proto__") Object.defineProperty(out, k, { value: p[k], writable: true, enumerable: true, configurable: true });
-            else out[k] = p[k];
-        }
+        // SEC-7: centralized in __pyDictWrite (same semantics as before).
+        // delta4: __pyOwnKeys, not Object.keys — Symbol-keyed entries survive.
+        for (const k of __pyOwnKeys(p)) __pyDictWrite(out, k, p[k]);
     }
     return out;
 }
@@ -2224,18 +3597,49 @@ export function pyDictGet(d, k, defaultValue) {
     }
     // F3: own-key check so inherited prototype members (`hasOwnProperty`,
     // `toString`, `__proto__`, ...) don't masquerade as present keys.
-    return (d != null && Object.prototype.hasOwnProperty.call(d, k)) ? d[k] : defaultValue;
+    // Coerce ONCE (delta): use pk in both the probe and the read.
+    if (d == null) return defaultValue;
+    const pk = __pyPropKey(k);
+    const present = Object.prototype.hasOwnProperty.call(d, pk);
+    // WB-20: perform the PLAIN property read UNCONDITIONALLY — even when the
+    // key is absent — so a host read-trap fires and registers a dependency on
+    // THIS key, exactly as native `d[k]` and the subscript helper `pyGetItem`
+    // (line ~1354) do. When `d` is a MobX-observable object (a Proxy whose
+    // prototype is Object.prototype, so `__isPlainObj` sends it down this dict
+    // path), MobX tracks reads through the Proxy's `get` trap. The old code
+    // guarded the read behind `hasOwnProperty` — which goes through the
+    // `[[GetOwnProperty]]`/`has` machinery, not `get`, and short-circuits with
+    // NO `get` at all on a missing key — so an `observer` component reading
+    // MobX state via `dict.get(k)` never subscribed, and never re-rendered when
+    // the key was later added. Doing `d[pk]` here (then gating on `present`)
+    // registers the dependency for the absent-key case too, matching the golden
+    // native-bracket read. Gating the RESULT on own-property presence preserves
+    // Python dict semantics: missing/inherited keys → default; an own key → its
+    // value, including a genuine `undefined`. Reading a plain data dict's
+    // absent/inherited slot is side-effect-free (no getters), so the extra read
+    // is inert off the observable path.
+    const v = d[pk];
+    return present ? v : defaultValue;
 }
 
 /** Python `d.setdefault(k, default)` — sets if missing, returns current. */
 export function pyDictSetdefault(d, k, defaultValue) {
+    // WB-6: user receivers with their own setdefault (user classes,
+    // Map/dict subclasses overriding it) dispatch to it — checked FIRST so
+    // an override wins, like pyDictPopitem/pyUpdate. Plain Maps/objects
+    // have no `setdefault` method and keep the container paths below.
+    if (d != null && !__isPlainObj(d) && typeof d.setdefault === "function") {
+        return d.setdefault(k, defaultValue);
+    }
     if (d instanceof Map) {
         if (d.has(k)) return d.get(k);
         d.set(k, defaultValue);
         return defaultValue;
     }
-    if (Object.prototype.hasOwnProperty.call(d, k)) return d[k];
-    d[k] = defaultValue;
+    // Coerce ONCE (delta): pk drives the probe, the read, AND the write.
+    const pk = __pyPropKey(k);
+    if (Object.prototype.hasOwnProperty.call(d, pk)) return d[pk];
+    __pyDictWrite(d, pk, defaultValue); // SEC-7: `d["__proto__"]` is a data key
     return defaultValue;
 }
 
@@ -2246,8 +3650,8 @@ export function pyDictSetdefault(d, k, defaultValue) {
 // type info to pick a per-type lowering.
 // ============================================================
 
-/** Python `obj.count(v)` for str/list/tuple. */
-export function pyCount(obj, v) {
+/** Python `obj.count(v[, start[, end]])` for str/list/tuple/bytes. */
+export function pyCount(obj, v, start, end) {
     if (typeof obj === "string") {
         if (typeof v !== "string") return 0;
         // #327: the empty substring matches at every gap (before each char
@@ -2260,9 +3664,11 @@ export function pyCount(obj, v) {
         return n;
     }
     if (Array.isArray(obj)) return pyListCount(obj, v);
-    // Custom receivers with their own count (deque, user classes).
-    if (obj != null && typeof obj.count === "function") return obj.count(v);
-    throw new TypeError_(`object of type '${typeof obj}' has no count()`);
+    // Custom receivers with their own count (bytes/bytearray via the
+    // PyBytes prototype — the bytes query engine — deque, user classes).
+    // Forward start/end so bytes.count's optional args survive dispatch.
+    if (obj != null && typeof obj.count === "function") return obj.count(v, start, end);
+    throw new TypeError_(`object of type '${__pyTypeName(obj)}' has no count()`); // #467
 }
 
 /** Python `obj.clear()` for list/dict/set. */
@@ -2270,12 +3676,13 @@ export function pyClear(obj) {
     if (Array.isArray(obj)) { obj.length = 0; return; }
     if (obj instanceof Set || obj instanceof Map) { obj.clear(); return; }
     // Custom receivers with their own clear (deque, user classes).
-    if (obj != null && !__isPlainObj(obj) && typeof obj.clear === "function") { obj.clear(); return; }
+    // WB-6 round 2: propagate the user method's return value.
+    if (obj != null && !__isPlainObj(obj) && typeof obj.clear === "function") { return obj.clear(); }
     if (obj && typeof obj === "object") {
-        for (const k of Object.keys(obj)) delete obj[k];
+        for (const k of __pyOwnKeys(obj)) delete obj[k]; // r6: symbols cleared too
         return;
     }
-    throw new TypeError_(`object of type '${typeof obj}' has no clear()`);
+    throw new TypeError_(`object of type '${__pyTypeName(obj)}' has no clear()`); // #467
 }
 
 /** Python `obj.copy()` for list/dict/set. Shallow copy. */
@@ -2290,7 +3697,7 @@ export function pyCopy(obj) {
     if (obj instanceof PyDict) return new PyDict(obj);
     if (obj instanceof Map) return new Map(obj.entries());
     if (obj && typeof obj === "object") return { ...obj };
-    throw new TypeError_(`object of type '${typeof obj}' has no copy()`);
+    throw new TypeError_(`object of type '${__pyTypeName(obj)}' has no copy()`); // #467
 }
 
 /**
@@ -2311,26 +3718,28 @@ export function pyCopy(obj) {
  */
 export function pyNormalizeStyle(style) {
     if (style == null || typeof style !== "object") return style;
+    // Option B: a boxed (integer-valued) float style value must unbox to a
+    // native Number here — React appends the "px" unit ONLY when
+    // `typeof value === "number"`, so a box would silently drop the unit
+    // (`padding: 10.0` rendering without "px"). Key conversion: _X →
+    // X.toUpperCase() (generic snake→camel), preserving leading dashes
+    // (CSS custom props: --my-var) and vendor prefixes (-webkit-foo) —
+    // those legitimately use `-`, not `_`, so we only act on `_`.
+    const unboxV = (v) => (v != null && v.__pyfloat__ === true ? v.valueOf() : v);
     let out = null;
-    for (const k of Object.keys(style)) {
-        if (k.indexOf("_") < 0) {
-            // Already camelCase or no underscore — fast path.
-            if (out !== null) out[k] = style[k];
-            continue;
-        }
-        // Convert _X → X.toUpperCase() (generic snake→camel).
-        // Preserve leading dashes (CSS custom props: --my-var) and
-        // vendor prefixes (-webkit-foo) — those legitimately use `-`,
-        // not `_`, so we only act on `_` separators.
-        const camel = k.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-        if (out === null) {
+    const keys = Object.keys(style);
+    for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        const camel = k.indexOf("_") < 0
+            ? k
+            : k.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+        const v = unboxV(style[k]);
+        if (out === null && (camel !== k || v !== style[k])) {
+            // Copy-on-write: materialize only when something changes.
             out = {};
-            for (const prev of Object.keys(style)) {
-                if (prev === k) break;
-                out[prev] = style[prev];
-            }
+            for (let j = 0; j < i; j++) out[keys[j]] = unboxV(style[keys[j]]);
         }
-        out[camel] = style[k];
+        if (out !== null) out[camel] = v;
     }
     return out === null ? style : out;
 }
@@ -2344,14 +3753,23 @@ export function pyUpdate(obj, ...others) {
     // Custom receivers with their own update (Counter adds COUNTS, user
     // classes) — must win over the generic Map merge below.
     if (obj != null && !__isPlainObj(obj) && typeof obj.update === "function") {
-        for (const o of others) obj.update(o);
-        return;
+        // WB-6: forward ALL args (zero or more) in ONE call so a NO-ARG user
+        // `.update()` is honored. The old `for (const o of others)` loop
+        // silently DROPPED a no-arg call — a user method named `update`
+        // collides with dict.update, whose loop assumes >=1 arg. Single-arg
+        // Counter/user calls are unchanged: obj.update(...[x]) === obj.update(x).
+        // WB-6 round 2: PROPAGATE the user method's return value (Python
+        // returns it; the old bare call+return read as None).
+        return obj.update(...others);
     }
     if (obj instanceof Map) {
         // Explicit .entries(): PyDict's default iterator yields KEYS
         // (Python semantics), so implicit Map iteration would misfire.
+        // delta4: __pyOwnKeys, not Object.entries — Symbol-keyed entries survive.
         for (const o of others) {
-            for (const [k, v] of (o instanceof Map ? o.entries() : Object.entries(o))) obj.set(k, v);
+            if (o instanceof Map) { for (const [k, v] of o.entries()) obj.set(k, v); }
+            else if (__pyUpdatePairs(o)) { for (const p of o) { __pyUpdatePairShape(p); obj.set(p[0], p[1]); } } // WB-6
+            else { for (const k of __pyOwnKeys(o)) obj.set(k, o[k]); }
         }
         return;
     }
@@ -2361,14 +3779,49 @@ export function pyUpdate(obj, ...others) {
                 // Plain-object receiver updated from a Map-backed dict:
                 // keys pass through JS property coercion (the documented
                 // plain-shape residual for non-string keys).
-                for (const [k, v] of o.entries()) obj[k] = v;
+                for (const [k, v] of o.entries()) __pyDictWrite(obj, k, v);
+            } else if (__pyUpdatePairs(o)) {
+                // WB-6: CPython `dict.update` accepts an ITERABLE OF PAIRS
+                // (`d.update([("k", "v")])`) — the own-keys walk turned it
+                // into `{'0': ('k', 'v')}`.
+                for (const p of o) { __pyUpdatePairShape(p); __pyDictWrite(obj, p[0], p[1]); }
             } else {
-                Object.assign(obj, o);
+                // SEC-7: NOT Object.assign — it re-[[Set]]s each key, so an
+                // own "__proto__" data key on `o` (exactly what JSON.parse
+                // produces from remote input) reparents `obj`. Mirrors
+                // pyDictMerge's __pyOwnKeys walk (delta4: symbols survive).
+                for (const k of __pyOwnKeys(o)) __pyDictWrite(obj, k, o[k]);
             }
         }
         return;
     }
-    throw new TypeError_(`object of type '${typeof obj}' has no update()`);
+    throw new TypeError_(`object of type '${__pyTypeName(obj)}' has no update()`); // #467
+}
+
+/** WB-6: is a `dict.update` ARGUMENT the iterable-of-pairs form? CPython's
+ * rule: a mapping (has `keys`) merges by keys; any other iterable is
+ * consumed as (k, v) pairs. JS wrinkles: Arrays and Sets carry a native
+ * `.keys` METHOD, so they are matched explicitly as pairs first; strings
+ * are excluded (CPython raises — the legacy own-keys walk keeps that shape
+ * out of the pairs path); Maps are the mapping branch upstream. */
+function __pyUpdatePairs(o) {
+    if (Array.isArray(o) || o instanceof Set) return true;
+    return (
+        o != null
+        && typeof o !== "string"
+        && typeof o[Symbol.iterator] === "function"
+        && typeof o.keys !== "function"
+    );
+}
+
+/** WB-6: each element of a pairs-form update must be a length-2 sequence
+ * (CPython: "dictionary update sequence element has length N; 2 is
+ * required"). */
+function __pyUpdatePairShape(p) {
+    if (!Array.isArray(p) || p.length !== 2) {
+        const n = Array.isArray(p) ? p.length : 1;
+        throw new ValueError(`dictionary update sequence element has length ${n}; 2 is required`);
+    }
 }
 
 /** Python `obj.remove(v)` for list/set. List: first occurrence by ===.
@@ -2382,7 +3835,7 @@ export function pyRemove(obj, v) {
     }
     // Custom receivers with their own remove (deque, user classes).
     if (obj != null && typeof obj.remove === "function") return obj.remove(v);
-    throw new TypeError_(`object of type '${typeof obj}' has no remove()`);
+    throw new TypeError_(`object of type '${__pyTypeName(obj)}' has no remove()`); // #467
 }
 
 // ============================================================
@@ -2433,18 +3886,20 @@ export function pyStrExpandtabs(s, tabsize = 8) {
 
 /** Python `s.partition(sep)` — split into (before, sep, after) at first match. */
 export function pyStrPartition(s, sep) {
+    // autotester: CPython returns a TUPLE (type-repr parity — the marked
+    // array via pyTuple, not a bare list).
     if (!sep) throw new ValueError("empty separator");
     const i = s.indexOf(sep);
-    if (i === -1) return [s, "", ""];
-    return [s.slice(0, i), sep, s.slice(i + sep.length)];
+    if (i === -1) return pyTuple(s, "", "");
+    return pyTuple(s.slice(0, i), sep, s.slice(i + sep.length));
 }
 
 /** Python `s.rpartition(sep)` — same as partition but from the right. */
 export function pyStrRpartition(s, sep) {
     if (!sep) throw new ValueError("empty separator");
     const i = s.lastIndexOf(sep);
-    if (i === -1) return ["", "", s];
-    return [s.slice(0, i), sep, s.slice(i + sep.length)];
+    if (i === -1) return pyTuple("", "", s);
+    return pyTuple(s.slice(0, i), sep, s.slice(i + sep.length));
 }
 
 /** Python `s.rsplit(sep, maxsplit=-1)`. Empty separator raises
@@ -2574,6 +4029,27 @@ export function pyStrReplace(s, oldv, newv, count) {
     return out + s.slice(idx);
 }
 
+/**
+ * WB-18 — RUNTIME dispatcher for `.replace(...)` on a (possibly-)Python-str
+ * receiver. Compile time cannot know a VARIABLE's type, so the WB-10 syntactic
+ * check (inline `RegExp(...)` first arg / function-literal second arg) missed a
+ * regex held in a variable and mis-routed it to `pyStrReplace` (Python
+ * str.replace — which never applies the regex). Decide on the RUNTIME type of
+ * the arguments so inline, variable, and any-expression regex all behave
+ * identically:
+ *   - a RegExp pattern OR a function replacer ⇒ JS `String.prototype.replace`
+ *     (regex match, capture groups, `$1` backrefs, function replacer);
+ *   - two plain strings ⇒ Python `str.replace` (replace-ALL, honoring `count`).
+ * Non-string receivers with their own `.replace` (DOMTokenList, user classes)
+ * fall through to pyStrReplace, which already dispatches them natively.
+ */
+export function pyStrReplaceSmart(s, a, b, count) {
+    if (a instanceof RegExp || typeof b === "function") {
+        return s.replace(a, b);
+    }
+    return pyStrReplace(s, a, b, count);
+}
+
 export function pyStrIsupper(s) {
     return s === s.toUpperCase() && s !== s.toLowerCase();
 }
@@ -2602,6 +4078,39 @@ export function pyStrIstitle(s) {
     return hasUpper;
 }
 
+/** Python `s.startswith(prefix[, start[, end]])` — full CPython spec:
+ * `prefix` may be a str OR a tuple of strs; start/end are CODE-POINT
+ * indices with negative-index clamping (slice rules). The old lowering was
+ * a bare JS .startsWith rename that ignored all of that. */
+function __pyStrStartsEnds(s, fix, start, end, atEnd) {
+    const cps = Array.from(s);
+    const n = cps.length;
+    let st = start === undefined || start === null ? 0 : Number(start);
+    let en = end === undefined || end === null ? n : Number(end);
+    if (st < 0) st = Math.max(0, n + st);
+    if (en < 0) en = Math.max(0, n + en);
+    if (en > n) en = n;
+    if (st > en) return false;
+    const seg = cps.slice(st, en).join("");
+    const cands = Array.isArray(fix) ? fix : [fix];
+    for (const p of cands) {
+        if (atEnd ? seg.endsWith(p) : seg.startsWith(p)) return true;
+    }
+    return false;
+}
+export function pyStrStartswith(s, prefix, start, end) {
+    if (typeof s !== "string" && s != null && typeof s.startswith === "function") {
+        return s.startswith(prefix, start, end);
+    }
+    return __pyStrStartsEnds(s, prefix, start, end, false);
+}
+export function pyStrEndswith(s, suffix, start, end) {
+    if (typeof s !== "string" && s != null && typeof s.endswith === "function") {
+        return s.endswith(suffix, start, end);
+    }
+    return __pyStrStartsEnds(s, suffix, start, end, true);
+}
+
 /** Python `s.rfind(sub)` — LAST occurrence as a CODE-POINT offset, -1 if
  * absent. Wave-19 verification fix: raw .lastIndexOf returns UTF-16
  * code-unit offsets ('𝔸x𝔸x'.rfind('x') must be 3, not 5). */
@@ -2614,6 +4123,11 @@ export function pyStrRfind(s, sub, start, end) {
 
 /** Python `s.rindex(sub[, start[, end]])` — like rfind but raises ValueError if absent. */
 export function pyStrRindex(s, sub, start, end) {
+    // Receiver's own rindex wins (bytes query engine, user classes) — so
+    // bytes keep their CPython "subsection not found" wording.
+    if (typeof s !== "string" && s != null && typeof s.rindex === "function") {
+        return s.rindex(sub, start, end);
+    }
     const i = pyStrRfind(s, sub, start, end);
     if (i === -1) throw new ValueError(`substring not found`);
     return i;
@@ -2647,6 +4161,39 @@ export function pyListSort(xs, opts = {}) {
 }
 
 // ============================================================
+// React effect helper
+// ============================================================
+
+/** WF-1: wrap a use_effect/use_layout_effect/use_insertion_effect callback so
+ * its return is safe as a React cleanup. React stores an effect callback's
+ * return value as its cleanup ("destroy") and invokes it verbatim; it accepts
+ * ONLY `undefined` or a function. A Python effect ending in `return None`
+ * compiles to `return null`, and because `null !== undefined` React would call
+ * it → "TypeError: destroy is not a function", crashing the component. Coerce
+ * any non-function return (null, None, a number, …) to `undefined`; a real
+ * cleanup function is passed through untouched, so unmount/re-run cleanup still
+ * runs. Effect args (React passes none today) are forwarded for forward-compat. */
+export function __pyEffect(fn) {
+    return (...args) => {
+        const cleanup = fn(...args);
+        return typeof cleanup === "function" ? cleanup : undefined;
+    };
+}
+
+/** WF-1 (spread form): argument-list splitter for a cleanup-wrapped hook
+ * called with a SPREAD — `use_effect(*args)` / `use_sync_external_store(
+ * *args)`. The compile-time wrap can't reach inside a spread (the old
+ * emission wrapped the WHOLE spread — `useEffect(__pyEffect(...args))` —
+ * which swallowed the deps array, so the effect re-ran every render). This
+ * wraps ONLY the runtime-resolved FIRST argument (the effect/subscribe
+ * callback) and passes the rest (deps / getSnapshot / …) through:
+ * `useEffect(...__pyEffectArgs(...args))`. */
+export function __pyEffectArgs(...a) {
+    if (a.length > 0 && typeof a[0] === "function") a[0] = __pyEffect(a[0]);
+    return a;
+}
+
+// ============================================================
 // Dict helpers (additional)
 // ============================================================
 
@@ -2664,7 +4211,7 @@ export function pyDictPopitem(d, lastArg) {
         d.delete(last[0]);
         return __markTuple([last[0], last[1]]);
     }
-    const keys = Object.keys(d);
+    const keys = __pyOwnKeys(d); // r6: a symbol-keyed last entry pops correctly
     if (keys.length === 0) throw new KeyError("popitem(): dictionary is empty");
     const k = keys[keys.length - 1];
     const v = d[k];
@@ -2769,3 +4316,5 @@ export function pySetIssuperset(s, other) {
     for (const v of o) if (!s.has(v)) return false;
     return true;
 }
+
+//# sourceMappingURL=runtime.js.map

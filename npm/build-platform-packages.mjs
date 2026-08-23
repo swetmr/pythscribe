@@ -9,7 +9,7 @@
 //
 // After all five bins are populated (across the CI matrix), run npm/publish.mjs.
 
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, chmodSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 // The compiler binary is FSL-1.1-ALv2 (repo LICENSE.md), so the packages that SHIP it are too.
 import { dirname, join, resolve } from "node:path";
@@ -17,7 +17,14 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
-const VERSION = "0.2.0"; // keep in lockstep with npm/pyths/package.json + crates workspace
+// Read VERSION from the canonical wrapper package.json — NOT a hardcoded constant.
+// A hardcoded "0.2.0" here is invisible to set-version.mjs/check-versions.mjs (which
+// only manage the enumerated package.json "version" fields), so it silently drifted
+// and, though publish.mjs's tag-derivation overrode it at publish time, it stood as a
+// smell (issue #1). Single source of truth = one fewer thing to keep in lockstep.
+const VERSION = JSON.parse(
+  readFileSync(join(repoRoot, "npm/pythscribe/package.json"), "utf8"),
+).version;
 
 const TARGETS = [
   { pkg: "@pythscribe/cli-win32-x64",    os: "win32",  cpu: "x64",   rust: "x86_64-pc-windows-msvc",    exe: "pyths.exe" },
@@ -62,7 +69,22 @@ for (const t of TARGETS) {
   if (src) {
     const dest = join(binDir, t.exe);
     copyFileSync(src, dest);
-    if (t.os !== "win32") { try { chmodSync(dest, 0o755); } catch {} }
+    if (t.os !== "win32") {
+      // Issue #1: chmodSync is a NO-OP for the unix executable bit on a Windows
+      // host, and the old `try{}catch{}` swallowed that — so packing the mac/linux
+      // binaries on Windows shipped them 0644 and `pyths` failed with EACCES.
+      // FAIL LOUD instead of publishing a broken package: a unix platform package
+      // MUST be built on a unix host (the CI release.yml matrix), where chmod takes.
+      chmodSync(dest, 0o755);
+      const mode = statSync(dest).mode & 0o777;
+      if ((mode & 0o111) === 0) {
+        throw new Error(
+          `${t.pkg}: ${dest} is not executable (mode ${mode.toString(8)}). ` +
+            `chmod did not take on this host (${process.platform}) — build unix platform packages ` +
+            `on a unix runner via .github/workflows/release.yml, not the local shortcut.`,
+        );
+      }
+    }
     // record the binary's sha256 for out-of-band integrity verification
     shasums.push(`${createHash("sha256").update(readFileSync(dest)).digest("hex")}  ${t.pkg}/bin/${t.exe}`);
     copied++;

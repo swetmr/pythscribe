@@ -38,6 +38,13 @@ pub struct SourceMapBuilder {
     /// genuinely preserved identifiers (generated token == original token) —
     /// never for helper-call sites, which would mislabel.
     pub generated_js: Option<String>,
+    /// DX-4 (step-into): indices into `sources` that DevTools should
+    /// ignore-list (skip when stepping / hide from stack traces). Emitted as
+    /// BOTH the standard `ignoreList` key and the legacy `x_google_ignoreList`
+    /// key (identical arrays) for broad browser compatibility. Empty → both
+    /// keys are omitted entirely (the DevTools-correct "nothing ignored"
+    /// shape; user-code maps must never carry these keys).
+    pub ignore_list: Vec<u32>,
 }
 
 impl SourceMapBuilder {
@@ -50,6 +57,16 @@ impl SourceMapBuilder {
             gen_line_shift: 0,
             gen_line_shift_floor: 0,
             generated_js: None,
+            ignore_list: Vec::new(),
+        }
+    }
+
+    /// DX-4: mark the source at `index` (into `sources`) as ignore-listed.
+    /// Idempotent; indices are emitted sorted.
+    pub fn add_ignored_source(&mut self, index: u32) {
+        if !self.ignore_list.contains(&index) {
+            self.ignore_list.push(index);
+            self.ignore_list.sort_unstable();
         }
     }
 
@@ -103,6 +120,12 @@ impl SourceMapBuilder {
         // DX-2: inline the original source so the debugger needs no `.ps` fetch.
         if let Some(content) = &self.source_content {
             map["sourcesContent"] = serde_json::json!([content]);
+        }
+        // DX-4: ignore-listed sources — standard key + legacy Google key,
+        // identical arrays. Omitted entirely when nothing is ignored.
+        if !self.ignore_list.is_empty() {
+            map["ignoreList"] = serde_json::json!(self.ignore_list);
+            map["x_google_ignoreList"] = serde_json::json!(self.ignore_list);
         }
         map.to_string()
     }
@@ -196,6 +219,127 @@ impl SourceMapBuilder {
             None
         }
     }
+
+    /// The recorded mappings with the DX-3 prelude shift applied to their
+    /// generated lines — i.e. positions valid in the FINAL emitted JS. Used by
+    /// `pyths bundle --sourcemap` to compose per-module maps into one bundle
+    /// map without a decode/re-encode round trip through JSON.
+    pub fn resolved_mappings(&self) -> Vec<Mapping> {
+        self.mappings
+            .iter()
+            .map(|m| Mapping {
+                gen_line: self.eff_gen_line(m.gen_line),
+                gen_col: m.gen_col,
+                orig_line: m.orig_line,
+                orig_col: m.orig_col,
+            })
+            .collect()
+    }
+}
+
+/// DX-4 (step-into): build an IDENTITY source map for a shipped runtime `.js`
+/// file that marks the file itself as ignore-listed. `sources` is the file's
+/// own name, `mappings` maps every generated line to the same line of that
+/// single source (column 0), and `ignoreList`/`x_google_ignoreList` both carry
+/// `[0]`. Placed as a sibling `<file>.js.map` (with a trailing
+/// `//# sourceMappingURL=` comment on the `.js`), this makes DevTools
+/// associate the runtime file with a map whose only source is ignore-listed —
+/// so "step into" skips pyths-runtime internals and stays in the user's `.ps`
+/// code. No `sourcesContent` is inlined: the source IS the file the map sits
+/// beside, and the whole point is that developers do not read it.
+pub fn identity_ignore_map(js_source: &str, file_name: &str) -> String {
+    let mut builder = SourceMapBuilder::new(file_name, file_name);
+    let line_count = js_source.lines().count() as u32;
+    for line in 0..line_count {
+        builder.add_mapping(line, 0, line, 0);
+    }
+    builder.add_ignored_source(0);
+    builder.to_json()
+}
+
+/// One mapping entry of a MULTI-source map (`pyths bundle --sourcemap`):
+/// generated position → (source index, original position).
+#[derive(Debug, Clone)]
+pub struct BundleMapping {
+    pub gen_line: u32,
+    pub gen_col: u32,
+    /// Index into the bundle map's `sources` array.
+    pub src: u32,
+    pub orig_line: u32,
+    pub orig_col: u32,
+}
+
+/// Encode a multi-source map (Source Map v3) for `pyths bundle --sourcemap`.
+///
+/// - `sources` / `sources_content` are parallel arrays (`None` → JSON null).
+/// - `ignore_list` carries indices of sources DevTools should skip when
+///   stepping (the synthetic runtime/glue source); emitted as BOTH
+///   `ignoreList` and `x_google_ignoreList`, omitted when empty.
+/// - `mappings` need not be pre-sorted.
+pub fn encode_bundle_map(
+    output_file: &str,
+    sources: &[String],
+    sources_content: &[Option<String>],
+    ignore_list: &[u32],
+    mappings: &[BundleMapping],
+) -> String {
+    let mut sorted: Vec<&BundleMapping> = mappings.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.gen_line
+            .cmp(&b.gen_line)
+            .then(a.gen_col.cmp(&b.gen_col))
+            .then(a.src.cmp(&b.src))
+    });
+
+    let mut result = String::new();
+    let mut prev_gen_line: u32 = 0;
+    let mut prev_gen_col: i64 = 0;
+    let mut prev_src: i64 = 0;
+    let mut prev_orig_line: i64 = 0;
+    let mut prev_orig_col: i64 = 0;
+    let mut first_in_line = true;
+    for m in sorted {
+        while prev_gen_line < m.gen_line {
+            result.push(';');
+            prev_gen_line += 1;
+            prev_gen_col = 0;
+            first_in_line = true;
+        }
+        if !first_in_line {
+            result.push(',');
+        }
+        vlq_encode(&mut result, m.gen_col as i64 - prev_gen_col);
+        vlq_encode(&mut result, m.src as i64 - prev_src);
+        vlq_encode(&mut result, m.orig_line as i64 - prev_orig_line);
+        vlq_encode(&mut result, m.orig_col as i64 - prev_orig_col);
+        prev_gen_col = m.gen_col as i64;
+        prev_src = m.src as i64;
+        prev_orig_line = m.orig_line as i64;
+        prev_orig_col = m.orig_col as i64;
+        first_in_line = false;
+    }
+
+    let content_json: Vec<serde_json::Value> = sources_content
+        .iter()
+        .map(|c| match c {
+            Some(s) => serde_json::json!(s),
+            None => serde_json::Value::Null,
+        })
+        .collect();
+    let mut map = serde_json::json!({
+        "version": 3,
+        "file": output_file,
+        "sourceRoot": "",
+        "sources": sources,
+        "sourcesContent": content_json,
+        "names": [],
+        "mappings": result,
+    });
+    if !ignore_list.is_empty() {
+        map["ignoreList"] = serde_json::json!(ignore_list);
+        map["x_google_ignoreList"] = serde_json::json!(ignore_list);
+    }
+    map.to_string()
 }
 
 /// The identifier token starting exactly at `(line, col)` (0-based) in `text`,
@@ -338,5 +482,84 @@ mod tests {
         assert!(json.contains("\"version\":3"));
         assert!(json.contains("\"sources\":[\"test.ps\"]"));
         assert!(json.contains("\"file\":\"test.js\""));
+    }
+
+    // DX-4 (a): both ignore-list keys, identical arrays, correct indices.
+    #[test]
+    fn ignore_list_emits_both_keys_with_indices() {
+        let mut builder = SourceMapBuilder::new("runtime.js", "runtime.js");
+        builder.add_mapping(0, 0, 0, 0);
+        builder.add_ignored_source(0);
+        builder.add_ignored_source(0); // idempotent
+        let map: serde_json::Value = serde_json::from_str(&builder.to_json()).unwrap();
+        assert_eq!(map["ignoreList"], serde_json::json!([0]));
+        assert_eq!(map["x_google_ignoreList"], serde_json::json!([0]));
+        assert_eq!(map["ignoreList"], map["x_google_ignoreList"]);
+    }
+
+    // DX-4 (c-guard): a map with NOTHING ignored (every user-code `.ps` map)
+    // must omit both keys entirely — user code is never ignore-listed.
+    #[test]
+    fn ignore_list_keys_omitted_when_empty() {
+        let mut builder = SourceMapBuilder::new("app.ps", "app.js");
+        builder.add_mapping(0, 0, 0, 0);
+        let json = builder.to_json();
+        assert!(
+            !json.contains("ignoreList"),
+            "unexpected ignoreList: {json}"
+        );
+        assert!(!json.contains("x_google_ignoreList"));
+    }
+
+    // DX-4: identity map for a runtime file — self-sourced, whole-file
+    // line-identity mappings, ignore-listed, no sourcesContent.
+    #[test]
+    fn identity_ignore_map_is_self_sourced_and_ignored() {
+        let js = "line0\nline1\nline2\n";
+        let json = identity_ignore_map(js, "runtime.js");
+        let map: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(map["version"], 3);
+        assert_eq!(map["file"], "runtime.js");
+        assert_eq!(map["sources"], serde_json::json!(["runtime.js"]));
+        assert_eq!(map["ignoreList"], serde_json::json!([0]));
+        assert_eq!(map["x_google_ignoreList"], serde_json::json!([0]));
+        assert!(map.get("sourcesContent").is_none());
+        // One identity segment per line: AAAA then AACA (orig line +1) twice.
+        assert_eq!(map["mappings"], "AAAA;AACA;AACA");
+    }
+
+    // Bundle map encoder: multi-source VLQ deltas + ignore-listed glue source.
+    #[test]
+    fn bundle_map_encodes_multiple_sources_and_ignore_list() {
+        let sources = vec!["app.ps".to_string(), "pyths:bundle-glue".to_string()];
+        let contents = vec![Some("x = 1\n".to_string()), None];
+        let mappings = vec![
+            // bundle line 0 = glue (banner), line 1 = user code from app.ps:0:0
+            BundleMapping {
+                gen_line: 0,
+                gen_col: 0,
+                src: 1,
+                orig_line: 0,
+                orig_col: 0,
+            },
+            BundleMapping {
+                gen_line: 1,
+                gen_col: 0,
+                src: 0,
+                orig_line: 0,
+                orig_col: 0,
+            },
+        ];
+        let json = encode_bundle_map("app.bundle.js", &sources, &contents, &[1], &mappings);
+        let map: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            map["sources"],
+            serde_json::json!(["app.ps", "pyths:bundle-glue"])
+        );
+        assert_eq!(map["sourcesContent"][1], serde_json::Value::Null);
+        assert_eq!(map["ignoreList"], serde_json::json!([1]));
+        assert_eq!(map["x_google_ignoreList"], serde_json::json!([1]));
+        // Segments: line0 → src +1 = "ACAA"; line1 → src −1 = "ADAA".
+        assert_eq!(map["mappings"], "ACAA;ADAA");
     }
 }

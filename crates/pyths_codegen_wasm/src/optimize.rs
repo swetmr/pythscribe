@@ -1,78 +1,19 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
-
-/// A13: resolve `wasm-opt` to an absolute path via a PATH search that excludes
-/// the current directory. On Windows `CreateProcess` otherwise searches the cwd
-/// first, so a hostile `wasm-opt.exe` planted in a project root could be run.
-/// `PYTHS_WASM_OPT` overrides the binary explicitly. Returns `None` when it is
-/// not found — callers keep their existing graceful-skip behavior.
-fn resolve_wasm_opt() -> Option<PathBuf> {
-    // Explicit override wins.
-    if let Ok(val) = std::env::var("PYTHS_WASM_OPT") {
-        if !val.is_empty() {
-            let p = PathBuf::from(&val);
-            if p.is_file() {
-                return Some(p);
-            }
-            if let Some(found) = search_path(&val) {
-                return Some(found);
-            }
-            return None;
-        }
-    }
-    search_path("wasm-opt")
-}
-
-fn search_path(name: &str) -> Option<PathBuf> {
-    let as_path = Path::new(name);
-    if as_path.is_absolute() && as_path.is_file() {
-        return Some(as_path.to_path_buf());
-    }
-    let path_var = std::env::var_os("PATH")?;
-    let exts = executable_extensions();
-    for dir in std::env::split_paths(&path_var) {
-        // Skip empty / `.` entries — never search the current directory.
-        if dir.as_os_str().is_empty() || dir == Path::new(".") {
-            continue;
-        }
-        let direct = dir.join(name);
-        if direct.is_file() {
-            return Some(direct);
-        }
-        for ext in &exts {
-            let candidate = dir.join(format!("{}{}", name, ext));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-#[cfg(windows)]
-fn executable_extensions() -> Vec<String> {
-    std::env::var("PATHEXT")
-        .map(|p| {
-            p.split(';')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|_| vec![".COM".into(), ".EXE".into(), ".BAT".into(), ".CMD".into()])
-}
-
-#[cfg(not(windows))]
-fn executable_extensions() -> Vec<String> {
-    Vec::new()
-}
 
 pub struct OptimizeResult {
     pub size_before: usize,
     pub size_after: usize,
     /// Optimization level applied (`"Os"`, `"O2"`, `"O3"`, etc.).
     pub level: &'static str,
+    /// The optimized, marker-bearing module bytes. Round-5: this function
+    /// NEVER writes the destination itself — the caller places these bytes
+    /// through its fd-verified safe writer (`OutputPlan::rewrite`), so the
+    /// final placement gets the same no-follow + ownership-on-fd guarantees
+    /// as every other generated output (the old `fs::rename` over the target
+    /// silently replaced whatever was there).
+    pub optimized: Vec<u8>,
 }
 
 /// `wasm-opt` optimization profile. PythScribe ships for the web, so
@@ -105,30 +46,194 @@ impl OptLevel {
     }
 }
 
-/// Backward-compatible entry: runs `wasm-opt -Os` (size-optimized
-/// production default) on the given `.wasm` in place.
-///
-/// Returns `Ok(None)` if `wasm-opt` is not found on PATH — the rest
-/// of the build proceeds with the unoptimized module.
-/// Returns `Ok(Some(result))` with size before/after on success.
-pub fn run_wasm_opt(wasm_path: &str) -> Result<Option<OptimizeResult>, String> {
-    run_wasm_opt_with_level(wasm_path, OptLevel::Size)
+// ---------------------------------------------------------------------------
+// Generated-ownership marker for `.wasm` outputs (SEC round-4)
+//
+// A `.wasm` cannot carry a `//` comment marker, so earlier rounds either
+// (a) refused every rebuild of the tool's OWN `.wasm` without `--force`, or
+// (b) authorized the overwrite from a sibling's freshness — which let a fresh
+// primary destroy an unowned pre-existing file. The root fix: the module
+// itself carries ownership, as a WASM *custom section* (id 0, name
+// `pythscribe.generated`, contents verified too — an empty section with the
+// right name does not count). Custom sections are ignored by every engine
+// and validator, may appear after any other section, and can be verified on
+// the SAME file descriptor the writer later truncates. `wasm-opt`
+// round-trips them; if a binaryen version ever drops the section,
+// `run_wasm_opt_at` re-appends it inside the private directory.
+//
+// WHAT THIS MARKER IS — AND IS NOT (round-5 reframe): it is ACCIDENT
+// PREVENTION — it keeps the compiler from clobbering a `.wasm` a human (or
+// another tool) put at the destination. It is NOT a security boundary
+// against a malicious local process: anyone who can write the build
+// directory can append this section and "forge" ownership — and could
+// equally write the destination directly. That adversary is out of scope
+// for any marker scheme and belongs to filesystem permissions / the OS
+// trust boundary (docs/security.md §1/§6). Verifying the contents merely
+// raises the ACCIDENTAL-collision bar (a foreign tool that happens to use
+// the same section name); it does not and cannot defeat deliberate forgery.
+// ---------------------------------------------------------------------------
+
+/// Name of the ownership custom section embedded in every generated `.wasm`.
+pub const GENERATED_SECTION_NAME: &str = "pythscribe.generated";
+
+/// Contents of the ownership custom section.
+const GENERATED_SECTION_CONTENTS: &[u8] = b"@generated by PythScribe";
+
+fn push_leb128_u32(mut v: u32, out: &mut Vec<u8>) {
+    loop {
+        let byte = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            out.push(byte);
+            break;
+        }
+        out.push(byte | 0x80);
+    }
 }
 
-/// Run `wasm-opt` at the requested level on a `.wasm` file in place.
-pub fn run_wasm_opt_with_level(
+/// Read a LEB128 u32 at `pos`. Returns `(value, bytes_consumed)` or `None`
+/// on truncated/oversized input (never panics on malformed bytes).
+fn read_leb128_u32(bytes: &[u8], pos: usize) -> Option<(u32, usize)> {
+    let mut result: u32 = 0;
+    let mut shift = 0u32;
+    for (i, &b) in bytes.get(pos..)?.iter().enumerate().take(5) {
+        result |= u32::from(b & 0x7f) << shift;
+        if b & 0x80 == 0 {
+            return Some((result, i + 1));
+        }
+        shift += 7;
+    }
+    None
+}
+
+/// The encoded ownership custom section (id 0 + size + name + contents).
+pub fn generated_marker_section() -> Vec<u8> {
+    let name = GENERATED_SECTION_NAME.as_bytes();
+    let mut payload = Vec::with_capacity(name.len() + GENERATED_SECTION_CONTENTS.len() + 4);
+    push_leb128_u32(name.len() as u32, &mut payload);
+    payload.extend_from_slice(name);
+    payload.extend_from_slice(GENERATED_SECTION_CONTENTS);
+    let mut section = Vec::with_capacity(payload.len() + 6);
+    section.push(0u8); // custom section id
+    push_leb128_u32(payload.len() as u32, &mut section);
+    section.extend_from_slice(&payload);
+    section
+}
+
+/// Append the ownership marker section to a WASM module (idempotent).
+pub fn append_generated_marker(bytes: &mut Vec<u8>) {
+    if !has_generated_marker(bytes) {
+        bytes.extend_from_slice(&generated_marker_section());
+    }
+}
+
+/// Does this byte stream look like a WASM module that carries the PythScribe
+/// ownership custom section? Fail-closed: malformed input returns `false`.
+pub fn has_generated_marker(bytes: &[u8]) -> bool {
+    if bytes.len() < 8 || &bytes[0..4] != b"\0asm" {
+        return false;
+    }
+    let mut i = 8; // past magic + version
+    while i < bytes.len() {
+        let id = bytes[i];
+        i += 1;
+        let Some((size, n)) = read_leb128_u32(bytes, i) else {
+            return false;
+        };
+        i += n;
+        let Some(end) = i.checked_add(size as usize) else {
+            return false;
+        };
+        if end > bytes.len() {
+            return false;
+        }
+        if id == 0 {
+            if let Some((name_len, m)) = read_leb128_u32(bytes, i) {
+                let name_start = i + m;
+                if let Some(name_end) = name_start.checked_add(name_len as usize) {
+                    if name_end <= end
+                        && &bytes[name_start..name_end] == GENERATED_SECTION_NAME.as_bytes()
+                        // Round-5: the CONTENTS must match too — an empty (or
+                        // differently-filled) section with our name is not
+                        // ours. This raises the accidental-collision bar only;
+                        // it is NOT forgery-proof (see the reframe above).
+                        && &bytes[name_end..end] == GENERATED_SECTION_CONTENTS
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        i = end;
+    }
+    false
+}
+
+/// The private per-invocation directory for wasm-opt output: OS-RNG name,
+/// exclusive creation, and on unix an EXPLICIT mode 0700 handed to mkdir
+/// itself (tempfile's default dir mode is umask-dependent — a permissive
+/// umask must not reopen the window this dir exists to close). RAII: drop
+/// removes the directory AT ITS RECORDED PATHNAME on every exit path.
+/// Honest scope: the cleanup is pathname-based, not bound to the directory
+/// the handle created — see the caveat on [`run_wasm_opt_at`].
+fn private_dir_in(parent: &Path) -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".pyths-opt-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir_in(parent)
+}
+
+/// Run `wasm-opt` (already resolved to an absolute path by the caller — the
+/// ONE exe resolver, `pyths_cli::commands::procutil::resolve_program`) at the
+/// requested level, reading the module at `wasm_path` and RETURNING the
+/// optimized bytes. This function never touches the destination: the caller
+/// places the result through the fd-verified safe writer
+/// (`OutputPlan::rewrite`), which binds the placement to the identity of the
+/// file that same invocation wrote and re-proves the ownership section on
+/// the writing fd (round-5/6; there is no rename step). The placement is an
+/// in-place truncate + write on a verified handle — atomicity is NOT
+/// claimed: a failure mid-write (e.g. ENOSPC) can leave a partial `.wasm`.
+/// A partial module has lost its ownership section, so the next build
+/// refuses it with an explicit error (fixed by `--force` or deleting it) —
+/// never silently trusts it (see docs/known-limitations.md).
+///
+/// Returns `Ok(None)` when the binary fails its `--version` probe (treated as
+/// "not usable"; the build proceeds with the unoptimized module).
+///
+/// ## P2 (CWE-59/73) root fix — private per-invocation directory
+///
+/// `wasm-opt -o` reopens its output BY PATH, so any predictable or
+/// world-readable location is swappable by a local watcher between our create
+/// and wasm-opt's open. The output therefore lands inside a
+/// [`tempfile::TempDir`] created next to the target:
+///
+///   * **unpredictable name** — `tempfile` draws it from the OS RNG, so a
+///     watcher cannot pre-create or guess it;
+///   * **0700 atomically** — the mode is applied at `mkdir` time on unix
+///     (no create-then-chmod window, immune to a permissive umask);
+///   * **RAII cleanup on every exit path** (spawn error, wasm-opt failure,
+///     success). Honest scope: the `TempDir` destructor removes whatever is
+///     AT ITS RECORDED PATHNAME — it is not identity-bound to the directory
+///     it created. An adversary who renames the private dir away can make
+///     the original leak and the removal target a successor at that name;
+///     such an adversary already has write access to the build directory,
+///     which is the OS-permission trust boundary (docs/security.md §6), and
+///     the 0700 mode plus RNG name keep the dir's CONTENTS private
+///     regardless.
+///
+/// The PythScribe ownership custom section is re-appended inside the private
+/// dir first if wasm-opt stripped it, so the returned bytes always prove
+/// their own provenance.
+pub fn run_wasm_opt_at(
+    wasm_opt: &Path,
     wasm_path: &str,
     level: OptLevel,
 ) -> Result<Option<OptimizeResult>, String> {
-    // A13: resolve to an absolute path off PATH (never cwd) before spawning.
-    // Not found => graceful skip (unchanged behavior), so an absent wasm-opt is
-    // never an error.
-    let wasm_opt = match resolve_wasm_opt() {
-        Some(p) => p,
-        None => return Ok(None),
-    };
-
-    let check = Command::new(&wasm_opt).arg("--version").output();
+    let check = Command::new(wasm_opt).arg("--version").output();
     if check.is_err() {
         return Ok(None);
     }
@@ -137,30 +242,42 @@ pub fn run_wasm_opt_with_level(
         .map_err(|e| format!("Cannot read {}: {}", wasm_path, e))?
         .len() as usize;
 
-    let opt_path = format!("{}.opt", wasm_path);
+    let parent = Path::new(wasm_path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let opt_dir = private_dir_in(parent)
+        .map_err(|e| format!("cannot create private wasm-opt directory: {}", e))?;
+    let opt_path = opt_dir.path().join("out.wasm");
+    let opt_path_str = opt_path.to_string_lossy().to_string();
 
-    let result = Command::new(&wasm_opt)
-        .args([level.flag(), wasm_path, "-o", &opt_path])
+    // Any early return below (spawn error, non-zero exit, IO failure) drops
+    // `opt_dir`, whose destructor removes the directory at its recorded path
+    // — cleanup cannot be skipped on any exit path (pathname-based, not
+    // identity-bound; see the doc comment above for the honest scope).
+    let result = Command::new(wasm_opt)
+        .args([level.flag(), wasm_path, "-o", &opt_path_str])
         .output()
         .map_err(|e| format!("Failed to run wasm-opt: {}", e))?;
 
     if !result.status.success() {
-        let _ = fs::remove_file(&opt_path);
         let stderr = String::from_utf8_lossy(&result.stderr);
         return Err(format!("wasm-opt failed: {}", stderr));
     }
 
-    fs::rename(&opt_path, wasm_path)
-        .map_err(|e| format!("Failed to replace with optimized file: {}", e))?;
+    // Preserve the ownership custom section across the optimize round-trip.
+    // The file lives inside our 0700 private dir, so a plain read here is
+    // race-free. No rename: the caller performs the fd-verified placement.
+    let mut optimized =
+        fs::read(&opt_path).map_err(|e| format!("Cannot read wasm-opt output: {}", e))?;
+    append_generated_marker(&mut optimized);
 
-    let size_after = fs::metadata(wasm_path)
-        .map_err(|e| format!("Cannot read optimized {}: {}", wasm_path, e))?
-        .len() as usize;
-
+    let size_after = optimized.len();
     Ok(Some(OptimizeResult {
         size_before,
         size_after,
         level: level.label(),
+        optimized,
     }))
 }
 
@@ -182,5 +299,123 @@ mod tests {
         assert_eq!(OptLevel::Size.label(), "Os");
         assert_eq!(OptLevel::Speed.label(), "O2");
         assert_eq!(OptLevel::Aggressive.label(), "O3");
+    }
+
+    /// A minimal valid WASM module: magic + version, no sections.
+    fn empty_module() -> Vec<u8> {
+        b"\0asm\x01\0\0\0".to_vec()
+    }
+
+    #[test]
+    fn marker_roundtrip_on_minimal_module() {
+        let mut m = empty_module();
+        assert!(!has_generated_marker(&m));
+        append_generated_marker(&mut m);
+        assert!(has_generated_marker(&m));
+        // Idempotent — appending again does not grow the module.
+        let len = m.len();
+        append_generated_marker(&mut m);
+        assert_eq!(m.len(), len);
+    }
+
+    #[test]
+    fn marked_module_still_validates() {
+        // The custom section must not break consumers: wasmparser's validator
+        // accepts the marked module.
+        let mut m = empty_module();
+        append_generated_marker(&mut m);
+        wasmparser::Validator::new()
+            .validate_all(&m)
+            .expect("marked module must remain valid WASM");
+    }
+
+    #[test]
+    fn marker_survives_a_following_section() {
+        // Marker detection walks ALL sections, not just the last one.
+        let mut m = empty_module();
+        append_generated_marker(&mut m);
+        // Append another (unknown-name) custom section after ours.
+        let mut trailing = vec![0u8];
+        let name = b"other.section";
+        let mut payload = Vec::new();
+        push_leb128_u32(name.len() as u32, &mut payload);
+        payload.extend_from_slice(name);
+        push_leb128_u32(payload.len() as u32, &mut trailing);
+        trailing.extend_from_slice(&payload);
+        m.extend_from_slice(&trailing);
+        assert!(has_generated_marker(&m));
+    }
+
+    #[test]
+    fn empty_section_with_our_name_is_not_ours() {
+        // Round-5: `00 15 14 "pythscribe.generated"` — an empty, valid custom
+        // section bearing our NAME but no contents — must not count as ours
+        // (accidental-collision bar; deliberate forgery stays out of scope).
+        let mut m = empty_module();
+        let name = GENERATED_SECTION_NAME.as_bytes();
+        let mut payload = Vec::new();
+        push_leb128_u32(name.len() as u32, &mut payload);
+        payload.extend_from_slice(name);
+        let mut sec = vec![0u8];
+        push_leb128_u32(payload.len() as u32, &mut sec);
+        sec.extend_from_slice(&payload);
+        m.extend_from_slice(&sec);
+        assert!(!has_generated_marker(&m));
+        // The real section (name + contents) still verifies.
+        append_generated_marker(&mut m);
+        assert!(has_generated_marker(&m));
+    }
+
+    #[test]
+    fn marker_check_fails_closed_on_garbage() {
+        assert!(!has_generated_marker(b""));
+        assert!(!has_generated_marker(b"not wasm at all"));
+        assert!(!has_generated_marker(b"\0asm\x01\0\0\0\x00\xff\xff\xff\xff\xff")); // truncated/oversized section
+        // A DIFFERENT custom section name is not ours.
+        let mut m = empty_module();
+        let mut sec = vec![0u8];
+        let name = b"someone.elses";
+        let mut payload = Vec::new();
+        push_leb128_u32(name.len() as u32, &mut payload);
+        payload.extend_from_slice(name);
+        push_leb128_u32(payload.len() as u32, &mut sec);
+        sec.extend_from_slice(&payload);
+        m.extend_from_slice(&sec);
+        assert!(!has_generated_marker(&m));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_dir_is_0700_at_creation_regardless_of_umask() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir();
+        let d = private_dir_in(&base).expect("private dir");
+        let mode = std::fs::metadata(d.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "private wasm-opt dir must be 0700, got {:o}", mode);
+        let p = d.path().to_path_buf();
+        drop(d); // RAII cleanup bound to the handle
+        assert!(!p.exists(), "TempDir drop must remove the directory");
+    }
+
+    #[test]
+    fn private_dir_cleanup_is_raii_bound() {
+        let base = std::env::temp_dir();
+        let d = private_dir_in(&base).expect("private dir");
+        let p = d.path().to_path_buf();
+        std::fs::write(p.join("out.wasm"), b"x").unwrap();
+        drop(d);
+        assert!(!p.exists(), "drop must remove the dir and its contents");
+    }
+
+    #[test]
+    fn leb128_roundtrip() {
+        for v in [0u32, 1, 127, 128, 300, 16384, u32::MAX] {
+            let mut buf = Vec::new();
+            push_leb128_u32(v, &mut buf);
+            let (decoded, n) = read_leb128_u32(&buf, 0).expect("decodable");
+            assert_eq!(decoded, v);
+            assert_eq!(n, buf.len());
+        }
+        assert!(read_leb128_u32(&[0x80, 0x80], 0).is_none(), "truncated LEB fails closed");
     }
 }

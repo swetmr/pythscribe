@@ -31,7 +31,7 @@ Without this check, alias collisions and string-literal substitutions can silent
 Run this for **every** edit. There is no "I'll check at the end" — alias bugs compound.
 
 ```powershell
-& 'C:\Users\DELL\pythscribe-src\target\release\pyths.exe' expand foo.psc -o foo.expanded.ps
+& 'path\to\pyths.exe' expand foo.psc -o foo.expanded.ps
 # Now diff foo.expanded.ps against the canonical foo.ps:
 $a = Get-Content foo.ps -Raw
 $b = Get-Content foo.expanded.ps -Raw
@@ -162,14 +162,16 @@ If a pass breaks the round-trip, the previous pass was fine — revert just that
 | `us(` not expanded | Missing trailing `(` — `us` as bare identifier is intentionally untouched | Add the `(`, or write `use_state` |
 | Whole file unchanged | Forgot `.psc` extension on the input | Rename or use `--expand=always` |
 
+**Naming rule carries over from `.ps` (see `SKILL.md` core convention 3):** lowercase HTML-tag names (`div`, `span`, `pre`, `img`, `input`, `form`, `button`, …) are **reserved element intrinsics** admitted only inside `@psx`/`@component` (Tier-A aliases `@c`=`@component`; `@psx` has no short alias — write it out). Compression never *invents* identifiers, so this is a canonical-source rule — but the reserved-tag semantics hold identically after expansion: don't compress toward, or author, a user identifier that collides with an HTML-tag name (inside a component it's silently shadowed by the intrinsic; outside, an element tag is undefined at runtime). Use `@psx` for a PSX helper, a Capitalized name for a component, or a distinct name.
+
 ## Quick Reference: Verify Round-Trip
 
 ```powershell
 # CD to the PythScribe project root FIRST — the expander discovers
 # `pyths.toml` by walking upward from CWD, not from the input file's path.
-Set-Location 'C:\Users\DELL\reference-app\frontend'
+Set-Location 'path\to\your\project'
 
-$pyths = 'C:\Users\DELL\pythscribe-src\target\release\pyths.exe'
+$pyths = 'path\to\pyths.exe'
 & $pyths expand src/components/Foo.psc -o /tmp/Foo.expanded.ps
 $ok = (Get-Content src/components/Foo.ps -Raw) -eq (Get-Content /tmp/Foo.expanded.ps -Raw)
 if (-not $ok) {
@@ -190,7 +192,7 @@ All of these mean: revert the most recent change. Re-verify before going on.
 
 ## Reference
 
-- Authoritative docs: `C:\Users\DELL\pythscribe-src\docs\compression.md`
+- Authoritative docs: `docs/compression.md`
 - Bundled dictionary source: `crates/pyths_expand/src/strings.rs`
 - 154+ library tests: `crates/pyths_expand/src/lib.rs`
 - CLI integration tests: `crates/pyths_cli/tests/cli_test.rs` (search `psc_`)

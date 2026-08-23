@@ -9,6 +9,9 @@ pub enum BinOp {
     FloorDiv,
     Mod,
     Pow,
+    /// `@` — matrix multiplication (PEP 465): dispatches
+    /// `__matmul__`/`__rmatmul__` at runtime (no builtin operand support).
+    MatMul,
     // Comparison
     Eq,
     NotEq,
@@ -55,6 +58,9 @@ pub enum AugAssignOp {
     FloorDiv,
     Mod,
     Pow,
+    /// `@=` — in-place matmul (lowers through `__matmul__`, like CPython
+    /// falling back when no `__imatmul__` is defined).
+    MatMul,
     BitAnd,
     BitOr,
     BitXor,

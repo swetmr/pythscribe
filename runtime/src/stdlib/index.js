@@ -16,3 +16,5 @@ export * as string from "./string.js";
 export * as heapq from "./heapq.js";
 export * as bisect from "./bisect.js";
 export * as sys from "./sys.js";
+
+//# sourceMappingURL=index.js.map

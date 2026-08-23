@@ -56,3 +56,5 @@ export const Response = globalThis.Response;
 export function handler(fn) {
     return { fetch: fn };
 }
+
+//# sourceMappingURL=web.js.map

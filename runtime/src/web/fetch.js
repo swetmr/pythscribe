@@ -115,3 +115,5 @@ async function _fetch(url, opts, timeout) {
         if (timeoutId) clearTimeout(timeoutId);
     }
 }
+
+//# sourceMappingURL=fetch.js.map

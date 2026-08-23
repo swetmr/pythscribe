@@ -90,8 +90,7 @@
 //! Paper note: this result (WASM-admission soundness certificate + the Lean
 //! `wasm_admission_sound` theorem) extends the machine-checked-routing story
 //! past subscript lowering and slots into the verified-compilation preprint
-//! (Paper C, `preprints/verified-compilation-draft.tex` in the reference-app
-//! repo) — do NOT edit that repo from here; this is only a pointer.
+//! (see the project's published paper).
 
 use std::fmt::Write as _;
 

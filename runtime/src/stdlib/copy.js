@@ -56,3 +56,5 @@ export function deepcopy(x, memo) {
     // dispatch __deepcopy__/__copy__; not modeled here).
     return x;
 }
+
+//# sourceMappingURL=copy.js.map

@@ -40,6 +40,45 @@ test("pyDictGet ignores inherited members", () => {
     assert.equal(pyDictGet({ a: 1 }, "a", "def"), 1);
 });
 
+// ---- WB-20: pyDictGet does a proxy-trappable read (MobX reactivity) ----
+// A dict `.get(k)` lowered to pyDictGet must go through a plain `d[k]` property
+// GET so a host observable Proxy's `get` trap fires and registers a dependency
+// — including for an ABSENT key (the MobX case where an observer first reads a
+// not-yet-populated slot, then must re-render once it is added). The old
+// hasOwnProperty-guarded read short-circuited on a missing key and never
+// tripped the `get` trap. This test simulates MobX's tracking with a Proxy
+// that records the keys read through `get`, without depending on mobx.
+test("pyDictGet reads through the Proxy get trap (present AND absent keys)", () => {
+    const gets = [];
+    const target = { a: 1 };
+    const p = new Proxy(target, {
+        get(t, key, recv) { gets.push(key); return Reflect.get(t, key, recv); },
+    });
+    // Present key: value returned AND the get trap saw it.
+    assert.equal(pyDictGet(p, "a", "def"), 1);
+    assert.ok(gets.includes("a"), "present key must be read via the get trap");
+    // Absent key: default returned, but the get trap STILL fired for it so a
+    // reactive host subscribes and re-renders when the key is later added.
+    gets.length = 0;
+    assert.equal(pyDictGet(p, "missing", "def"), "def");
+    assert.ok(gets.includes("missing"), "absent key must still trip the get trap (WB-20)");
+});
+
+// Semantics preserved alongside the WB-20 fix.
+test("pyDictGet preserves dict semantics (missing/inherited/own-undefined)", () => {
+    assert.equal(pyDictGet({ a: 1 }, "b", "def"), "def");   // missing → default
+    assert.equal(pyDictGet({ a: 1 }, "b"), undefined);       // missing, no default
+    assert.equal(pyDictGet({}, "toString", "def"), "def");   // inherited → default
+    assert.equal(pyDictGet({}, "hasOwnProperty", 7), 7);     // inherited → default
+    // Own key holding a genuine `undefined` returns undefined, not the default
+    // (own-property presence, not value-truthiness, decides).
+    assert.equal(pyDictGet({ x: undefined }, "x", "def"), undefined);
+    // Map-backed dict path unchanged.
+    const m = new Map([["k", 5]]);
+    assert.equal(pyDictGet(m, "k", "def"), 5);
+    assert.equal(pyDictGet(m, "nope", "def"), "def");
+});
+
 // ---- F4: float fidelity ----
 test("pyFloat maps inf/-inf/nan case-insensitively", () => {
     assert.equal(pyFloat("inf"), Infinity);
@@ -48,7 +87,9 @@ test("pyFloat maps inf/-inf/nan case-insensitively", () => {
     assert.equal(pyFloat("INF"), Infinity);
     assert.ok(Number.isNaN(pyFloat("nan")));
     assert.equal(pyFloat("3.5"), 3.5);
-    assert.equal(pyFloat(2), 2);
+    // Option B: float(2) is integer-valued -> boxed (brand + native value).
+    assert.equal(pyFloat(2).__pyfloat__, true);
+    assert.equal(Number(pyFloat(2)), 2);
     assert.throws(() => pyFloat("abc"), /could not convert string to float/);
 });
 test("pyDiv distinguishes float vs int division by zero", () => {
@@ -395,7 +436,10 @@ test("wave19: pyFind/pyIndex return code-point offsets on astral strings", async
     assert.equal(pyFind("abc", ""), 0);
     assert.equal(pyFind("abc", "zq"), -1);
     assert.equal(pyIndex("\u{1D538}abc", "bc"), 2);
-    assert.throws(() => pyIndex("abc", "zq"), /is not in string/);
+    // CPython: str.index raises ValueError("substring not found") — the old
+    // /is not in string/ regex never matched CPython (stale since the A1
+    // full-spec rewrite of find/index landed the real message). delta4.
+    assert.throws(() => pyIndex("abc", "zq"), /substring not found/);
     // start/end are code-point offsets too
     assert.equal(pyFind("\u{1D538}\u{1D538}x", "x", 1), 2);
     assert.equal(pyFind("\u{1D538}abcabc", "b", -3), 5);
@@ -417,4 +461,62 @@ test("wave19: strip family handles astral chars in the strip set", async () => {
     assert.equal(pyStrStrip("x\u{1D538}hix\u{1D538}", "x\u{1D538}"), "hi");
     assert.equal(pyStrStrip("xxhixx", "x"), "hi");       // fast path unaffected
     assert.equal(pyStrStrip("  hi  "), "hi");            // no-chars arm unaffected
+});
+
+// ---- FULL_SURFACE #2: `in` on a non-container raises TypeError ----
+test("pyContains: class object raises TypeError (not attr membership)", () => {
+    class T { }
+    T.__name__ = "T";
+    T.a = 3; // static attr — Transcrypt would report 'a' in T as True
+    assert.throws(() => pyContains(T, "a"), (e) =>
+        e.name === "TypeError" && e.message === "argument of type 'type' is not iterable");
+});
+
+test("pyContains: instance without __contains__/__iter__ raises TypeError", () => {
+    class Foo { }
+    Foo.__name__ = "Foo";
+    assert.throws(() => pyContains(new Foo(), "x"), (e) =>
+        e.name === "TypeError" && e.message === "argument of type 'Foo' is not iterable");
+});
+
+test("pyContains: instance protocols still honored", () => {
+    class C { __contains__(x) { return x === 42; } }
+    assert.equal(pyContains(new C(), 42), true);
+    assert.equal(pyContains(new C(), 1), false);
+    // legacy sequence protocol: __getitem__(0..) until IndexError
+    class Seq {
+        __getitem__(i) {
+            if (i > 2) { const e = new Error("x"); e.name = "IndexError"; throw e; }
+            return i * 10;
+        }
+    }
+    assert.equal(pyContains(new Seq(), 20), true);
+    assert.equal(pyContains(new Seq(), 99), false);
+});
+
+test("pyContains: containers unaffected by the non-container guard", () => {
+    assert.equal(pyContains([1, 2, 3], 2), true);
+    assert.equal(pyContains("hello", "ell"), true);
+    assert.equal(pyContains({ a: 1 }, "a"), true);       // plain-object dict
+    assert.equal(pyContains(new Set([1]), 1), true);
+    assert.equal(pyContains(new Map([["k", 1]]), "k"), true);
+});
+
+// ---- FULL_SURFACE #3: default object repr/str ----
+test("pyRepr/pyStr: default object repr is <module.Class object at 0x…>", () => {
+    class Foo { }
+    Foo.__name__ = "Foo";
+    const f = new Foo();
+    assert.match(pyRepr(f), /^<__main__\.Foo object at 0x[0-9a-f]+>$/);
+    assert.equal(pyStr(f), pyRepr(f));                  // CPython: str falls back to repr
+    assert.equal(pyRepr(f), pyRepr(f));                 // stable per object
+    assert.notEqual(pyRepr(new Foo()), pyRepr(f));      // distinct objects differ
+});
+
+test("pyRepr: user __repr__ and container reprs unchanged", () => {
+    class Bar { __repr__() { return "Bar()"; } }
+    assert.equal(pyRepr(new Bar()), "Bar()");
+    assert.equal(pyRepr({ a: 1 }), "{'a': 1}");
+    assert.equal(pyRepr([1, "x"]), "[1, 'x']");
+    assert.equal(pyRepr(3), "3");
 });

@@ -39,6 +39,7 @@ function _numDigits(coefficient) {
 
 function _pyTypeName(x) {
     if (x === null || x === undefined) return "NoneType";
+    if (x.__pyfloat__ === true) return "float"; // Option B boxed float
     if (typeof x === "boolean") return "bool";
     if (typeof x === "bigint") return "int";
     if (typeof x === "number") return Number.isInteger(x) ? "int" : "float";
@@ -212,6 +213,9 @@ export class Decimal {
             return;
         }
         let parts;
+        // Option B: a boxed (integer-valued) float unwraps to its number —
+        // Decimal(100.0) takes the exact-IEEE-754-expansion float path.
+        if (value != null && value.__pyfloat__ === true) value = value.valueOf();
         if (typeof value === "string") {
             parts = _decimalFromString(value);
         } else if (typeof value === "bigint") {
@@ -449,3 +453,5 @@ export class Decimal {
         return `Decimal('${this.toString()}')`;
     }
 }
+
+//# sourceMappingURL=decimal.js.map

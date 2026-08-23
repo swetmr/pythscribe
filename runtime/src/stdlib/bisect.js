@@ -36,3 +36,5 @@ export function insort_left(a, x, lo = 0, hi) {
 // Aliases (Python exposes both `bisect`/`bisect_right` and `insort`/`insort_right`).
 export const bisect = bisect_right;
 export const insort = insort_right;
+
+//# sourceMappingURL=bisect.js.map

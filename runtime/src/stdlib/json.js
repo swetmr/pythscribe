@@ -10,6 +10,9 @@ function __jsonKey(k) {
     if (typeof k === "string") return k;
     if (typeof k === "boolean") return k ? "true" : "false";
     if (typeof k === "bigint") return k.toString();
+    // Option B: a boxed (integer-valued) float key serializes with its
+    // float repr — CPython json.dumps({8.0: 'a'}) → '{"8.0": "a"}'.
+    if (k != null && k.__pyfloat__ === true) return pyFormatFloat(k.valueOf());
     if (typeof k === "number") {
         if (Number.isInteger(k) && Math.abs(k) <= Number.MAX_SAFE_INTEGER) return String(k);
         return pyFormatFloat(k);
@@ -23,7 +26,9 @@ function __jsonKey(k) {
 // from normal data, so a tagged BigInt round-trips to bare digits without
 // risk of stripping the quotes off a legitimate all-digit string value.
 const __BIGINT_TAG = "";
-const __BIGINT_RE = /"(-?\d+)"/g;
+// Option B: the same sentinel also carries boxed-float reprs ("8.0",
+// "1e+300"), so the pattern admits a fraction/exponent tail.
+const __BIGINT_RE = /"(-?(?:\d+(?:\.\d+)?(?:e[+-]?\d+)?))"/g;
 
 const __typeErr = (msg) => { const e = new Error(msg); e.name = "TypeError"; return e; };
 
@@ -87,6 +92,13 @@ function __dumps(obj, { indent, sort_keys = false, separators } = {}, enc) {
         // on BigInt, and Python emits them as unquoted integer literals.
         if (typeof value === "bigint") {
             return __BIGINT_TAG + value.toString() + __BIGINT_TAG;
+        }
+        // Option B: a boxed (integer-valued) float must serialize with its
+        // Python float repr — CPython json.dumps(8.0) → "8.0", not "8".
+        // JSON.stringify would ToNumber the box to bare digits, so tag its
+        // repr through the same sentinel channel as BigInt.
+        if (value != null && value.__pyfloat__ === true) {
+            return __BIGINT_TAG + pyFormatFloat(value.valueOf()) + __BIGINT_TAG;
         }
         // Map-backed dicts (#83) — coerce keys the CPython way, then let
         // JSON.stringify recurse into the resulting (null-proto) object.
@@ -156,3 +168,5 @@ export function dump(obj, file) {
 export function load(file) {
     throw new Error("json.load() requires file I/O — use json.loads() in browser");
 }
+
+//# sourceMappingURL=json.js.map

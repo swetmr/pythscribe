@@ -14,7 +14,7 @@
 // (Number), not a Fraction — matches `fractions.Fraction.__add__` et al.
 // falling back to float arithmetic when the other operand is a float.
 
-import { ZeroDivisionError, ValueError } from "../runtime.js";
+import { ZeroDivisionError, ValueError, __pyTypeName } from "../runtime.js";
 
 function _bigGcd(a, b) {
     if (a < 0n) a = -a;
@@ -100,7 +100,8 @@ function _fractionFromString(raw) {
 function _toBigInt(x, label) {
     if (typeof x === "bigint") return x;
     if (typeof x === "number" && Number.isInteger(x)) return BigInt(x);
-    throw new TypeError(`Fraction ${label} should be an int, got ${typeof x}`);
+    // #467: name the Python type from the ONE value-model source.
+    throw new TypeError(`Fraction ${label} should be an int, got ${__pyTypeName(x)}`);
 }
 
 export class Fraction {
@@ -118,6 +119,10 @@ export class Fraction {
         } else if (numerator instanceof Fraction) {
             n = numerator.#n;
             d = numerator.#d;
+        } else if (numerator != null && numerator.__pyfloat__ === true) {
+            // Option B: a boxed float takes the exact-ratio float path
+            // (Fraction(2.5) == 5/2; Fraction(8.0) == 8/1) like CPython.
+            [n, d] = _floatToExactRatio(numerator.valueOf());
         } else if (typeof numerator === "string") {
             [n, d] = _fractionFromString(numerator);
         } else if (typeof numerator === "bigint") {
@@ -156,6 +161,9 @@ export class Fraction {
     _pair(other) {
         if (other instanceof Fraction) return [other.#n, other.#d, "frac"];
         if (typeof other === "bigint") return [other, 1n, "frac"];
+        // Option B: a boxed float operand is a FLOAT (Fraction(1,2) + 8.0
+        // is the float 8.5 in CPython), never the int fast path.
+        if (other != null && other.__pyfloat__ === true) return [null, null, "float"];
         if (typeof other === "number") {
             if (Number.isInteger(other)) return [BigInt(other), 1n, "frac"];
             return [null, null, "float"];
@@ -165,7 +173,7 @@ export class Fraction {
 
     __add__(other) {
         const [n2, d2, kind] = this._pair(other);
-        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for +: 'Fraction' and '${typeof other}'`);
+        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for +: 'Fraction' and '${__pyTypeName(other)}'`);
         if (kind === "float") return Number(this) + other;
         return new Fraction(this.#n * d2 + n2 * this.#d, this.#d * d2);
     }
@@ -176,21 +184,21 @@ export class Fraction {
 
     __sub__(other) {
         const [n2, d2, kind] = this._pair(other);
-        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for -: 'Fraction' and '${typeof other}'`);
+        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for -: 'Fraction' and '${__pyTypeName(other)}'`);
         if (kind === "float") return Number(this) - other;
         return new Fraction(this.#n * d2 - n2 * this.#d, this.#d * d2);
     }
 
     __rsub__(other) {
         const [n2, d2, kind] = this._pair(other);
-        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for -: '${typeof other}' and 'Fraction'`);
+        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for -: '${__pyTypeName(other)}' and 'Fraction'`);
         if (kind === "float") return other - Number(this);
         return new Fraction(n2 * this.#d - this.#n * d2, this.#d * d2);
     }
 
     __mul__(other) {
         const [n2, d2, kind] = this._pair(other);
-        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for *: 'Fraction' and '${typeof other}'`);
+        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for *: 'Fraction' and '${__pyTypeName(other)}'`);
         if (kind === "float") return Number(this) * other;
         return new Fraction(this.#n * n2, this.#d * d2);
     }
@@ -201,7 +209,7 @@ export class Fraction {
 
     __truediv__(other) {
         const [n2, d2, kind] = this._pair(other);
-        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for /: 'Fraction' and '${typeof other}'`);
+        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for /: 'Fraction' and '${__pyTypeName(other)}'`);
         if (kind === "float") return Number(this) / other;
         if (n2 === 0n) throw new ZeroDivisionError("Fraction(" + this.#n + ", 0)");
         return new Fraction(this.#n * d2, this.#d * n2);
@@ -209,7 +217,7 @@ export class Fraction {
 
     __rtruediv__(other) {
         const [n2, d2, kind] = this._pair(other);
-        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for /: '${typeof other}' and 'Fraction'`);
+        if (kind === "unsupported") throw new TypeError(`unsupported operand type(s) for /: '${__pyTypeName(other)}' and 'Fraction'`);
         if (kind === "float") return other / Number(this);
         if (this.#n === 0n) throw new ZeroDivisionError(`Fraction(${n2}, 0)`);
         return new Fraction(n2 * this.#d, d2 * this.#n);
@@ -251,28 +259,28 @@ export class Fraction {
     __lt__(other) {
         const [n2, d2, kind] = this._pair(other);
         if (kind === "float") return Number(this) < other;
-        if (kind === "unsupported") throw new TypeError(`'<' not supported between instances of 'Fraction' and '${typeof other}'`);
+        if (kind === "unsupported") throw new TypeError(`'<' not supported between instances of 'Fraction' and '${__pyTypeName(other)}'`);
         return this.#n * d2 < n2 * this.#d;
     }
 
     __le__(other) {
         const [n2, d2, kind] = this._pair(other);
         if (kind === "float") return Number(this) <= other;
-        if (kind === "unsupported") throw new TypeError(`'<=' not supported between instances of 'Fraction' and '${typeof other}'`);
+        if (kind === "unsupported") throw new TypeError(`'<=' not supported between instances of 'Fraction' and '${__pyTypeName(other)}'`);
         return this.#n * d2 <= n2 * this.#d;
     }
 
     __gt__(other) {
         const [n2, d2, kind] = this._pair(other);
         if (kind === "float") return Number(this) > other;
-        if (kind === "unsupported") throw new TypeError(`'>' not supported between instances of 'Fraction' and '${typeof other}'`);
+        if (kind === "unsupported") throw new TypeError(`'>' not supported between instances of 'Fraction' and '${__pyTypeName(other)}'`);
         return this.#n * d2 > n2 * this.#d;
     }
 
     __ge__(other) {
         const [n2, d2, kind] = this._pair(other);
         if (kind === "float") return Number(this) >= other;
-        if (kind === "unsupported") throw new TypeError(`'>=' not supported between instances of 'Fraction' and '${typeof other}'`);
+        if (kind === "unsupported") throw new TypeError(`'>=' not supported between instances of 'Fraction' and '${__pyTypeName(other)}'`);
         return this.#n * d2 >= n2 * this.#d;
     }
 
@@ -294,3 +302,5 @@ export class Fraction {
         return `Fraction(${this.#n}, ${this.#d})`;
     }
 }
+
+//# sourceMappingURL=fractions.js.map

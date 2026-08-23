@@ -182,6 +182,7 @@ fn erase_expr_kind(k: ExprKind) -> ExprKind {
         ExprKind::FloatLiteral(f) => ExprKind::FloatLiteral(f),
         ExprKind::ImagLiteral(f) => ExprKind::ImagLiteral(f),
         ExprKind::StringLiteral(s) => ExprKind::StringLiteral(s),
+        ExprKind::BytesLiteral(b) => ExprKind::BytesLiteral(b),
         ExprKind::BoolLiteral(b) => ExprKind::BoolLiteral(b),
         ExprKind::NoneLiteral => ExprKind::NoneLiteral,
         ExprKind::Name(n) => ExprKind::Name(n),

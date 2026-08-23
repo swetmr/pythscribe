@@ -62,3 +62,5 @@ export function run(coro) {
   }
   return Promise.resolve(coro);
 }
+
+//# sourceMappingURL=asyncio.js.map
