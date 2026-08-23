@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual re-run (e.g. to publish a package that was missing from a prior release).
+  # Version comes from the wrapper package.json on a branch ref; publish.mjs is
+  # idempotent, so it only publishes what is not already on the registry.
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -70,6 +74,7 @@ jobs:
   release:
     name: Create Release
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')   # GitHub Release only on a tag push, not workflow_dispatch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -127,3 +132,23 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           CI: 'true'
+
+      # Net that catches any install-resolution break (ETARGET, missing dep, bad
+      # exec bit) from the REAL registry — the check that would have caught the
+      # 0.2.2 ETARGET in CI instead of by hand. Fails the job loudly if broken.
+      - name: Smoke-test the published install
+        run: |
+          set -eux
+          VER="$(node -p "require('./npm/pythscribe/package.json').version")"
+          # allow for registry propagation after publish
+          for i in 1 2 3 4 5 6; do
+            if npm view "pythscribe@$VER" version >/dev/null 2>&1; then break; fi
+            echo "waiting for registry propagation ($i)…"; sleep 10
+          done
+          D="$(mktemp -d)"; cd "$D"; npm init -y >/dev/null
+          npm pkg set type=module                       # emitted .js is ESM — don't rely on Node's ambiguous-file detection
+          npm install "pythscribe@$VER"                 # fails here on ETARGET / missing dep
+          ./node_modules/.bin/pyths --version           # fails here if the binary exec bit is wrong
+          printf 'print("smoke " + str(2**60))\n' > s.ps
+          ./node_modules/.bin/pyths compile s.ps -o s.js
+          node s.js | grep -F 'smoke 1152921504606846976'   # assert real output, not just a zero exit

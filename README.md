@@ -7,7 +7,7 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21875694.svg)](https://doi.org/10.5281/zenodo.21875694)
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue.svg)](./LICENSE.md)
 
-PythScribe is an ahead-of-time compiler that transcribes Python into JavaScript and WebAssembly via a blazing-fast Rust toolchain. Write classes, components, and APIs in `.ps` files using Python syntax and compile them to production-ready JS (and WASM for compute-heavy functions) that slots into React, Next.js, or any web project.
+PythScribe is an ahead-of-time compiler that transcribes Python into JavaScript and WebAssembly via a blazing-fast Rust toolchain. Classes, components, and APIs live in `.ps` files as Python syntax and compile to production-ready JS (and WASM for compute-heavy functions) that slots into React, Next.js, or any web project.
 
 
 ## Design Philosophy
@@ -29,7 +29,7 @@ Finally, even if AI-generated code is the future, readability, efficiency and ae
 
 ### Correct-by-default semantics — not just Pythonic syntax
 
-Syntax is half the story; the other half is **semantics**. On every axis where JavaScript carries a decades-old quirk, Python's model is simply *less surprising* — and PythScribe gives you Python's. Semantic preservation is **machine-checked in Lean over selected language fragments** (20 preservation waves and a six-dimension observational taxonomy with a representative union theorem), bound to the shipping compiler by differential testing rather than proved end-to-end. The rows below are the behaviors PythScribe targets: some are covered by the verified fragments, and all are exercised by the CPython differential corpus:
+Syntax is half the story; the other half is **semantics**. On every axis where JavaScript carries a decades-old quirk, Python's model is simply *less surprising* — and PythScribe gives you Python's. Semantic preservation is **machine-checked in Lean over selected language fragments** (20 preservation waves and an observational-preservation taxonomy with a representative union theorem), bound to the shipping compiler by differential testing rather than proved end-to-end. The rows below are the behaviors PythScribe targets: some are covered by the verified fragments, and all are exercised by the CPython differential corpus:
 
 | | JavaScript's quirk | What PythScribe gives you |
 |---|---|---|
