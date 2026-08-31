@@ -9,7 +9,7 @@ this gate is their only correctness contract (see grammar/README.md).
 Corpora:
   1. every tracked .ps file  -> parsed with pyths.lark
   2. every tracked .psc file -> parsed with psc.lark. psc.lark now covers the
-     ENTIRE compressed surface (13/13 tracked files parse directly). A file
+     ENTIRE compressed surface (15/15 tracked files parse directly). A file
      psc.lark cannot parse falls back to `pyths expand <file>` with the OUTPUT
      parsed by pyths.lark — the fallback is retained as a safety net but is
      currently unused (the PSX `#id` shortcut, its only former user, is gone).
@@ -62,32 +62,74 @@ PS_EXCLUSIONS = {
     # `W*` preset line. `pyths check tests/b029_worker.ps` rejects it too;
     # the B-029 test expands it first. Not canonical .ps.
     "tests/b029_worker.ps": "compressed content in .ps extension (W* preset; pyths check rejects)",
+    # E7 testlet the AUTHORITATIVE PARSER ITSELF rejects (`pyths check`:
+    # "Expected ), found =" — the `class C(metaclass=M)` keyword base).
+    # The grammar failing on it is parser agreement, verified 2026-08-31.
+    "tests/conformance/autotester/testlets/metaclasses.ps":
+        "parser rejects it too (class keyword base `metaclass=M`; verified 2026-08-31)",
 }
 
-# E7 (2026-08-27) — vendored third-party conformance corpus, excluded as a
-# DISTINCT class with a DIFFERENT honesty status than PS_EXCLUSIONS above:
-# these are Transcrypt autotester testlets (tests/conformance/autotester/
-# testlets/, Apache-2.0) that pyths_parser largely ACCEPTS and runs (43/47
-# pass the conformance ratchet), but that exercise surface grammar/pyths.lark
-# does not yet model (lambda varargs, complex literals, extended slices,
-# metaclass kwarg, ...). Excluding them here is therefore an acknowledged
-# GRAMMAR GAP — grammar lags pyths_parser on this corpus — NOT parser
-# agreement. Tracked as a grammar-workstream item. A testlet that PARSES is
-# counted toward the pass total automatically (prefix exclusion only fires
-# on failure), so grammar progress on this corpus is visible for free;
-# retire the prefix once the whole corpus parses.
-PS_VENDORED_PREFIX = "tests/conformance/autotester/testlets/"
-PS_VENDORED_REASON = ("vendored Transcrypt conformance testlet — pyths_parser accepts it; "
-                      "grammar/pyths.lark does not yet (acknowledged grammar gap, "
-                      "grammar-workstream)")
+# E7 vendored-testlet prefix exclusion — RETIRED 2026-08-31. The grammar gap
+# it acknowledged (lambda varargs, imaginary literals, byte strings,
+# underscored numerics, extended slices, semicolons, matmul, for-iter
+# testlists, return testlists, continuation blank-lines) was closed in
+# grammar/pyths.lark (E7 sync); all parser-valid testlets now parse and are
+# HARD-gated like the rest of the corpus. The one parser-REJECTED testlet
+# (metaclasses.ps) moved to PS_EXCLUSIONS above with its honest reason.
 
 # .psc files where BOTH psc.lark AND the expand-fallback are expected to
-# fail. Empty today — psc.lark parses all 13 tracked .psc files DIRECTLY;
+# fail. Empty today — psc.lark parses all 15 tracked .psc files DIRECTLY;
 # the expand-fallback is not exercised by any current file.
 PSC_EXCLUSIONS = {}
 
 # Differential-corpus entry ids expected to fail. Empty — 580/580 parse.
 DIFFERENTIAL_EXCLUSIONS = {}
+
+# Pinned boundary witnesses (corpus 5 below): (label, source, must_accept).
+# Every entry's verdict was measured against `pyths check --syntax-only`
+# (2026-08-31, E7 grammar sync + r1 review round). PAIRED accept+reject per
+# family — the reject side proves the gate can fail (anti-vacuity).
+# NOTE: try_parse appends a trailing "\n", so a witness written without one
+# exercises the "last line of the file" form of its class.
+PINNED_WITNESSES = [
+    # continuation `\` + blank/comment lines (r1 BLOCKER-1 + N2 class)
+    ("cont-blank-then-content", "x = 1 + \\\n\n    2", True),
+    ("cont-comment-then-content", "x = 1 + \\\n# c\n    2", True),
+    ("cont-blank-to-eof", "x = 1\\\n", True),
+    ("cont-bare-eof", "x = 1\\", True),
+    ("cont-space-before-newline", "x = 1 + \\ \n    2", False),
+    # imaginary literals
+    ("imag-float", "x = 2.5j", True),
+    ("imag-hex", "x = 0x1j", False),
+    # byte strings
+    ("bytes-basic", "x = b'a' b'b'", True),
+    ("bytes-raw-prefix", "x = rb'a'", False),
+    # underscore after base prefix
+    ("hex-underscore", "x = 0x_ff_ff_ff", True),
+    ("hex-double-underscore", "x = 0x__ff", False),
+    # dot-hanging floats
+    ("float-trailing-dot", "x = 2. + .5e3", True),
+    ("float-dot-exp-only", "x = .e3", False),
+    # lambda star params (free order)
+    ("lambda-free-order", "f = lambda **kw, x, *a: x", True),
+    ("lambda-bare-star", "f = lambda *, k: k", False),
+    # subscript tuples + star slice bounds (r1 BLOCKER-2; r2 NIT-A)
+    ("subscript-slice-tuple", "y = a[1:2:3, 4:5:6]", True),
+    ("subscript-star-slice-bound", "y = a[:*b, 1]", True),
+    ("subscript-star-item", "y = a[1:2, *b]", True),
+    ("subscript-star-plain", "y = a[*b]", True),
+    ("subscript-empty-item", "y = a[1:2,,3]", False),
+    # semicolons
+    ("semi-chain-compound", "x = 1; y = 2; if x: pass", True),
+    ("semi-lone", ";", False),
+    # matmul
+    ("matmul", "m5 @= m4 @ m3", True),
+    # for/return testlists; raise stays single-value (r1 SF-2)
+    ("for-iter-tuple", "for x in a, *b,: pass", True),
+    ("return-testlist", "def f(): return *a, 1,", True),
+    ("raise-star", "raise *a from x", True),
+    ("raise-testlist", "raise 1, 2", False),
+]
 
 # ---------------------------------------------------------------------------
 
@@ -172,12 +214,6 @@ def main():
                 ps_ok += 1
         elif f in PS_EXCLUSIONS:
             excluded_hits.append(("ps", f, PS_EXCLUSIONS[f]))
-        elif f.startswith(PS_VENDORED_PREFIX):
-            # Vendored conformance corpus: a parse failure is an acknowledged
-            # grammar gap (see PS_VENDORED_REASON), not a gate failure. A
-            # testlet that PARSES counts toward ps_ok above — so grammar
-            # progress on this corpus is visible, never penalized.
-            excluded_hits.append(("ps", f, PS_VENDORED_REASON))
         else:
             failures.append(("ps", f, err))
 
@@ -258,6 +294,29 @@ def main():
         if pair_ok:
             clone_ok += 1
 
+    # ---- corpus 5: pinned boundary witnesses (paired negative controls) ---
+    # Anti-vacuity discipline (CLAUDE-d'): every measured accept/reject
+    # boundary from the 2026-08-31 E7 grammar sync ships a PINNED witness
+    # driven through the SHIPPED grammar, paired accept+reject per family,
+    # so a silent regression of the class goes RED here (the r1 review's
+    # BLOCKER-1 — the continuation ignore eating the statement-final
+    # newline at EOF — was invisible to the corpus gates precisely because
+    # no tracked file ends in a continuation; these witnesses close that
+    # blind spot). Each verdict below was measured against
+    # `pyths check --syntax-only` on 2026-08-31; if the PARSER moves, the
+    # witness must be re-measured, not deleted.
+    pin_ok = 0
+    for label, src, must_accept in PINNED_WITNESSES:
+        err = try_parse(ps_parser, src)
+        good = (err is None) if must_accept else (err is not None)
+        if good:
+            pin_ok += 1
+        else:
+            want = "accept" if must_accept else "reject"
+            failures.append(("pinned", label,
+                             f"grammar must {want} {src!r} (parser-verified "
+                             f"boundary); got {err or 'accept'}"))
+
     # ---- summary ----------------------------------------------------------
     print()
     print("grammar corpus gate — summary")
@@ -267,6 +326,7 @@ def main():
           f"({psc_direct} via psc.lark, {psc_via_expand} via expand-fallback)")
     print(f"  differential     : {diff_ok}/{len(entries)} entries parsed")
     print(f"  clone pairs      : {clone_ok}/{clone_total} pairs (.ps + expanded .psc)")
+    print(f"  pinned witnesses : {pin_ok}/{len(PINNED_WITNESSES)} boundary controls")
     if excluded_hits:
         print(f"\n  excluded ({len(excluded_hits)}):")
         for corpus, name, reason in excluded_hits:

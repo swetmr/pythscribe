@@ -38,28 +38,41 @@
 //
 // .ps restrictions vs stock Python (grammar deliberately narrowed to match
 // parser.rs — the corpus cannot contain these anyway):
-//   a. Semicolon statement chaining ONLY inside a one-line suite
-//      (`if v: f(v); g(v)` — round-5, parse_block); top-level
-//      `a = 1; b = 2` remains unsupported.
+//   a. RETIRED (E7 sync, 2026-08-31): `;` statement chaining is now general —
+//      `a = 1; b = 2` at top level and inside indented blocks, a trailing `;`
+//      on any simple-stmt line, and a COMPOUND statement as the final
+//      `;`-item (`x = 1; if x: pass`). Lone `;` / empty items (`;;`) stay
+//      rejected (measured against pyths check, 2026-08-31).
 //   b. Inline suites (`if x: y = 1` on one line) ARE supported since
 //      round-5 — parse_block parses `;`-separated simple stmts after
-//      the colon when no NEWLINE follows.
+//      the colon when no NEWLINE follows; same trailing-compound form
+//      as (a) (`if x: y = 1; if y: pass` — measured 2026-08-31).
 //   c. `return`/`raise` take a single expression, not a testlist
 //      (parse_return_stmt parser.rs:531, parse_raise_stmt parser.rs:720);
 //      `raise X from Y` IS supported (round-4 sweep, PEP 3134).
-//   d. `for x in a, b:` unsupported — iter is a single expr (parser.rs:484).
+//   d. RETIRED (E7 sync, 2026-08-31): `for x in a, b:` IS supported — the
+//      for-loop iter is a testlist with star items and an optional trailing
+//      comma (`for x in a, *b,:`, `for x in *a:`). Comprehension iters and
+//      if/while conditions remain single tests (`[i for i in a, b]` and
+//      `if a, b:` are still rejected — measured 2026-08-31).
 //   e. from-import: NO `import *`; parenthesized name lists ARE supported
 //      (`from x import (a, b as c,)`, multi-line, trailing comma OK —
 //      parse_from_import_stmt, parser.rs).
-//   f. Number literals: decimal ints (leading zeros OK: lexer tokens.rs:250
-//      `[0-9][0-9_]*`), hex/oct/bin with a required first digit after the
-//      base prefix (tokens.rs:398..400: `0[xX][0-9a-fA-F][0-9a-fA-F_]*`
-//      etc.), and floats requiring digits on BOTH sides of the dot
-//      (tokens.rs:253). NO imaginary, NO `.5` / `5.`, NO `0x_`.
-//   g. String prefixes: only r/R (raw) and f (f-string) — tokens.rs:257..300.
-//      NO b/u/rb prefixes. F-string interiors are opaque at this level.
-//   h. `@` is decorator-only — no matrix-multiplication operator, no `@=`
-//      (peek_aug_assign, parser.rs:1159 has no At variant).
+//   f. Number literals (E7 sync, 2026-08-31 — re-measured against pyths
+//      check): decimal ints (leading zeros OK, `[0-9][0-9_]*` — trailing `_`
+//      accepted), hex/oct/bin with ONE optional underscore straight after the
+//      base prefix (`0x_ff` OK; `0x_` and `0x__ff` rejected), floats with a
+//      dot-hanging side (`2.`, `.5`, `2.e3`, `.5e3` all OK; exponent digits
+//      only — `1e1_0` rejected), and DECIMAL imaginary literals (`3j`, `2.5J`,
+//      `.5j`, `2.j`, `1e-3j`, `1_0j`; hex/oct/bin + j rejected). Float and
+//      imaginary literals are still NOT legal in `case` patterns.
+//   g. String prefixes: r/R (raw), f (f-string), and b/B (bytes — E7 sync
+//      2026-08-31). Bytes are single-line, non-raw, non-f (`rb`/`br`/`fb`/`u`
+//      and `b'''...'''` rejected); adjacent concat only bytes-with-bytes
+//      (`b'a' b'b'` OK; `'a' b'b'` rejected). Not legal in `case` patterns or
+//      side-effect import paths. F-string interiors are opaque at this level.
+//   h. RETIRED (E7 sync, 2026-08-31): `@` matmul and `@=` ARE supported
+//      (`m0 @ m1`, `m5 @= m4`), at `*`-precedence. Decorators unchanged.
 //   i. NAME is PEP 3131 XID_Start XID_Continue* (tokens.rs); ASCII is a subset.
 //
 // MEASURED GAP vs the authoritative parser (scripts/grammar-fuzz.py, seed
@@ -127,16 +140,32 @@ kwargs_param: "**" typedparam
 typedparam: name [":" test] ["=" test]
 
 lambdef: "lambda" [lambda_params] ":" test
-// parse_lambda_params (parser.rs:1330): plain names with optional defaults,
-// trailing comma tolerated. No *args/**kwargs in lambda.
-lambda_params: lambda_param ("," lambda_param)* [","]
+// parse_lambda_params — RE-MEASURED 2026-08-31 (E7 testlets arguments.ps /
+// lambda_functions.ps): `*args` and `**kwargs` ARE accepted, in FREE ORDER
+// (`lambda **kw, x: ...`, `lambda *a, *b: ...` all parse — unlike def's
+// B11 kwargs-last rule), keyword-only names after `*args` too. Still
+// rejected: bare `*` separator, `/`, annotations, and defaults on the
+// star/kwargs params themselves. Trailing comma tolerated.
+lambda_params: lambda_item ("," lambda_item)* [","]
+?lambda_item: lambda_param
+            | "*" name -> lambda_star_param
+            | "**" name -> lambda_kwargs_param
 lambda_param: name ["=" test]
 
 // ── Statements ────────────────────────────────────────────────────────────
 ?stmt: simple_stmt | compound_stmt
-// Restriction (a): no top-level `;` chaining — one small statement per
-// line (inline suites are the exception; see `suite` / round-5).
-simple_stmt: small_stmt _NEWLINE
+// E7 sync (2026-08-31), restriction (a) retired: `;` chaining is general.
+// A statement line is `small ; small ; ...` with an optional trailing `;`,
+// and the FINAL item may be a compound statement (`x = 1; if x: pass`,
+// `x = 1; @dec` + decorated def on the next lines). Lone `;` and empty
+// items (`;;`) are rejected — every `;` is preceded by a small_stmt and
+// followed by a small_stmt, a compound_stmt, or the newline. The tail is
+// right-recursive (LALR(1)-clean) and shared with `inline_suite`.
+simple_stmt: small_stmt _semi_tail
+_semi_tail: _NEWLINE
+          | ";" _NEWLINE
+          | ";" small_stmt _semi_tail
+          | ";" compound_stmt
 ?small_stmt: expr_stmt | assign_stmt | del_stmt | pass_stmt | flow_stmt
            | import_stmt | global_stmt | nonlocal_stmt | assert_stmt
 expr_stmt: testlist_star_expr
@@ -155,8 +184,8 @@ assign: testlist_star_expr ("=" testlist_star_expr)+
 // "don't reduce"; `=`, `,` and NEWLINE say "reduce").
 annassign: testlist_nc ":" test ["=" test]
 augassign: testlist_nc augassign_op test
-// Restriction (h): no `@=` (parser.rs:1159).
-!augassign_op: "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "**=" | "//="
+// E7 sync (2026-08-31), restriction (h) retired: `@=` accepted (matmul).
+!augassign_op: "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "**=" | "//=" | "@="
 
 ?testlist_nc: test_or_star_expr
             | test_or_star_expr ("," test_or_star_expr)+ -> tuple
@@ -170,10 +199,18 @@ pass_stmt: "pass"
 ?flow_stmt: break_stmt | continue_stmt | return_stmt | raise_stmt
 break_stmt: "break"
 continue_stmt: "continue"
-// Restriction (c): single expression, no testlist; raise takes an
-// optional `from` cause (round-4 sweep, PEP 3134).
-return_stmt: "return" [test]
-raise_stmt: "raise" [test ["from" test]]
+// Restriction (c), RE-MEASURED 2026-08-31 (E7 sync): `return` DOES take a
+// testlist with star items and a trailing comma (`return 1, 2`,
+// `return *a, b`, `return 1,` all accepted by pyths check). `raise` stays
+// single-VALUE — no testlist (`raise 1, 2` and `raise *a, b` rejected) —
+// but the value may be starred (`raise *a`, `raise *a from x` accepted;
+// r1 SF-2) and takes an optional `from` cause (round-4 sweep, PEP 3134);
+// `assert a, b, c` also stays rejected.
+return_stmt: "return" [testlist_star]
+raise_stmt: "raise" [test_or_star_expr ["from" test]]
+// Shared list-of-(test|star) with optional trailing comma — the shape of a
+// return value and a for-loop iter (E7 sync).
+testlist_star: test_or_star_expr ("," test_or_star_expr)* [","]
 
 // Deviation 6 + restriction (e).
 ?import_stmt: import_name | import_from | import_side_effect
@@ -200,8 +237,11 @@ if_stmt: "if" test ":" suite elifs ["else" ":" suite]
 elifs: elif_*
 elif_: "elif" test ":" suite
 while_stmt: "while" test ":" suite ["else" ":" suite]
-// Restriction (d): iter is a single test (parser.rs:484).
-for_stmt: "for" exprlist "in" test ":" suite ["else" ":" suite]
+// E7 sync (2026-08-31), restriction (d) retired: the iter is a testlist
+// with star items and an optional trailing comma (`for x in a, b:`,
+// `for x in a, *b,:`, `for x in *a:` — data_classes.ps). Comprehension
+// iters (comp_for) stay single or_tests: `[i for i in a, b]` is rejected.
+for_stmt: "for" exprlist "in" testlist_star ":" suite ["else" ":" suite]
 try_stmt: "try" ":" suite except_clauses ["else" ":" suite] [finally]
         | "try" ":" suite finally -> try_finally
 finally: "finally" ":" suite
@@ -286,7 +326,19 @@ pos_arg_pattern: as_pattern ("," as_pattern)*
 // form — `;`-separated simple statements on the colon line (parse_block).
 suite: _NEWLINE _INDENT stmt+ _DEDENT
      | inline_suite
-inline_suite: small_stmt (";" small_stmt)* [";"] _NEWLINE
+// E7 sync (2026-08-31): the inline form shares simple_stmt's `;` tail, so a
+// compound statement may terminate it (`if x: y = 1; if y: pass`), and the
+// suite may BE a compound statement outright (`if x: if y: pass`,
+// `if x: while y: break` — measured, pyths check accepts).
+// KNOWN (r1 review, N1): the compound alternative introduces the classic
+// dangling-else/elif/except/finally shift-reduce ambiguity; lark's LALR
+// resolves as SHIFT = innermost binding, which matches pyths_parser's
+// recursive descent on all 30 probed dangling-clause cases (acceptance-
+// identical; a TREE consumer should not rely on the attachment). Residual
+// under-acceptance, LALR(1)-inexpressible here: an inline `try:` nested in
+// an inline `try:` sharing the except/finally line (parser accepts).
+inline_suite: small_stmt _semi_tail
+            | compound_stmt
 
 // ── Expression precedence chain ───────────────────────────────────────────
 // parser.rs: parse_expr → named_expr(:=) → ternary → lambda → pipeline(|>)
@@ -328,8 +380,10 @@ star_expr: "*" expr
 !_unary_op: "+" | "-" | "~"
 !_add_op: "+" | "-"
 !_shift_op: "<<" | ">>"
-// Restriction (h): no `@` matmul.
-!_mul_op: "*" | "/" | "%" | "//"
+// E7 sync (2026-08-31), restriction (h) retired: `@` matmul at `*` level
+// (measured: `a @ b`, `a @ b ** c`, `@a @ b` decorators, comprehension
+// iters all accepted by pyths check).
+!_mul_op: "*" | "/" | "%" | "//" | "@"
 !comp_op: "<" | ">" | "==" | ">=" | "<=" | "!=" | "in" | "not" "in" | "is" | "is" "not"
 
 ?power: atom_expr ("**" factor)?
@@ -366,6 +420,7 @@ star_expr: "*" expr
      | name -> var
      | number
      | string_concat
+     | bytes_concat
      | "..." -> ellipsis
      | "None" -> const_none
      | "True" -> const_true
@@ -387,16 +442,31 @@ yield_expr: "yield" "from" test -> yield_from
 // Implicit adjacent-string concatenation (parser.rs:1923).
 ?string_concat: string+
 
+// E7 sync (2026-08-31): byte strings. Adjacent concat is bytes-with-bytes
+// ONLY (`b'a' b'b'` OK; `'a' b'b'` and `b'a' 'b'` are rejected), hence a
+// rule separate from string_concat. BYTES is deliberately absent from
+// `string`, STRING_NOF positions (case patterns, import paths), and
+// pattern rules — pyths check rejects it there.
+?bytes_concat: BYTES+
+
 ?test_or_star_expr: test | star_expr
 
-// MEASURED: a subscript is EITHER one slice OR a comma-list of plain tests.
-// `a[1, 2]` and `a[1,]` parse; `a[:,]`, `a[1:2,]` and `a[1:2, 3]` do not.
-// The old rule let `subscript` (which includes slices) into the tuple list.
-?subscriptlist: slice
-              | test
-              | test (("," test)+ [","] | ",") -> subscript_tuple
-slice: [test] ":" [test] [sliceop]
-sliceop: ":" [test]
+// RE-MEASURED 2026-08-31 (E7 extended_slices.ps): subscript tuples now admit
+// slices AND star items in any position — `a[1:2, 3:4]`, `a[:, 1]`,
+// `a[1:2,]`, `a[*b]`, `a[*b, 1:2]`, incl. assignment/del/augassign targets
+// and `?.[...]` — all accepted by pyths check. Empty items (`a[,]`,
+// `a[1:2,,3]`) stay rejected. (The 2026-07 note that `a[1:2, 3]` was
+// rejected is obsolete — the parser moved.)
+?subscriptlist: subscript_item
+              | subscript_item (("," subscript_item)+ [","] | ",") -> subscript_tuple
+?subscript_item: slice
+               | test
+               | star_expr
+// r1 BLOCKER-2: slice BOUNDS also admit star items (`a[:*b]`, `a[*b:]`,
+// `a[1:*b]`, `a[::*b]`, `a[*b:*c]`, `a[:*b, 1]` — all pyths-check-valid);
+// `a[**b:]` stays rejected (star_expr is `*` only).
+slice: [test_or_star_expr] ":" [test_or_star_expr] [sliceop]
+sliceop: ":" [test_or_star_expr]
 // MEASURED: the loop target is NOT a general expression. parse_for_stmt
 // accepts names, starred names, and (possibly nested) parenthesised/bracketed
 // lists of them; it rejects `for o.x in p`, `for o[0] in p`, `for o?.x in p`
@@ -449,14 +519,29 @@ comp_for: ["async"] "for" exprlist "in" or_test comp_if*
 // parenthesised ternary still works, since that is an atom.
 comp_if: "if" or_test
 
-number: DEC_NUMBER | HEX_NUMBER | OCT_NUMBER | BIN_NUMBER | FLOAT_NUMBER
+number: DEC_NUMBER | HEX_NUMBER | OCT_NUMBER | BIN_NUMBER | FLOAT_NUMBER | IMAG_NUMBER
 string: STRING | LONG_STRING
 
 // ── Terminals ─────────────────────────────────────────────────────────────
 _NEWLINE: ( /\r?\n[\t ]*/ | COMMENT )+
 
 %ignore /[\t \f]+/          // WS
-%ignore /\\[\t \f]*\r?\n/   // line continuation
+// Line continuation. RE-MEASURED 2026-08-31 (three-way probed vs pyths
+// check; r1 review round tightened it):
+//   - The parser skips blank and comment-only lines FOLLOWING the
+//     `\`-newline (`x = 1 + \` then a blank line then `    2` — surfaced
+//     by the comments-mutant of control_structures.ps). Branch 1 consumes
+//     `\`-newline plus those lines, guarded by a lookahead that a content
+//     line actually follows, so it never swallows the statement-ending
+//     newline at EOF (r1 BLOCKER-1: `x = 1\` + blank lines to EOF is
+//     parser-ACCEPTED and must keep its _NEWLINE).
+//   - Branch 2 (`\` directly before a newline with NO content after)
+//     drops just the backslash and leaves the newline to the _NEWLINE
+//     terminal — this is the EOF case (`x = 1\<nl>` accepted, r1 N2).
+//   - `\` followed by spaces/tabs before the newline is parser-REJECTED
+//     ("Unexpected character '\'"), so neither branch admits it (r1 SF-3
+//     closed the old `[\t \f]*` over-acceptance).
+%ignore /\\\r?\n(?:[\t \f]*(?:#[^\n]*)?\r?\n)*(?=[\t \f]*[^\t \f\r\n])|\\(?=\r?\n)/
 %ignore COMMENT
 %declare _INDENT _DEDENT
 
@@ -508,12 +593,31 @@ STRING_NOF: /(r|R)?("([^"\\\n]|\\.)*"|'([^'\\\n]|\\.)*')/
 // this one, which made `""` (empty STRING) shadow `"""..."""` openers.
 LONG_STRING.2: /(f|r|R)?(""".*?(?<!\\)(\\\\)*?"""|'''.*?(?<!\\)(\\\\)*?''')/s
 
-// Restriction (f): decimal ints, leading zeros OK (tokens.rs:250), plus
-// hex/oct/bin (tokens.rs:398..400 — first digit required after the base
-// prefix, underscores allowed after it: `0xFF`, `0xAB_CD`; `0x_` rejected).
-// Priority .2 so `0x0f` lexes as one HEX_NUMBER, not DEC_NUMBER `0` + NAME.
+// Restriction (f), RE-MEASURED 2026-08-31 (E7 sync): decimal ints, leading
+// zeros OK (tokens.rs:250); hex/oct/bin with ONE optional underscore
+// straight after the base prefix (`0x_ff_ff_ff` OK — dashed_numbers.ps;
+// `0x_` and `0x__ff` rejected). Priority .2 so `0x0f` lexes as one
+// HEX_NUMBER, not DEC_NUMBER `0` + NAME.
 DEC_NUMBER: /[0-9][0-9_]*/
-HEX_NUMBER.2: /0[xX][0-9a-fA-F][0-9a-fA-F_]*/
-OCT_NUMBER.2: /0[oO][0-7][0-7_]*/
-BIN_NUMBER.2: /0[bB][01][01_]*/
-FLOAT_NUMBER.2: /[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?|[0-9][0-9_]*[eE][+-]?[0-9]+/
+HEX_NUMBER.2: /0[xX]_?[0-9a-fA-F][0-9a-fA-F_]*/
+OCT_NUMBER.2: /0[oO]_?[0-7][0-7_]*/
+BIN_NUMBER.2: /0[bB]_?[01][01_]*/
+// Floats may hang a dot on either side (`2.`, `.5`, `2.e3`, `.5e3` —
+// module_builtin.ps / string_format.ps); exponent digits only (no
+// underscores: `1e1_0` rejected). Alternation order matters (Python `re`
+// takes the FIRST matching branch): full form, dot-trailing, dot-leading,
+// exponent-only.
+FLOAT_NUMBER.2: /[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?|[0-9][0-9_]*\.([eE][+-]?[0-9]+)?|\.[0-9][0-9_]*([eE][+-]?[0-9]+)?|[0-9][0-9_]*[eE][+-]?[0-9]+/
+// E7 sync (2026-08-31): DECIMAL imaginary literals — any decimal int or
+// float form + j/J (`3j`, `2.5J`, `.5j`, `2.j`, `1e-3j`, `1_0j`, `007j`).
+// Hex/oct/bin + j are rejected by the parser ('0x1j' fails) and cannot
+// match here (branches require a decimal shape). Priority .3 (above
+// FLOAT/HEX .2) so `2.5j` lexes as ONE IMAG_NUMBER, never FLOAT + NAME.
+// Not in pattern_number: `case 1j:` is rejected by pyths check.
+IMAG_NUMBER.3: /([0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?|[0-9][0-9_]*\.([eE][+-]?[0-9]+)?|\.[0-9][0-9_]*([eE][+-]?[0-9]+)?|[0-9][0-9_]*([eE][+-]?[0-9]+)?)[jJ]/
+// E7 sync (2026-08-31): byte strings — b/B prefix, single-line, both
+// quotes, escapes OK. No rb/br/fb/u, no triple-quoted bytes (pyths check
+// rejects all of those; `b'''a'''` cannot match here — the body excludes
+// newlines and an empty `b''` match leaves `'a'''` unlexable). Priority .2
+// so the contextual lexer prefers the full literal over NAME `b`.
+BYTES.2: /[bB]("([^"\\\n]|\\.)*"|'([^'\\\n]|\\.)*')/

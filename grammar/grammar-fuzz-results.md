@@ -146,3 +146,51 @@ It says **nothing about semantics.** The grammar is a *syntactic* acceptor: no
 CFG can exclude undefined names, wrong arity, or type errors. `x = "a" - 3` is
 grammar-valid *and* `pyths check`-valid. Constrained decoding on this grammar
 guarantees the output **parses** — not that it means anything.
+
+## Addendum — E7 conformance-corpus sync (2026-08-31)
+
+The E7 recurring conformance net vendored 47 Transcrypt autotester testlets
+(`tests/conformance/autotester/testlets/`) into the repo. The fuzzer's [B]
+harvest picked them up and measured **67 false rejects** (12 parser-valid base
+testlets + their mutants): real Python surface `pyths_parser` accepts that the
+grammar had never modeled. All were closed by MODELING the constructs (no
+ledger padding, no harvest exclusions), each boundary re-measured against
+`pyths check --syntax-only` first (~170 probe cases):
+
+imaginary literals (decimal forms + `j/J` only) · byte strings (`b`/`B`,
+single-line, bytes-with-bytes concat only) · one underscore after a base
+prefix (`0x_ff`) · dot-hanging floats (`2.`, `.5`, `2.e3`) · full free-order
+lambda params (`*args`/`**kw`/keyword-only) · subscript tuples with slices and
+stars (`a[1:2, 3:4]`, `a[*b]`) · general `;` chaining (trailing `;`, top-level
+chains, compound as final `;`-item, compound as inline suite) · `@` matmul +
+`@=` · for-iter and `return` testlists (star items, trailing comma) ·
+continuation `\` followed by blank/comment lines.
+
+Post-sync CI-gate run (seed 20260714, `--generate 2000 --fail-on-new`, on
+the shipped r2 grammar): **false rejects 0 / 7,029** (1,698 base + 5,331
+mutants — now including the testlet corpus); false accepts 213 / 2,000
+(10.650 %). Two honest caveats on the false-accept side (r1/r2 adversarial
+reviews, SF-1 + the codex ratification round): (a) the *rate* is a sampling
+statistic over the regenerated derivation walk and is not comparable
+run-to-run; (b) the gate's precise guarantee is **no new NORMALIZED
+PARSER-ERROR SIGNATURE** (`classify()` collapses lexemes/digits and keys on
+the parser's message; the ledger is untouched) — every post-sync false
+accept normalizes to a pre-existing `KNOWN_DIVERGENCES` signature
+(flow-context `return`/`break`/`continue`, dup-param, and the `yield`
+residuals). That is weaker than "no new semantic divergence class": some
+*ledgered* signatures got **wider** (e.g. `return 1j` at module level, a
+bare `yield` inside the new `for`/`return` testlists), and a hypothetical
+new class whose parser message collapses to a generic ledgered signature
+(`Unexpected token: ,` etc.) would pass the message-keyed gate unseen. The
+claim this gate supports is "no new signature", not "no new over-accepted
+string" — the cross-checked probe suites (r1 ~490 + r2 ~330 three-way
+probes) are the compensating control on the shipped boundary. The headline table above (10,000 draws + held-out
+corpus) predates this sync and documents that campaign;
+`grammar-fuzz-results.json` is its frozen record. The parser was NOT
+touched; `scripts/test-grammar.py`'s vendored-testlet prefix exclusion is
+retired (the corpus is now hard-gated; the one parser-rejected testlet,
+`metaclasses.ps`, moved to `PS_EXCLUSIONS`), and the measured accept/reject
+boundaries are pinned as paired witnesses in its new corpus 5
+(`PINNED_WITNESSES`) — the negative control that would have caught the r1
+review's BLOCKER-1 (a continuation-`%ignore` regression at EOF, invisible
+to corpus gates because no tracked file ends in a `\` continuation).

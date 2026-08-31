@@ -942,6 +942,16 @@ jobs:
           node-version: 22
       - name: Provision pinned TypeScript (TS-.d.ts-run interop lane)
         run: npm ci --prefix crates/pyths_cli/tests/ts-toolchain
+      - uses: actions/setup-python@v5
+        with:
+          # Same prerequisite as the `test` job (which got this in the
+          # "provision CPython 3.14 oracle" fix — this job was the missed
+          # sibling arm): str_method_matrix.rs (E3 r3) REQUIRES a live
+          # CPython 3.14 oracle and, by anti-vacuity design, has no skip
+          # switch — without this step the instrumented run dies on that
+          # one panic (ubuntu-latest ships 3.12, which the test correctly
+          # rejects). See docs/python-oracle-policy.md.
+          python-version: '3.14'
       - name: Coverage report
         run: |
           cargo llvm-cov --workspace --html --output-dir coverage-report
@@ -958,8 +968,16 @@ jobs:
         # push-to-main diff is usually empty vs merge-base. Hard-fail flip is
         # planned only after the local gate has a track record (scoping doc,
         # section 2.3 "soft gate that never fails is not a gate").
+        # The file-existence guard reconciles the public source-only mirror:
+        # make-public-snapshot.sh strips scripts/coverage-gate.py there, and
+        # an advisory step should skip cleanly, not paint a red annotation.
         continue-on-error: true
-        run: python scripts/coverage-gate.py --lcov coverage.lcov --base-ref origin/main
+        run: |
+          if [ -f scripts/coverage-gate.py ]; then
+            python scripts/coverage-gate.py --lcov coverage.lcov --base-ref origin/main
+          else
+            echo "scripts/coverage-gate.py not present (source-only mirror) — skipped"
+          fi
       - name: Upload coverage artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

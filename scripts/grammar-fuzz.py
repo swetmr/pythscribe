@@ -287,7 +287,12 @@ class Generator:
         if name == "DEC_NUMBER":
             return [r.choice(["0", "1", "7", "42", "1_000", "007"])]
         if name == "FLOAT_NUMBER":
-            return [r.choice(["1.5", "0.0", "3.25e4", "2e10", "1_0.5"])]
+            # incl. the dot-hanging forms the parser accepts (E7 sync 2026-08-31)
+            return [r.choice(["1.5", "0.0", "3.25e4", "2e10", "1_0.5", "2.", ".5"])]
+        if name == "IMAG_NUMBER":
+            return [r.choice(["1j", "2.5J", "0j", ".5j", "2.j", "1e3j", "1_0j"])]
+        if name == "BYTES":
+            return [r.choice(["b'a'", 'b"b"', "B''", "b'\\x00'"])]
         if name == "STRING":
             return [r.choice(['"s"', "'t'", 'f"v{x}"', 'r"\\d+"', '""'])]
         if name == "LONG_STRING":

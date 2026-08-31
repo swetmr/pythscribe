@@ -61,5 +61,8 @@ IDIOM_SIGIL: /%[A-Za-z_][A-Za-z0-9_]*/
 
 // %ignore directives are not inherited through %import — restate them.
 %ignore /[\t \f]+/          // WS
-%ignore /\\[\t \f]*\r?\n/   // line continuation
+// Keep in sync with pyths.lark's continuation ignore (E7 sync 2026-08-31 +
+// the r1 review fix): skips following blank/comment-only lines only when a
+// content line follows; at EOF drops just the `\` so _NEWLINE survives.
+%ignore /\\\r?\n(?:[\t \f]*(?:#[^\n]*)?\r?\n)*(?=[\t \f]*[^\t \f\r\n])|\\(?=\r?\n)/
 %ignore COMMENT
