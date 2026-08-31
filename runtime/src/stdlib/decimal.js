@@ -23,6 +23,10 @@
 // silently producing a wrong value.
 
 import { ZeroDivisionError, ValueError } from "../runtime.js";
+// F3-r2 (v0.2.4): int()/float() dispatch the Python numeric protocol
+// (__int__/__float__) instead of the valueOf heuristic — Decimal implements
+// both. __pyF boxes the integer-valued __float__ result (Option B model).
+import { __pyF } from "../operators.js";
 
 const DEFAULT_PREC = 28;
 
@@ -420,6 +424,23 @@ export class Decimal {
     valueOf() {
         const s = (this.#sign ? "-" : "") + this.#coefficient.toString() + "e" + this.#exponent;
         return Number(s);
+    }
+
+    /** `int(Decimal(...))` — truncation toward zero, EXACT at any magnitude
+     *  (BigInt arithmetic on the coefficient/exponent pair; the old
+     *  Math.trunc(Number(x)) route lost precision past 2^53). F3-r2. */
+    __int__() {
+        let v = this.#exponent >= 0
+            ? this.#coefficient * 10n ** BigInt(this.#exponent)
+            : this.#coefficient / 10n ** BigInt(-this.#exponent);
+        if (this.#sign) v = -v;
+        return v >= -9007199254740991n && v <= 9007199254740991n ? Number(v) : v;
+    }
+
+    /** `float(Decimal(...))` via the numeric protocol — correctly-rounded
+     *  double (same decimal-string route as valueOf), boxed when whole. */
+    __float__() {
+        return __pyF(this.valueOf());
     }
 
     toString() {

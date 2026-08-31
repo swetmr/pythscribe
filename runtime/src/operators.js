@@ -7,6 +7,14 @@ import {
     pySetUnion, pySetIntersection, pySetDifference, pySetSymmetricDifference,
     pyFrozensetOf,
     pyDictMerge, pyUpdate, pySeq, __pyOwnKeys, PySlice, __pyBytesKind, __pyTypeName,
+    // F5-r2 (v0.2.4): THE slice-component validator (int/None/__index__ →
+    // TypeError otherwise) — the bytearray slice write/delete paths validate
+    // through it BEFORE any mutation, same guard as list get/set/del.
+    // Call-time-only dereference keeps the deliberate import cycle safe.
+    __pySliceIndex,
+    // E3: printf-style `%` formatting engine (str % args). Call-time-only
+    // dereference (same deliberate cycle as above).
+    pyStrMod,
 } from "./runtime.js";
 
 // #469 (was #322): the operand-type name in every operator error message
@@ -122,6 +130,44 @@ function __reqArithNum(op, a, b) {
 // are exactly as before.
 const __boolNum = (x) => (x ? 1 : 0);
 
+// F3-r2 (v0.2.4): THE "interpreted as an integer" validator — CPython's
+// __index__ protocol (PyNumber_Index), used wherever a value must BE an int
+// (int() base, round() ndigits, __index__-bearing receivers). Replaces the
+// r1 __numProtoOk valueOf heuristic, which accepted ANY overridden-valueOf
+// object (a JS-coercion test, not Python's protocol). Accepts: bool (⊂ int),
+// int (integer Number of any magnitude / BigInt), or an object exposing
+// __index__ whose result is an int (bool result accepted — CPython 3.12
+// takes it with a DeprecationWarning). A float — native non-integer, or
+// boxed — a str, None, or a protocol-less object raises CPython's exact
+// TypeError; a bad __index__ result raises "__index__ returned non-int".
+export function __pyAsIndexInt(v) {
+    if (typeof v === "boolean") return v ? 1 : 0;
+    if (typeof v === "bigint") return v;
+    if (typeof v === "number") {
+        if (Number.isInteger(v)) return v;
+        throw new TypeError_("'float' object cannot be interpreted as an integer");
+    }
+    if (v != null && v.__pyfloat__ !== true && typeof v.__index__ === "function") {
+        const r = v.__index__();
+        if (typeof r === "boolean") return r ? 1 : 0;
+        if (typeof r === "bigint") return r;
+        if (typeof r === "number" && Number.isInteger(r)) return r;
+        throw new TypeError_(`__index__ returned non-int (type ${__pyTypeName(r)})`);
+    }
+    throw new TypeError_(`'${__pyTypeName(v)}' object cannot be interpreted as an integer`);
+}
+
+// F3 (v0.2.4): bytes-like receivers are legal for int()/float()
+// (int(b'12') → 12, float(b'1.5') → 1.5) — decode as ASCII/latin-1 and
+// take the string path. Returns null for non-bytes; otherwise the decoded
+// string plus the CPython b'…' repr for error messages.
+function __bytesArgDecode(x) {
+    if (__pyBytesKind(x) === null) return null;
+    let s = "";
+    for (let i = 0; i < x.length; i++) s += String.fromCharCode(x[i]);
+    return { s, repr: pyRepr(x) };
+}
+
 /**
  * F4: Python-compatible float() conversion.
  *
@@ -137,8 +183,23 @@ export function pyFloat(x) {
     if (x != null && x.__pyfloat__ === true) return x;
     // #319: float(huge_int) overflows to OverflowError in CPython, not inf.
     if (typeof x === "bigint") return __pyF(__reqNum(x));
+    // F3 (v0.2.4): bytes-like → decode and parse like a string, with the
+    // b'…' repr preserved in the ValueError message.
+    let __bytesRepr = null;
+    const __dec = __bytesArgDecode(x);
+    if (__dec !== null) {
+        __bytesRepr = __dec.repr;
+        x = __dec.s;
+    }
     if (typeof x === "string") {
-        const t = x.trim();
+        // r2 should-fix: a BYTES receiver only strips ASCII whitespace —
+        // JS trim() also removes U+00A0/U+2028/… so float(b'\xa01.5')
+        // silently parsed where CPython raises ValueError. (A str receiver
+        // keeps trim(): Python's int/float accept any str whitespace,
+        // '\xa0'.isspace() is True.)
+        const t = __bytesRepr !== null
+            ? x.replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g, "")
+            : x.trim();
         const m = /^([+-]?)(inf|infinity|nan)$/i.exec(t);
         if (m) {
             if (m[2].toLowerCase() === "nan") return __pyF(NaN);
@@ -153,7 +214,7 @@ export function pyFloat(x) {
             for (let i = 0; i < t.length; i++) {
                 if (t.charCodeAt(i) === 95 /* _ */
                     && !(isDig(t.charCodeAt(i - 1)) && isDig(t.charCodeAt(i + 1)))) {
-                    throw new ValueError(`could not convert string to float: ${pyRepr(x)}`);
+                    throw new ValueError(`could not convert string to float: ${__bytesRepr ?? pyRepr(x)}`);
                 }
             }
             t2 = t.replace(/_/g, "");
@@ -161,11 +222,34 @@ export function pyFloat(x) {
         // Reject empty / non-numeric strings the way CPython does, rather
         // than inheriting JS's lenient Number() coercions.
         if (t2 === "" || !/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t2)) {
-            throw new ValueError(`could not convert string to float: ${pyRepr(x)}`);
+            throw new ValueError(`could not convert string to float: ${__bytesRepr ?? pyRepr(x)}`);
         }
         return __pyF(Number(t2));
     }
-    return __pyF(Number(x));
+    // F3-r2 (v0.2.4): the Python numeric protocol, not a valueOf heuristic —
+    // PyNumber_Float order: __float__ first, then __index__. The result of
+    // __float__ must BE a float (boxed, or a non-integer native Number —
+    // an integer-valued native Number is an int in this value model), else
+    // CPython's "T.__float__ returned non-float (type R)". Decimal/Fraction
+    // implement __float__/__int__ (stdlib); a bare-valueOf object (the r1
+    // __numProtoOk allowance) now raises the receiver TypeError like any
+    // other protocol-less object.
+    if (x != null && typeof x.__float__ === "function") {
+        const r = x.__float__();
+        if (r != null && r.__pyfloat__ === true) return r;
+        if (typeof r === "number" && !Number.isInteger(r)) return __pyF(r);
+        throw new TypeError_(
+            `${__pyTypeName(x)}.__float__ returned non-float (type ${__pyTypeName(r)})`,
+        );
+    }
+    if (x != null && x.__pyfloat__ !== true && typeof x.__index__ === "function") {
+        // float(idx_obj) → the integer via __index__, as a float. __reqNum
+        // keeps CPython's OverflowError for a BigInt beyond the double range.
+        return __pyF(__reqNum(__pyAsIndexInt(x)));
+    }
+    throw new TypeError_(
+        `float() argument must be a string or a real number, not '${__pyTypeName(x)}'`,
+    );
 }
 
 /**
@@ -181,11 +265,46 @@ export function pyFloat(x) {
  * zero; NaN/Infinity raise like CPython.
  */
 export function pyInt(x, base) {
-    if (typeof base === "object" && base !== null) base = base.base;
+    // Keyword form arrives as the codegen's trailing options object
+    // `{base: v}`. F3-r2: unwrap ONLY the plain-object wrapper with an own
+    // `base` key — the old unconditional `base = base.base` destroyed a
+    // boxed-float or __index__-bearing base object (silently turning it
+    // into base 10 instead of CPython's TypeError).
+    if (base !== null && typeof base === "object"
+        && Object.getPrototypeOf(base) === Object.prototype
+        && Object.prototype.hasOwnProperty.call(base, "base")) {
+        base = base.base;
+    }
+    // F3-r2 (v0.2.4): explicit-base form — CPython validates the BASE first
+    // (via __index__: int('101', 2.0) → "'float' object cannot be interpreted
+    // as an integer", int('101', 99) → the base-range ValueError), THEN
+    // requires a str/bytes receiver (int(7, 2) → "int() can't convert
+    // non-string with explicit base"; the old code ran the numeric branch
+    // before ever looking at base, so int(7, 2) silently returned 7).
+    let b = 10;
+    if (base !== undefined) {
+        b = __pyAsIndexInt(base);
+        if (typeof b === "bigint") b = Number(b);
+        if (b !== 0 && (b < 2 || b > 36)) {
+            throw new ValueError("int() base must be >= 2 and <= 36, or 0");
+        }
+        if (typeof x !== "string" && !(x instanceof String) && __pyBytesKind(x) === null) {
+            throw new TypeError_("int() can't convert non-string with explicit base");
+        }
+    }
     if (typeof x === "boolean") return x ? 1 : 0;
     if (typeof x === "bigint") return x;
     // Option-B spike: unwrap a boxed float before the number branch.
     if (x != null && x.__pyfloat__ === true) x = x.valueOf();
+    // F3 (v0.2.4): bytes-like → decode and parse like a string
+    // (int(b'12') → 12, int(b'ff', 16) → 255), with the b'…' repr
+    // preserved in the ValueError message.
+    let __bytesRepr = null;
+    const __dec = __bytesArgDecode(x);
+    if (__dec !== null) {
+        __bytesRepr = __dec.repr;
+        x = __dec.s;
+    }
     if (typeof x === "number") {
         if (Number.isNaN(x)) throw new ValueError("cannot convert float NaN to integer");
         if (!Number.isFinite(x)) throw new OverflowError("cannot convert float infinity to integer");
@@ -195,11 +314,14 @@ export function pyInt(x, base) {
         return Number.isSafeInteger(t) ? t : BigInt(t);
     }
     if (typeof x === "string" || x instanceof String) {
-        const b = base == null ? 10 : Number(base);
-        const t = x.trim();
+        // r2 should-fix: bytes strip only ASCII whitespace (see pyFloat) —
+        // int(b'\xa012') raises like CPython; int('\xa012') still parses.
+        const t = __bytesRepr !== null
+            ? x.replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g, "")
+            : x.trim();
         const m = /^([+-]?)([0-9a-zA-Z_]+)$/.exec(t);
         const bad = () => new ValueError(
-            `invalid literal for int() with base ${b}: ${pyRepr(String(x))}`);
+            `invalid literal for int() with base ${b}: ${__bytesRepr ?? pyRepr(String(x))}`);
         if (!m) throw bad();
         const body = m[2];
         // Underscores only BETWEEN digits (no leading/trailing/double).
@@ -221,10 +343,30 @@ export function pyInt(x, base) {
         if (Number.isNaN(v) || digits.split("").some(d => Number.isNaN(parseInt(d, b)))) throw bad();
         return v;
     }
-    if (x != null && typeof x.__int__ === "function") return x.__int__();
-    if (x == null) throw new TypeError("int() argument must be a string, a bytes-like object or a real number, not 'NoneType'");
-    const t = Math.trunc(Number(x));
-    return Number.isSafeInteger(t) || !Number.isFinite(t) ? t : BigInt(t);
+    // F3-r2 (v0.2.4): the Python numeric protocol, not a valueOf heuristic —
+    // PyNumber_Long order: __int__ first (validated: the result must BE an
+    // int — an __int__ returning 1.5 raises "__int__ returned non-int (type
+    // float)"; a bool result is accepted as its int value, bool ⊂ int), then
+    // __index__ (validated by __pyAsIndexInt). Decimal/Fraction implement
+    // exact BigInt-backed __int__ (stdlib) — no more 2^53 precision loss
+    // through Number(). A bare-valueOf object (the r1 __numProtoOk
+    // allowance) raises the receiver TypeError like any protocol-less value.
+    if (x != null && typeof x.__int__ === "function") {
+        const r = x.__int__();
+        if (typeof r === "boolean") return r ? 1 : 0;
+        if (typeof r === "bigint") return r;
+        if (typeof r === "number" && Number.isInteger(r)
+            && (r == null || r.__pyfloat__ !== true)) {
+            return r;
+        }
+        throw new TypeError_(`__int__ returned non-int (type ${__pyTypeName(r)})`);
+    }
+    if (x != null && x.__pyfloat__ !== true && typeof x.__index__ === "function") {
+        return __pyAsIndexInt(x);
+    }
+    throw new TypeError_(
+        `int() argument must be a string, a bytes-like object or a real number, not '${__pyTypeName(x)}'`,
+    );
 }
 
 /**
@@ -234,7 +376,9 @@ export function pyInt(x, base) {
  */
 export function pyDivmod(a, b) {
     if ((__isFloat(a) || __isFloat(b)) && Number(b) === 0) {
-        throw new ZeroDivisionError("float divmod()");
+        // CPython 3.14 unified every ZeroDivisionError from a division/modulo
+        // to the single message "division by zero" (was "float divmod()").
+        throw new ZeroDivisionError("division by zero");
     }
     return pyTuple(pyFloorDiv(a, b), pyMod(a, b));
 }
@@ -885,8 +1029,14 @@ export function pyMul(a, b, fctx) {
 
 /**
  * Python division — true division always returns float.
+ *
+ * (The old third parameter `floatDiv` — codegen's static-float hint, which
+ * only ever selected 3.12's "float division by zero" wording — was removed
+ * with the CPython 3.14 oracle bump: the message is unified and the result
+ * is ALWAYS float, so the hint carried no remaining semantics. A stale
+ * 3-arg call site is harmless in JS but should be cleaned up.)
  */
-export function pyDiv(a, b, floatDiv) {
+export function pyDiv(a, b) {
     // Wave-15 F4: bool ⊂ int (see __boolNum) — exact bool+BigInt arithmetic.
     if (typeof a === "boolean" && __arithNumOk(b)) a = __boolNum(a);
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
@@ -896,15 +1046,11 @@ export function pyDiv(a, b, floatDiv) {
     // #319: divisor converts to float too — a too-large BigInt → OverflowError.
     const bn = __reqNum(b);
     if (bn === 0) {
-        // F4: CPython distinguishes `1/0` ("division by zero") from
-        // `1.0/0.0` ("float division by zero"). `floatDiv` is set by codegen
-        // when an operand is a statically-known float; `__isFloat` catches
-        // non-integer runtime floats. Whole-valued float literals (`2.0`)
-        // compile to the same JS number as an int, so the compile-time flag
-        // is what disambiguates those.
-        throw new ZeroDivisionError(
-            (floatDiv || __isFloat(a) || __isFloat(b)) ? "float division by zero" : "division by zero",
-        );
+        // CPython 3.14 ORACLE: the old float/int distinction (F4 — `1/0`
+        // "division by zero" vs `1.0/0.0` "float division by zero") was
+        // removed upstream; every ZeroDivisionError message is now the single
+        // "division by zero" (which is why the floatDiv hint parameter is gone).
+        throw new ZeroDivisionError("division by zero");
     }
     // #319: true division always produces a float, so a BigInt operand must
     // convert to float — too large → OverflowError (CPython `(10**400)/1.0`).
@@ -928,7 +1074,7 @@ export function pyFloorDiv(a, b) {
     __reqArithNum("//", a, b); // #322 + wave-15 F9
     if (__isFloat(a) || __isFloat(b)) {
         const x = Number(a), y = Number(b);
-        if (y === 0) throw new ZeroDivisionError("float floor division by zero");
+        if (y === 0) throw new ZeroDivisionError("division by zero"); // CPython 3.14: unified (was "float floor division by zero")
         // CPython float_divmod: floor toward -inf, correcting fmod's sign, so
         // 1.0 // 0.1 == 9.0 (not Math.floor(1.0/0.1) == 10). JS `%` is C fmod.
         const mod = x % y;
@@ -938,7 +1084,7 @@ export function pyFloorDiv(a, b) {
         if (div - fd > 0.5) fd += 1;
         return __pyF(fd);
     }
-    if (Number(b) === 0) throw new ZeroDivisionError("integer division or modulo by zero");
+    if (Number(b) === 0) throw new ZeroDivisionError("division by zero"); // CPython 3.14: unified (was "integer division or modulo by zero")
     // Python floors toward -inf; BigInt `/` truncates toward zero.
     return __intBin(
         a, b,
@@ -960,22 +1106,19 @@ export function pyMod(a, b) {
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if ((!__numeric(a) || !__numeric(b)) && a != null && typeof a.__mod__ === "function") return a.__mod__(b);
     if ((!__numeric(a) || !__numeric(b)) && b != null && typeof b.__rmod__ === "function") return b.__rmod__(a);
-    // Wave-15 (narrowed): `%` with a string LEFT operand is printf-style
-    // formatting in Python — a surface PythScribe does NOT implement (known
-    // limitation; use f-strings). Raise an HONEST unsupported-feature error
-    // (NotImplementedError), never a counterfeit CPython TypeError and never
-    // the old silent BigInt coercion (`"4" % 2` → 0) / raw JS SyntaxError
-    // crash (`"%d" % 5`). Implementing `%`-format (or matching CPython's
-    // exact TypeError split) is the arithmetic-type-safety workstream.
+    // E3 (was wave-15 narrowed): `%` with a string LEFT operand is
+    // printf-style formatting — now implemented to the CPython spec by
+    // pyStrMod (runtime.js), the same render engine as f-strings/format().
+    // (The old honest NotImplementedError is retired; `"4" % 2` raises
+    // CPython's "unsupported format character" ValueError family or
+    // formats, exactly as the oracle does.)
     if (typeof a === "string") {
-        throw new NotImplementedError(
-            "printf-style %-formatting is not supported by PythScribe; use an f-string",
-        );
+        return pyStrMod(a, b);
     }
     __reqArithNum("%", a, b); // #322 + wave-15 F9 (str/list no longer coerce)
     if (__isFloat(a) || __isFloat(b)) {
         const bf = __reqNum(b);
-        if (bf === 0) throw new ZeroDivisionError("float modulo by zero");
+        if (bf === 0) throw new ZeroDivisionError("division by zero"); // CPython 3.14: unified (was "float modulo by zero")
         // Sign-of-divisor correction WITHOUT the `(+y)%y` re-mod: at a huge
         // divisor, `(2.5 % 2**53) + 2**53` rounds and the final `%` returns
         // a corrupted residue (guard-matrix catch). Add the divisor only
@@ -985,10 +1128,10 @@ export function pyMod(a, b) {
         if (m !== 0 && (m < 0) !== (bf < 0)) m += bf;
         return __pyF(m);
     }
-    // CPython 3.12: the `%` operator says "integer modulo by zero"; only
-    // `//` (and divmod via pyFloorDiv) keeps "integer division or modulo
-    // by zero".
-    if (Number(b) === 0) throw new ZeroDivisionError("integer modulo by zero");
+    // CPython 3.14 ORACLE: every division/modulo ZeroDivisionError message was
+    // unified to "division by zero" (3.12 said "integer modulo by zero" for
+    // `%` and "integer division or modulo by zero" for `//`/divmod).
+    if (Number(b) === 0) throw new ZeroDivisionError("division by zero");
     // Same sign-correction form for ints: `((x % y) + y) % y` overflowed
     // 2**53 in the INTERMEDIATE (x%y + y can reach 2y) and rounded before
     // the final `%`, silently corrupting results near MAX_SAFE.
@@ -1021,9 +1164,11 @@ export function pyPow(a, b, fctx) {
             const an = __reqNum(a), bn = __reqNum(b);
             // CPython: zero (int or float, -0.0 included) to a negative power
             // is ZeroDivisionError — the old raw `0 ** -1` produced Infinity,
-            // which the overflow guard mislabeled OverflowError.
+            // which the overflow guard mislabeled OverflowError. CPython 3.14
+            // reworded the message to "zero to a negative power" (3.12 said
+            // "0.0 cannot be raised to a negative power").
             if (an === 0 && bn < 0) {
-                throw new ZeroDivisionError("0.0 cannot be raised to a negative power");
+                throw new ZeroDivisionError("zero to a negative power");
             }
             const r = an ** bn;
             if (!isFinite(r) && isFinite(an) && isFinite(bn)) {
@@ -1125,11 +1270,72 @@ function __setLe(a, b) {
     return true;
 }
 
+// F1 (v0.2.4): bytes/bytearray order lexicographically BY BYTE VALUE, like
+// CPython (b"\x02" < b"\x10"). The old raw-`<` fallback compared the
+// comma-joined decimal toString ("2" vs "16" → wrong answer, silently).
+function __bytesLt(a, b) {
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+        if (a[i] !== b[i]) return a[i] < b[i];
+    }
+    return a.length < b.length;
+}
+
+// F1 (v0.2.4): THE cross-type ordering guard. CPython's rich comparisons
+// raise TypeError when the operands are not order-compatible (`1 < 'a'`,
+// `None < 1`, `[1] < 1`, `{} < {}`, unordered class instances); the old
+// final fallback leaked JS `<` coercion and returned a silent-wrong
+// boolean. Runs AFTER dunder dispatch and after the legitimate typed arms
+// (set subset, sequence lexicographic, bytes), so it only fires where
+// CPython itself would raise. Ordering is legal between:
+//   * any two numerics — int/float/bool/boxed-float mix freely
+//     (__arithNumOk is the same numeric-operand authority the arithmetic
+//     guards use), and
+//   * two strings.
+// Everything else raises with CPython's message shape. pyLt is the ONE
+// comparison authority — heapq/bisect and the __seqLt element recursion
+// already route here, so the guard covers those derived surfaces in one
+// place. (runtime.js's pySorted/pyListSort/__minmax still carry local
+// raw-`<` comparators and must be consolidated onto pyLt/pyGt — tracked
+// as the runtime.js half of this F1 class fix.)
+function __cmpTypeGuard(op, a, b) {
+    if (__arithNumOk(a) && __arithNumOk(b)) return;
+    if (typeof a === "string" && typeof b === "string") return;
+    throw new TypeError_(
+        `'${op}' not supported between instances of `
+        + `'${__pyTypeName(a)}' and '${__pyTypeName(b)}'`,
+    );
+}
+
+// F1-r2 (v0.2.4): list and tuple are NOT order-compatible — both compile to
+// JS arrays (distinguished only by the __pytuple__ brand), so the bare
+// Array.isArray pair-check silently ordered `[1] < (2,)` where CPython
+// raises TypeError. Same-kind pairs (list↔list, tuple↔tuple) still order
+// lexicographically; a mixed pair falls through to __cmpTypeGuard, which
+// renders CPython's exact 'list'/'tuple' operand names via __pyTypeName.
+const __seqKindOk = (a, b) => !!a.__pytuple__ === !!b.__pytuple__;
+
+// r2 should-fix: CPython's rich-comparison protocol tries the RIGHT
+// operand's reflected method FIRST when type(b) is a strict subclass of
+// type(a) AND overrides the reflected method (a different implementation
+// than a's — an inherited copy keeps the normal left-first order). The r1
+// dispatch was unconditionally left-first, so `A() < B()` for B(A)
+// overriding __gt__ called A.__lt__ where CPython calls B.__gt__.
+const __reflFirst = (a, b, aMeth, bMeth) =>
+    a !== null && b !== null
+    && typeof a === "object" && typeof b === "object"
+    && typeof bMeth === "function" && bMeth !== aMeth
+    && a.constructor && b.constructor && a.constructor !== b.constructor
+    && b instanceof a.constructor;
+
 export function pyLt(a, b) {
     if (a instanceof Set && b instanceof Set) return a.size < b.size && __setLe(a, b);
+    if (__reflFirst(a, b, a?.__gt__, b?.__gt__)) return b.__gt__(a);
     if (a != null && typeof a.__lt__ === "function") return a.__lt__(b);
     if (b != null && typeof b.__gt__ === "function") return b.__gt__(a);
-    if (Array.isArray(a) && Array.isArray(b)) return __seqLt(a, b);
+    if (Array.isArray(a) && Array.isArray(b) && __seqKindOk(a, b)) return __seqLt(a, b);
+    if (a instanceof Uint8Array && b instanceof Uint8Array) return __bytesLt(a, b);
+    __cmpTypeGuard("<", a, b);
     return a < b;
 }
 
@@ -1138,9 +1344,12 @@ export function pyLt(a, b) {
  */
 export function pyLe(a, b) {
     if (a instanceof Set && b instanceof Set) return __setLe(a, b);
+    if (__reflFirst(a, b, a?.__ge__, b?.__ge__)) return b.__ge__(a);
     if (a != null && typeof a.__le__ === "function") return a.__le__(b);
     if (b != null && typeof b.__ge__ === "function") return b.__ge__(a);
-    if (Array.isArray(a) && Array.isArray(b)) return !__seqLt(b, a);
+    if (Array.isArray(a) && Array.isArray(b) && __seqKindOk(a, b)) return !__seqLt(b, a);
+    if (a instanceof Uint8Array && b instanceof Uint8Array) return !__bytesLt(b, a);
+    __cmpTypeGuard("<=", a, b);
     return a <= b;
 }
 
@@ -1149,9 +1358,12 @@ export function pyLe(a, b) {
  */
 export function pyGt(a, b) {
     if (a instanceof Set && b instanceof Set) return b.size < a.size && __setLe(b, a);
+    if (__reflFirst(a, b, a?.__lt__, b?.__lt__)) return b.__lt__(a);
     if (a != null && typeof a.__gt__ === "function") return a.__gt__(b);
     if (b != null && typeof b.__lt__ === "function") return b.__lt__(a);
-    if (Array.isArray(a) && Array.isArray(b)) return __seqLt(b, a);
+    if (Array.isArray(a) && Array.isArray(b) && __seqKindOk(a, b)) return __seqLt(b, a);
+    if (a instanceof Uint8Array && b instanceof Uint8Array) return __bytesLt(b, a);
+    __cmpTypeGuard(">", a, b);
     return a > b;
 }
 
@@ -1160,9 +1372,12 @@ export function pyGt(a, b) {
  */
 export function pyGe(a, b) {
     if (a instanceof Set && b instanceof Set) return __setLe(b, a);
+    if (__reflFirst(a, b, a?.__le__, b?.__le__)) return b.__le__(a);
     if (a != null && typeof a.__ge__ === "function") return a.__ge__(b);
     if (b != null && typeof b.__le__ === "function") return b.__le__(a);
-    if (Array.isArray(a) && Array.isArray(b)) return !__seqLt(a, b);
+    if (Array.isArray(a) && Array.isArray(b) && __seqKindOk(a, b)) return !__seqLt(a, b);
+    if (a instanceof Uint8Array && b instanceof Uint8Array) return !__bytesLt(a, b);
+    __cmpTypeGuard(">=", a, b);
     return a >= b;
 }
 
@@ -1174,16 +1389,30 @@ export function pyNe(a, b) {
     return !pyEq(a, b);
 }
 
+// F4 (v0.2.4): THE unary operand-type guard. The wave-15 arithmetic guard
+// was binary-only — unary minus/plus and abs() never entered its dispatch,
+// so `-'a'` → NaN, `-[1]` → -1, `abs(None)` → 0 leaked silent-wrong JS
+// coercions where CPython raises TypeError. Runs AFTER dunder dispatch
+// (__neg__/__pos__/__abs__ — Decimal/Fraction/PyFloat/PyComplex keep their
+// own arms) — a numeric operand (number/bigint/bool, __arithNumOk) passes;
+// everything else raises CPython's exact message shape
+// ("bad operand type for unary -: 'str'" / "bad operand type for abs(): 'NoneType'").
+function __unaryTypeGuard(op, a) {
+    if (__arithNumOk(a)) return;
+    throw new TypeError_(`bad operand type for ${op}: '${__pyTypeName(a)}'`);
+}
+
 /**
  * Python `abs()`. Dispatches `__abs__` when defined (Decimal/Fraction
  * return their own type, not a coerced float) — otherwise falls back to
- * plain `Math.abs`, unchanged from before this helper existed.
+ * plain `Math.abs`, guarded on numeric operands (F4).
  */
 export function pyAbs(x) {
     if (x != null && typeof x.__abs__ === "function") return x.__abs__();
     // Python: abs() of an int of any magnitude stays an exact int; JS
     // Math.abs throws on BigInt ("Cannot convert a BigInt value to a number").
     if (typeof x === "bigint") return x < 0n ? -x : x;
+    __unaryTypeGuard("abs()", x);
     return Math.abs(x);
 }
 
@@ -1193,6 +1422,7 @@ export function pyAbs(x) {
 export function pyNeg(a) {
     if (a != null && typeof a.__neg__ === "function") return a.__neg__();
     if (typeof a === "bigint") return __norm(-a);
+    __unaryTypeGuard("unary -", a);
     return -a;
 }
 
@@ -1201,13 +1431,14 @@ export function pyNeg(a) {
  * "Cannot convert a BigInt value to a number" on a large int — `+int` is
  * the identity in Python, at any magnitude. Dispatches `__pos__` (boxed
  * floats return themselves; Decimal keeps its type), keeps int forms
- * unchanged, and falls back to JS ToNumber for the rest (the pre-existing
- * behavior for non-numerics).
+ * unchanged, and raises CPython's TypeError for non-numerics (F4 — the
+ * old ToNumber fallback returned NaN for `+'a'`).
  */
 export function pyPos(a) {
     if (a != null && typeof a.__pos__ === "function") return a.__pos__();
     if (typeof a === "bigint" || (typeof a === "number" && Number.isInteger(a))) return a;
     if (typeof a === "boolean") return a ? 1 : 0;
+    __unaryTypeGuard("unary +", a);
     return +a;
 }
 
@@ -1440,6 +1671,9 @@ function __pyObjAddr(obj) {
     return a.toString(16).padStart(12, "0");
 }
 
+// E3: in-flight container repr tracking for the self-reference placeholder.
+const __reprSeen = new Set();
+
 export function pyRepr(obj) {
     if (obj === null || obj === undefined) return "None";
     if (typeof obj === "boolean") return obj ? "True" : "False";
@@ -1543,22 +1777,41 @@ export function pyRepr(obj) {
     // namedtuple extends Array, deque) print CPython-style through it.
     // Pythonic-checks sweep; plain arrays/Maps/Sets have no __repr__.
     if (typeof obj.__repr__ === "function") return obj.__repr__();
+    // E3: self-referential containers print CPython's placeholder instead
+    // of recursing forever (list [...], tuple (...), dict {...}).
+    if (__reprSeen.has(obj)) {
+        if (obj.__pytuple__) return "(...)";
+        if (Array.isArray(obj)) return "[...]";
+        return "{...}";
+    }
     if (typeof obj.__pytuple__ !== "undefined" || (Array.isArray(obj) && obj.__pytuple__)) {
-        const inner = obj.map(pyRepr).join(", ");
-        return obj.length === 1 ? `(${inner},)` : `(${inner})`;
+        __reprSeen.add(obj);
+        try {
+            const inner = obj.map(pyRepr).join(", ");
+            return obj.length === 1 ? `(${inner},)` : `(${inner})`;
+        } finally { __reprSeen.delete(obj); }
     }
     if (Array.isArray(obj)) {
-        return `[${obj.map(pyRepr).join(", ")}]`;
+        __reprSeen.add(obj);
+        try {
+            return `[${obj.map(pyRepr).join(", ")}]`;
+        } finally { __reprSeen.delete(obj); }
     }
     if (obj instanceof Set) {
         if (obj.size === 0) return "set()";
-        return `{${[...obj].map(pyRepr).join(", ")}}`;
+        __reprSeen.add(obj);
+        try {
+            return `{${[...obj].map(pyRepr).join(", ")}}`;
+        } finally { __reprSeen.delete(obj); }
     }
     if (obj instanceof Map) {
         // Explicit .entries(): PyDict's default iterator yields KEYS.
-        const parts = [];
-        for (const [k, v] of obj.entries()) parts.push(`${pyRepr(k)}: ${pyRepr(v)}`);
-        return `{${parts.join(", ")}}`;
+        __reprSeen.add(obj);
+        try {
+            const parts = [];
+            for (const [k, v] of obj.entries()) parts.push(`${pyRepr(k)}: ${pyRepr(v)}`);
+            return `{${parts.join(", ")}}`;
+        } finally { __reprSeen.delete(obj); }
     }
     if (typeof obj.__repr__ === "function") return obj.__repr__();
     // F4: CPython repr of an exception is `Name('message')`, not a dict of
@@ -1589,11 +1842,14 @@ export function pyRepr(obj) {
             return `<${mod}.${nm} object at 0x${__pyObjAddr(obj)}>`;
         }
         // Plain object → dict repr
-        const parts = [];
-        for (const k of __pyOwnKeys(obj)) { // r6: symbol entries shown, not hidden
-            parts.push(`${pyRepr(k)}: ${pyRepr(obj[k])}`);
-        }
-        return `{${parts.join(", ")}}`;
+        __reprSeen.add(obj);
+        try {
+            const parts = [];
+            for (const k of __pyOwnKeys(obj)) { // r6: symbol entries shown, not hidden
+                parts.push(`${pyRepr(k)}: ${pyRepr(obj[k])}`);
+            }
+            return `{${parts.join(", ")}}`;
+        } finally { __reprSeen.delete(obj); }
     }
     return String(obj);
 }
@@ -2120,12 +2376,23 @@ function __byteArraySliceBounds(len, start, stop, step) {
  *  object every alias sees; an extended slice assigns element-wise and
  *  requires an exactly-matching source length, CPython-exact message. */
 function __byteArraySetSlice(arr, start, stop, step, values) {
+    // F5-r2 (v0.2.4): validate the slice COMPONENTS before any mutation or
+    // source coercion (CPython order: PySlice indices first, then the RHS).
+    // The old path went straight to Number(...) coercion, so a string or
+    // boxed-float bound silently selected a wrong range on a WRITE
+    // (ba['0':2] = b'x' mutated; CPython raises the slice-indices TypeError
+    // and leaves the bytearray untouched). Same validator as list get/set/del
+    // (__pySliceIndex); BigInt bounds demote like pySetSlice.
+    step = __pySliceIndex(step);
+    if (step === 0 || step === 0n) throw new ValueError("slice step cannot be zero");
+    start = __pySliceIndex(start);
+    stop = __pySliceIndex(stop);
+    if (typeof start === "bigint") start = Number(start);
+    if (typeof stop === "bigint") stop = Number(stop);
+    if (typeof step === "bigint") step = Number(step);
     const src = __byteArraySrc(values, arr);
     const n = arr.length;
-    step = step == null ? null : Number(step);
     if (step == null || step === 1) {
-        start = start == null ? null : Number(start);
-        stop = stop == null ? null : Number(stop);
         let s = start == null ? 0 : start < 0 ? Math.max(0, n + start) : Math.min(start, n);
         let e = stop == null ? n : stop < 0 ? Math.max(0, n + stop) : Math.min(stop, n);
         if (e < s) e = s;
@@ -2160,11 +2427,17 @@ function __byteArraySetSlice(arr, start, stop, step, values) {
  *  __byteArraySetSlice; out-of-range bounds clamp to a no-op like
  *  CPython slice.indices). */
 function __byteArrayDelSlice(arr, start, stop, step) {
+    // F5-r2 (v0.2.4): same pre-mutation component validation as
+    // __byteArraySetSlice (del ba[0:'2'] must raise, not coerce).
+    step = __pySliceIndex(step);
+    if (step === 0 || step === 0n) throw new ValueError("slice step cannot be zero");
+    start = __pySliceIndex(start);
+    stop = __pySliceIndex(stop);
+    if (typeof start === "bigint") start = Number(start);
+    if (typeof stop === "bigint") stop = Number(stop);
+    if (typeof step === "bigint") step = Number(step);
     const n = arr.length;
-    step = step == null ? null : Number(step);
     if (step == null || step === 1) {
-        start = start == null ? null : Number(start);
-        stop = stop == null ? null : Number(stop);
         let s = start == null ? 0 : start < 0 ? Math.max(0, n + start) : Math.min(start, n);
         let e = stop == null ? n : stop < 0 ? Math.max(0, n + stop) : Math.min(stop, n);
         if (e < s) e = s;

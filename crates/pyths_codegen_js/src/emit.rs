@@ -608,6 +608,28 @@ impl JsInferredType {
     }
 }
 
+/// F1 (v0.2.4) — syntactic operand kind for the compare/unary bare-op fast
+/// paths. `JsInferredType::Primitive` lumps int/bool/str/None into one
+/// bucket, so the bare-`<` fast path used to fire for `1 < 'a'` (both
+/// "scalar") and emit a silent-wrong JS coercion (`false`) where CPython
+/// raises TypeError — bypassing the runtime __cmpTypeGuard entirely. This
+/// classifier recovers the kind from the expression SHAPE so the emitter can
+/// gate the bare path on operand-kind compatibility and route statically
+/// incompatible arms through pyLt/pyLe/pyGt/pyGe (and unary str/None
+/// operands through pyNeg), whose guards raise CPython's exact TypeError.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CmpOperandKind {
+    /// Provably numeric: int/float/bool literal (incl. unary ±), or a
+    /// Float-inferred expression.
+    Num,
+    /// Provably str: string literal or f-string.
+    Str,
+    /// The None literal — never orderable in Python (`None < None` raises).
+    NoneLit,
+    /// Kind unknown from the shape (a Primitive-typed name, call result, …).
+    Other,
+}
+
 /// Arbitrary-precision-faithful arithmetic helpers (inline mirror of
 /// `runtime/src/operators.js`). A Python `int` is a JS `Number` while it
 /// fits the safe-integer range and a `BigInt` once it would overflow
@@ -779,14 +801,14 @@ function pyMul(a, b, fctx) {
     }
     __binOpTypeError("*", a, b);
 }
-function pyDiv(a, b, floatDiv) {
+function pyDiv(a, b) {
     if (typeof a === "boolean" && __arithNumOk(b)) a = __boolNum(a);
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if ((!__numeric(a) || !__numeric(b)) && a != null && typeof a.__truediv__ === "function") return a.__truediv__(b);
     if ((!__numeric(a) || !__numeric(b)) && b != null && typeof b.__rtruediv__ === "function") return b.__rtruediv__(a);
     __reqArithNum("/", a, b);
     const bn = __reqNum(b);
-    if (bn === 0) throw __zde((floatDiv || __isFloat(a) || __isFloat(b)) ? "float division by zero" : "division by zero");
+    if (bn === 0) throw __zde("division by zero"); // CPython 3.14: unified (was float/int-distinguished via the removed floatDiv hint)
     return __pyF(__reqNum(a) / bn);
 }
 function pyFloorDiv(a, b) {
@@ -797,7 +819,7 @@ function pyFloorDiv(a, b) {
     __reqArithNum("//", a, b);
     if (__isFloat(a) || __isFloat(b)) {
         const x = Number(a), y = Number(b);
-        if (y === 0) throw __zde("float floor division by zero");
+        if (y === 0) throw __zde("division by zero"); // CPython 3.14: unified
         const mod = x % y;
         let div = (x - mod) / y;
         if (mod !== 0 && (y < 0) !== (mod < 0)) div -= 1;
@@ -805,7 +827,7 @@ function pyFloorDiv(a, b) {
         if (div - fd > 0.5) fd += 1;
         return __pyF(fd);
     }
-    if (Number(b) === 0) throw __zde("integer division or modulo by zero");
+    if (Number(b) === 0) throw __zde("division by zero"); // CPython 3.14: unified
     return __intBin(a, b, (x, y) => Math.floor(x / y), (x, y) => { let q = x / y; if (x % y !== 0n && (x < 0n) !== (y < 0n)) q -= 1n; return q; });
 }
 function pyMod(a, b) {
@@ -813,23 +835,22 @@ function pyMod(a, b) {
     if (typeof b === "boolean" && __arithNumOk(a)) b = __boolNum(b);
     if ((!__numeric(a) || !__numeric(b)) && a != null && typeof a.__mod__ === "function") return a.__mod__(b);
     if ((!__numeric(a) || !__numeric(b)) && b != null && typeof b.__rmod__ === "function") return b.__rmod__(a);
-    // Honest unsupported-feature error: printf-style %-formatting is a
-    // surface PythScribe does not implement (known limitation; use f-strings).
+    // E3: printf-style %-formatting — pyStrMod (extracted from the canonical
+    // runtime.js; forced into the needed-set whenever pyMod is inlined).
     if (typeof a === "string") {
-        const e = new Error("printf-style %-formatting is not supported by PythScribe; use an f-string");
-        e.name = "NotImplementedError"; throw e;
+        return pyStrMod(a, b);
     }
     __reqArithNum("%", a, b);
     if (__isFloat(a) || __isFloat(b)) {
         const bf = __reqNum(b);
-        if (bf === 0) throw __zde("float modulo by zero");
+        if (bf === 0) throw __zde("division by zero"); // CPython 3.14: unified
         // Sign-of-divisor correction without the `(+y)%y` re-mod (rounds at
         // huge divisors) — mirrors runtime/src/operators.js pyMod.
         let m = __reqNum(a) % bf;
         if (m !== 0 && (m < 0) !== (bf < 0)) m += bf;
         return __pyF(m);
     }
-    if (Number(b) === 0) throw __zde("integer modulo by zero"); // CPython 3.12: `%` says "modulo", `//` keeps "division or modulo"
+    if (Number(b) === 0) throw __zde("division by zero"); // CPython 3.14: all division/modulo ZeroDivisionError messages unified
     return __intBin(a, b, (x, y) => { let m = x % y; if (m !== 0 && (m < 0) !== (y < 0)) m += y; return m; }, (x, y) => { let m = x % y; if (m !== 0n && (m < 0n) !== (y < 0n)) m += y; return m; });
 }
 function pyPow(a, b, fctx) {
@@ -840,7 +861,7 @@ function pyPow(a, b, fctx) {
             const an = __reqNum(a), bn = __reqNum(b);
             // Mirrors runtime/src/operators.js pyPow: zero to a negative
             // power is CPython's ZeroDivisionError, not OverflowError.
-            if (an === 0 && bn < 0) throw __zde("0.0 cannot be raised to a negative power");
+            if (an === 0 && bn < 0) throw __zde("zero to a negative power"); // CPython 3.14 reworded (was "0.0 cannot be raised to a negative power")
             const r = an ** bn;
             if (!isFinite(r) && isFinite(an) && isFinite(bn)) throw __ofe("(34, 'Result too large')");
             return __pyF(r);
@@ -1238,6 +1259,16 @@ pub struct JsCodegen {
     /// Per-scope name → coarse inferred type for the JS-quirk fixes.
     /// Mirrors `declared_scopes` exactly (push/pop in lockstep).
     local_types: Vec<HashMap<String, JsInferredType>>,
+    /// F1-r2 (v0.2.4): per-scope name → compare-operand kind (Num/Str/
+    /// NoneLit/Other), seeded at assignment/param/for-target sites. The
+    /// compare/unary bare fast paths are gated on PROVABLY-NUMERIC operands
+    /// (`cmp_bare_compatible`); this table is what lets a str-/None-typed
+    /// VARIABLE (`s = "a"; s < 5`) route through the runtime helpers instead
+    /// of leaking a bare JS coercion, while `x = 0; x < n` keeps the bare
+    /// hot path. Unlike `local_types`, `Other` IS recorded (re-assignment
+    /// to an unknown RHS must demote a previously-Num name).
+    /// Mirrors `declared_scopes` push/pop in lockstep.
+    local_cmp_kinds: Vec<HashMap<String, CmpOperandKind>>,
     /// When true, the immediately-pending Subscript/Attribute emission is
     /// the LHS of an assignment — emit bare `a[i]` / `x.y`, not the
     /// pyGetItem-wrapped read form. Reset to false before descending into
@@ -1501,6 +1532,7 @@ impl JsCodegen {
             import_rename_counter: 0,
             scope_import_decls: vec![HashMap::new()], // module scope
             local_types: vec![HashMap::new()],
+            local_cmp_kinds: vec![HashMap::new()],
             in_lhs_target: false,
             in_component: false,
             in_classmethod: false,
@@ -1579,6 +1611,7 @@ impl JsCodegen {
             import_rename_counter: 0,
             scope_import_decls: vec![HashMap::new()], // module scope
             local_types: vec![HashMap::new()],
+            local_cmp_kinds: vec![HashMap::new()],
             in_lhs_target: false,
             in_component: false,
             in_classmethod: false,
@@ -1863,6 +1896,12 @@ impl JsCodegen {
         if needed.contains("pyFormatDynamic") {
             needed.insert("pyFormatSpec".to_string());
         }
+        // E3: the hand-inlined arith pyMod routes a string left operand to
+        // printf-style pyStrMod (extracted; its own refs — pyFormatSpec,
+        // pyStr, pyRepr, pyAscii — resolve transitively via the extractor).
+        if needed.contains("pyMod") {
+            needed.insert("pyStrMod".to_string());
+        }
         // #110: tuple(iterable) factory builds on the pyTuple marker.
         if needed.contains("pyTupleOf") {
             needed.insert("pyTuple".to_string());
@@ -2145,91 +2184,26 @@ function pyRange(startOrStop, stop, step) {
 "#,
             );
         }
-        if needed.contains("pySorted") {
-            rt.push_str(
-                r#"function pySorted(iterable, { key, reverse } = {}) {
-    const arr = [...pyForIter(iterable)];
-    const lt = (a, b) => {
-        if (a != null && typeof a.__lt__ === "function") return !!a.__lt__(b);
-        if (Array.isArray(a) && Array.isArray(b)) {
-            const n = Math.min(a.length, b.length);
-            for (let i = 0; i < n; i++) {
-                if (lt(a[i], b[i])) return true;
-                if (lt(b[i], a[i])) return false;
-            }
-            return a.length < b.length;
-        }
-        return a < b;
-    };
-    const cmp = (a, b) => (lt(a, b) ? -1 : lt(b, a) ? 1 : 0);
-    const dir = reverse ? -1 : 1;
-    if (key) arr.sort((a, b) => dir * cmp(key(a), key(b)));
-    else arr.sort((a, b) => dir * cmp(a, b));
-    return arr;
-}
-"#,
-            );
-        }
+        // F1 (v0.2.4): the hand-inlined pySorted mirror was DELETED — the
+        // package pySorted now compares through pyLt (cross-type TypeError,
+        // bytes ordering), and the inline copy carried its own raw-`<` local
+        // comparator (sorted([1, 'a']) stayed silently wrong under
+        // `pyths run`). It now flows through the #170 extraction fallback,
+        // which pulls the canonical runtime/src/runtime.js pySorted (its
+        // pyForIter dep links against the hand-inlined copy).
         if needed.contains("pyReversed") {
             rt.push_str("function pyReversed(iterable) { return [...iterable].reverse(); }\n");
         }
         // WF-1: the hand-written inline __pyEffect mirror was DELETED — the
         // #170 extraction pulls the canonical package __pyEffect (and its
         // spread-form sibling __pyEffectArgs) from runtime/src/runtime.js.
-        if needed.contains("pyRound") {
-            rt.push_str(
-                r#"function __roundBigNeg(x, k) {
-    const p = 10n ** BigInt(k);
-    const neg = x < 0n;
-    const a = neg ? -x : x;
-    const q = a / p;
-    const r = a % p;
-    const twice = r * 2n;
-    let up;
-    if (twice < p) up = false;
-    else if (twice > p) up = true;
-    else up = (q % 2n) === 1n;
-    const res = up ? (q + 1n) * p : q * p;
-    return neg ? -res : res;
-}
-function pyRound(x, ndigits) {
-    if (typeof x === "boolean") x = x ? 1 : 0;
-    if (typeof ndigits === "boolean") ndigits = ndigits ? 1 : 0;
-    const __wasF = x != null && x.__pyfloat__ === true;
-    if (__wasF) x = x.valueOf();
-    if (typeof x === "bigint") {
-        const nd = ndigits == null ? 0 : Math.trunc(Number(ndigits));
-        return nd >= 0 ? x : __roundBigNeg(x, -nd);
-    }
-    if (typeof x === "number" && !isFinite(x)) {
-        if (ndigits == null) {
-            if (Number.isNaN(x)) throw new ValueError("cannot convert float NaN to integer");
-            throw new OverflowError("cannot convert float infinity to integer");
-        }
-        return __pyF(x);
-    }
-    if (x == null || typeof x !== "number") {
-        throw new TypeError("type cannot be interpreted as a number");
-    }
-    const __reF = ndigits != null && (__wasF || !Number.isInteger(x));
-    const nd = ndigits == null ? 0 : Math.trunc(ndigits);
-    const factor = Math.pow(10, nd);
-    if (factor === 0) return __reF ? __pyF(x < 0 ? -0 : 0) : (x < 0 ? -0 : 0);
-    if (!isFinite(factor)) return __reF ? __pyF(x) : x;
-    const scaled = x * factor;
-    if (!isFinite(scaled)) return __reF ? __pyF(x) : x;
-    const floor = Math.floor(scaled);
-    const diff = scaled - floor;
-    let rounded;
-    if (diff > 0.5) rounded = floor + 1;
-    else if (diff < 0.5) rounded = floor;
-    else rounded = floor % 2 === 0 ? floor : floor + 1;
-    const result = rounded / factor;
-    return __reF ? __pyF(result) : result;
-}
-"#,
-            );
-        }
+        // F6 (v0.2.4): pyRound's hand-written inline copy was DELETED — it had
+        // already drifted (it kept the scale-multiply ndigits path after the
+        // package moved to exact decimal rounding via __pyRoundDecimal). It now
+        // flows through the #170 extraction fallback below, which pulls the
+        // canonical runtime/src/runtime.js pyRound with its transitive deps
+        // (__roundBigNeg, __pyRoundDecimal, __pyF, exception classes) — the
+        // same anti-drift migration pySlice/pySetSlice/pyUpdate went through.
         if needed.contains("pyLen") {
             rt.push_str(
                 r#"function pyLen(obj) {
@@ -2483,41 +2457,12 @@ class PyDict extends Map {
 "#,
             );
         }
-        if needed.contains("pyFormatFloat") {
-            // Mirrors runtime/src/operators.js's pyFormatFloat exactly —
-            // see that copy for the full derivation comment (CPython's
-            // decpt<=-4||decpt>16 scientific-notation threshold, reusing
-            // toExponential()'s shortest-round-trip digit string).
-            rt.push_str(r#"function pyFormatFloat(n) {
-    if (typeof n === "bigint") { const f = Number(n); if (!isFinite(f)) { const e = new Error("int too large to convert to float"); e.name = "OverflowError"; throw e; } n = f; }
-    if (n != null && n.__pyfloat__ === true) n = n.valueOf();
-    if (Number.isNaN(n)) return "nan";
-    if (n === Infinity) return "inf";
-    if (n === -Infinity) return "-inf";
-    const negative = n < 0 || Object.is(n, -0);
-    const abs = Math.abs(n);
-    if (abs === 0) return negative ? "-0.0" : "0.0";
-    const m = /^(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(abs.toExponential());
-    const digits = m[1] + (m[2] || "");
-    const exponent = parseInt(m[3], 10);
-    const decpt = exponent + 1;
-    let out;
-    if (decpt <= -4 || decpt > 16) {
-        const mantissa = digits.length > 1 ? `${digits[0]}.${digits.slice(1)}` : digits;
-        const sign = exponent < 0 ? "-" : "+";
-        const expDigits = String(Math.abs(exponent)).padStart(2, "0");
-        out = `${mantissa}e${sign}${expDigits}`;
-    } else if (decpt <= 0) {
-        out = `0.${"0".repeat(-decpt)}${digits}`;
-    } else if (decpt >= digits.length) {
-        out = `${digits}${"0".repeat(decpt - digits.length)}.0`;
-    } else {
-        out = `${digits.slice(0, decpt)}.${digits.slice(decpt)}`;
-    }
-    return negative ? `-${out}` : out;
-}
-"#);
-        }
+        // E3 de-inline: pyFormatFloat
+        // now extracted from the canonical package runtime by
+        // append_extracted_helpers (#170) with transitive deps — the
+        // hand-written mirror had drifted (stale parseFormatSpec grammar;
+        // no __reprSeen self-reference guard). See MIGRATED_TO_EXTRACTION
+        // in tests/inline_runtime_parity.rs.
         if needed.contains("pyTuple") {
             rt.push_str(
                 r#"function pyTuple(...items) {
@@ -2527,95 +2472,18 @@ class PyDict extends Map {
 "#,
             );
         }
-        if needed.contains("pyRepr") {
-            rt.push_str(r#"const __NP_RANGES = [0x0,0x1f,0x7f,0xa0,0xad,0xad,0x600,0x605,0x61c,0x61c,0x6dd,0x6dd,0x70f,0x70f,0x890,0x891,0x8e2,0x8e2,0x1680,0x1680,0x180e,0x180e,0x2000,0x200f,0x2028,0x202f,0x205f,0x2064,0x2066,0x206f,0x3000,0x3000,0xd800,0xf8ff,0xfeff,0xfeff,0xfff9,0xfffb,0x110bd,0x110bd,0x110cd,0x110cd,0x13430,0x1343f,0x1bca0,0x1bca3,0x1d173,0x1d17a,0xe0001,0xe0001,0xe0020,0xe007f,0xf0000,0xffffd,0x100000,0x10fffd];
-function __cpNonPrintable(cp) {
-    let lo = 0, hi = __NP_RANGES.length / 2 - 1;
-    while (lo <= hi) { const mid = (lo + hi) >> 1; const a = __NP_RANGES[mid*2], b = __NP_RANGES[mid*2+1]; if (cp < a) hi = mid-1; else if (cp > b) lo = mid+1; else return true; }
-    return false;
-}
-const __pyAddrMap = new WeakMap();
-let __pyAddrNext = 0x7f6c00000000;
-function __pyObjAddr(obj) {
-    let a = __pyAddrMap.get(obj);
-    if (a === undefined) { a = __pyAddrNext; __pyAddrNext += 0x40; __pyAddrMap.set(obj, a); }
-    return a.toString(16).padStart(12, "0");
-}
-function pyRepr(obj) {
-    if (obj === null || obj === undefined) return "None";
-    if (typeof obj === "boolean") return obj ? "True" : "False";
-    if (obj.__pyfloat__ === true) return pyFormatFloat(obj.valueOf());
-    if (typeof obj === "object" && typeof obj.__repr__ === "function") return obj.__repr__();
-    if (typeof obj === "bigint") return obj.toString();
-    if (typeof obj === "number") { if (Number.isInteger(obj) && Math.abs(obj) <= Number.MAX_SAFE_INTEGER) return String(obj); if (Number.isInteger(obj)) return BigInt(obj).toString(); return pyFormatFloat(obj); }
-    if (typeof obj === "string") {
-        let body = "";
-        for (const ch of obj) {
-            if (ch === "\\") body += "\\\\";
-            else if (ch === "\t") body += "\\t";
-            else if (ch === "\n") body += "\\n";
-            else if (ch === "\r") body += "\\r";
-            else {
-                const cp = ch.codePointAt(0);
-                if (__cpNonPrintable(cp)) body += cp < 0x100 ? "\\x" + cp.toString(16).padStart(2, "0") : cp < 0x10000 ? "\\u" + cp.toString(16).padStart(4, "0") : "\\U" + cp.toString(16).padStart(8, "0");
-                else body += ch;
-            }
-        }
-        if (!body.includes("'")) return `'${body}'`;
-        if (!body.includes('"')) return `"${body}"`;
-        return `'${body.replace(/'/g, "\\'")}'`;
-    }
-    if (typeof obj.__pytuple__ !== "undefined" || (Array.isArray(obj) && obj.__pytuple__)) {
-        const inner = obj.map(pyRepr).join(", ");
-        return obj.length === 1 ? `(${inner},)` : `(${inner})`;
-    }
-    if (Array.isArray(obj)) return `[${obj.map(pyRepr).join(", ")}]`;
-    if (obj instanceof Set) { if (obj.size === 0) return "set()"; return `{${[...obj].map(pyRepr).join(", ")}}`; }
-    if (obj instanceof Map) { const parts = []; for (const [k, v] of obj.entries()) parts.push(`${pyRepr(k)}: ${pyRepr(v)}`); return `{${parts.join(", ")}}`; }
-    if (typeof obj.__repr__ === "function") return obj.__repr__();
-    if (obj instanceof Error) {
-        // Drift fix: prefer the class's `__name__` (runtime + user exception
-        // classes stamp it) and repr each of `args` when present, matching the
-        // package pyRepr — so `repr(ValueError('a', 42))` is `ValueError('a', 42)`
-        // not `ValueError(('a', 42))`.
-        const nm = (obj.constructor && obj.constructor.__name__) || obj.name;
-        if (Array.isArray(obj.args)) return `${nm}(${obj.args.map((a) => pyRepr(a)).join(", ")})`;
-        const msg = obj.message;
-        return `${nm}(${msg != null && msg !== "" ? pyRepr(String(msg)) : ""})`;
-    }
-    if (typeof obj === "object") {
-        const proto = Object.getPrototypeOf(obj);
-        if (proto !== Object.prototype && proto !== null) {
-            const ctor = obj.constructor;
-            const nm = (ctor && (ctor.__name__ || ctor.name)) || "object";
-            const mod = (ctor && ctor.__module__) || "__main__";
-            return `<${mod}.${nm} object at 0x${__pyObjAddr(obj)}>`;
-        }
-        const parts = []; for (const k of __pyOwnKeys(obj)) parts.push(`${pyRepr(k)}: ${pyRepr(obj[k])}`); return `{${parts.join(", ")}}`; // r6: symbol entries shown
-    }
-    return String(obj);
-}
-"#);
-        }
-        if needed.contains("pyStr") {
-            // #97: a user `__str__` is renamed to toString() by the codegen —
-            // a non-native toString override is the user's __str__.
-            rt.push_str(
-                r#"function pyStr(obj) {
-    if (typeof obj === "string") return obj;
-    if (obj != null && obj.__pyfloat__ === true) return pyFormatFloat(obj.valueOf());
-    if (obj != null && typeof obj.__str__ === "function") return obj.__str__();
-    if (obj instanceof Error) return obj.message != null ? String(obj.message) : "";
-    if (obj !== null && typeof obj === "object" && !Array.isArray(obj)
-        && typeof obj.toString === "function"
-        && obj.toString !== Object.prototype.toString) {
-        return obj.toString();
-    }
-    return pyRepr(obj);
-}
-"#,
-            );
-        }
+        // E3 de-inline: pyRepr (+ __NP_RANGES/__cpNonPrintable/__pyObjAddr deps)
+        // now extracted from the canonical package runtime by
+        // append_extracted_helpers (#170) with transitive deps — the
+        // hand-written mirror had drifted (stale parseFormatSpec grammar;
+        // no __reprSeen self-reference guard). See MIGRATED_TO_EXTRACTION
+        // in tests/inline_runtime_parity.rs.
+        // E3 de-inline: pyStr
+        // now extracted from the canonical package runtime by
+        // append_extracted_helpers (#170) with transitive deps — the
+        // hand-written mirror had drifted (stale parseFormatSpec grammar;
+        // no __reprSeen self-reference guard). See MIGRATED_TO_EXTRACTION
+        // in tests/inline_runtime_parity.rs.
         // pyEq is no longer hand-inlined here: the canonical
         // runtime/src/operators.js definition is pulled by the #170 extractor
         // with its transitive deps (__isPlainObject, __pyOwnKeys), so the two
@@ -2624,95 +2492,17 @@ function pyRepr(obj) {
         // __pyboundfunc__/__pyboundself__ tags), so `pyths run` printed False
         // where `pyths compile` + the package runtime printed True. Same
         // de-inline pattern as pyType / pyFormatSpec / pyDict below.
-        if needed.contains("__seqLt") {
-            // Drift fix: element comparison routes through pyLt (consults BOTH
-            // `a.__lt__` and the reflected `b.__gt__`, and recurses on nested
-            // sequences) exactly like the package __seqLt — the old local
-            // comparator only checked `x.__lt__`.
-            rt.push_str(
-                r#"function __seqLt(a, b) {
-    const n = Math.min(a.length, b.length);
-    for (let i = 0; i < n; i++) {
-        if (pyLt(a[i], b[i])) return true;
-        if (pyLt(b[i], a[i])) return false;
-    }
-    return a.length < b.length;
-}
-"#,
-            );
-        }
-        if needed.contains("pyLt") {
-            rt.push_str(
-                r#"function pyLt(a, b) {
-    if (a instanceof Set && b instanceof Set) { if (a.size >= b.size) return false; for (const x of a) { if (!b.has(x)) return false; } return true; }
-    if (a != null && typeof a.__lt__ === "function") return a.__lt__(b);
-    if (b != null && typeof b.__gt__ === "function") return b.__gt__(a);
-    if (Array.isArray(a) && Array.isArray(b)) return __seqLt(a, b);
-    return a < b;
-}
-"#,
-            );
-        }
-        if needed.contains("pyLe") {
-            rt.push_str(
-                r#"function pyLe(a, b) {
-    if (a instanceof Set && b instanceof Set) { for (const x of a) { if (!b.has(x)) return false; } return true; }
-    if (a != null && typeof a.__le__ === "function") return a.__le__(b);
-    if (b != null && typeof b.__ge__ === "function") return b.__ge__(a);
-    if (Array.isArray(a) && Array.isArray(b)) return !__seqLt(b, a);
-    return a <= b;
-}
-"#,
-            );
-        }
-        if needed.contains("pyGt") {
-            rt.push_str(
-                r#"function pyGt(a, b) {
-    if (a instanceof Set && b instanceof Set) { if (b.size >= a.size) return false; for (const x of b) { if (!a.has(x)) return false; } return true; }
-    if (a != null && typeof a.__gt__ === "function") return a.__gt__(b);
-    if (b != null && typeof b.__lt__ === "function") return b.__lt__(a);
-    if (Array.isArray(a) && Array.isArray(b)) return __seqLt(b, a);
-    return a > b;
-}
-"#,
-            );
-        }
-        if needed.contains("pyGe") {
-            rt.push_str(
-                r#"function pyGe(a, b) {
-    if (a instanceof Set && b instanceof Set) { for (const x of b) { if (!a.has(x)) return false; } return true; }
-    if (a != null && typeof a.__ge__ === "function") return a.__ge__(b);
-    if (b != null && typeof b.__le__ === "function") return b.__le__(a);
-    if (Array.isArray(a) && Array.isArray(b)) return !__seqLt(a, b);
-    return a >= b;
-}
-"#,
-            );
-        }
-        if needed.contains("pyNeg") {
-            rt.push_str(
-                r#"function pyNeg(a) {
-    if (a != null && typeof a.__neg__ === "function") return a.__neg__();
-    if (typeof a === "bigint") {
-        const __MAX_SAFE = 9007199254740991n;
-        const negated = -a;
-        return negated >= -__MAX_SAFE && negated <= __MAX_SAFE ? Number(negated) : negated;
-    }
-    return -a;
-}
-"#,
-            );
-        }
-        if needed.contains("pyAbs") {
-            rt.push_str(
-                r#"function pyAbs(x) {
-    if (x != null && typeof x.__abs__ === "function") return x.__abs__();
-    if (typeof x === "bigint") return x < 0n ? -x : x;
-    return Math.abs(x);
-}
-"#,
-            );
-        }
+        // F1/F4 (v0.2.4): the hand-inlined pyLt/pyLe/pyGt/pyGe/__seqLt and
+        // pyNeg/pyAbs mirrors were DELETED — they had already drifted (no
+        // __cmpTypeGuard cross-type TypeError, no __bytesLt byte-value
+        // ordering, no __unaryTypeGuard, so inline `pyths run` kept the
+        // silent-wrong JS coercions the package fixed: 1 < 'a' → False,
+        // -'a' → NaN, abs(None) → 0). They now flow through the #170
+        // extraction fallback below, which pulls the canonical
+        // runtime/src/operators.js copies with their transitive deps
+        // (__cmpTypeGuard, __bytesLt, __setLe, __seqLt, __unaryTypeGuard,
+        // __arithNumOk, __pyTypeName, TypeError_) — the same anti-drift
+        // migration pyEq/pyRound/pySlice went through.
         // #283: minimal runtime `complex` type. Construction from real+imag,
         // .real/.imag, + - * (mixed int/float/complex via __toComplex coercion),
         // abs() -> sqrt(re^2+im^2) (a float), == , and a CPython-matching repr.
@@ -2823,11 +2613,12 @@ function pyComplex(re, im) { return new PyComplex(re, im); }
         {
             rt.push_str(PY_ARITH_JS);
         }
-        if needed.contains("pyPrint") {
-            rt.push_str(
-                "function pyPrint(...args) {\n    console.log(args.map(pyStr).join(\" \"));\n}\n",
-            );
-        }
+        // E3 de-inline: pyPrint
+        // now extracted from the canonical package runtime by
+        // append_extracted_helpers (#170) with transitive deps — the
+        // hand-written mirror had drifted (stale parseFormatSpec grammar;
+        // no __reprSeen self-reference guard). See MIGRATED_TO_EXTRACTION
+        // in tests/inline_runtime_parity.rs.
         if needed.contains("pyGetItem") {
             rt.push_str(r#"function pyGetItem(obj, key) {
     if (obj == null) { const e = new Error("'NoneType' object is not subscriptable"); e.name = "TypeError"; throw e; }
@@ -2882,31 +2673,11 @@ function pyComplex(re, im) { return new PyComplex(re, im); }
 }
 "#);
         }
-        if needed.contains("pyFloat") {
-            rt.push_str(r#"function pyFloat(x) {
-    if (typeof x === "boolean") return __pyF(x ? 1 : 0);
-    if (typeof x === "number") return __pyF(x);
-    if (x != null && x.__pyfloat__ === true) return x;
-    if (typeof x === "bigint") { const n = Number(x); if (!isFinite(n)) { const e = new Error("int too large to convert to float"); e.name = "OverflowError"; throw e; } return __pyF(n); }
-    if (typeof x === "string") {
-        const t = x.trim();
-        const m = /^([+-]?)(inf|infinity|nan)$/i.exec(t);
-        if (m) { if (m[2].toLowerCase() === "nan") return __pyF(NaN); return __pyF(m[1] === "-" ? -Infinity : Infinity); }
-        let t2 = t;
-        if (t.indexOf("_") !== -1) {
-            const isDig = (c) => c >= 48 && c <= 57;
-            for (let i = 0; i < t.length; i++) {
-                if (t.charCodeAt(i) === 95 && !(isDig(t.charCodeAt(i - 1)) && isDig(t.charCodeAt(i + 1)))) { const e = new Error(`could not convert string to float: '${x}'`); e.name = "ValueError"; throw e; }
-            }
-            t2 = t.replace(/_/g, "");
-        }
-        if (t2 === "" || !/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t2)) { const e = new Error(`could not convert string to float: '${x}'`); e.name = "ValueError"; throw e; }
-        return __pyF(Number(t2));
-    }
-    return __pyF(Number(x));
-}
-"#);
-        }
+        // F3 (v0.2.4): the hand-inlined pyFloat mirror was DELETED — it
+        // lacked the receiver-type guard (float(None) → 0.0, float([1]) → 1.0
+        // stayed silent-wrong under `pyths run`) and the bytes-like arm. It now
+        // flows through the #170 extraction fallback (canonical operators.js
+        // pyFloat with __numProtoOk/__bytesArgDecode/__pyTypeName/TypeError_).
         if needed.contains("pyIter") {
             // Mirrors runtime/src/runtime.js pyIter.
             rt.push_str(r#"function pyIter(obj) {
@@ -2932,56 +2703,22 @@ function pyComplex(re, im) { return new PyComplex(re, im); }
 }
 "#);
         }
-        if needed.contains("pyInt") {
-            // Mirrors runtime/src/operators.js pyInt (#82).
-            rt.push_str(r#"function pyInt(x, base) {
-    if (typeof base === "object" && base !== null) base = base.base;
-    if (typeof x === "boolean") return x ? 1 : 0;
-    if (typeof x === "bigint") return x;
-    if (typeof x === "number") {
-        if (Number.isNaN(x)) { const e = new Error("cannot convert float NaN to integer"); e.name = "ValueError"; throw e; }
-        if (!Number.isFinite(x)) { const e = new Error("cannot convert float infinity to integer"); e.name = "OverflowError"; throw e; }
-        const t = Math.trunc(x);
-        return Number.isSafeInteger(t) ? t : BigInt(t);
-    }
-    if (typeof x === "string") {
-        const b = base == null ? 10 : Number(base);
-        const t = x.trim();
-        const m = /^([+-]?)([0-9a-zA-Z_]+)$/.exec(t);
-        const bad = () => { const e = new Error(`invalid literal for int() with base ${b}: '${x}'`); e.name = "ValueError"; return e; };
-        if (!m) throw bad();
-        const body = m[2];
-        if (/^_|_$|__/.test(body)) throw bad();
-        const digits = body.replace(/_/g, "");
-        const digitRe = b === 10 ? /^[0-9]+$/ : b === 16 ? /^[0-9a-fA-F]+$/ : b === 8 ? /^[0-7]+$/ : b === 2 ? /^[01]+$/ : null;
-        if (digitRe) {
-            if (!digitRe.test(digits)) throw bad();
-            const prefix = b === 16 ? "0x" : b === 8 ? "0o" : b === 2 ? "0b" : "";
-            const big = BigInt((m[1] === "-" ? "-" : "") + prefix + digits);
-            return big >= -9007199254740991n && big <= 9007199254740991n ? Number(big) : big;
-        }
-        const v = parseInt((m[1] === "-" ? "-" : "") + digits, b);
-        if (Number.isNaN(v) || digits.split("").some(d => Number.isNaN(parseInt(d, b)))) throw bad();
-        return v;
-    }
-    if (x != null && typeof x.__int__ === "function") return x.__int__();
-    const t = Math.trunc(Number(x));
-    return Number.isSafeInteger(t) || !Number.isFinite(t) ? t : BigInt(t);
-}
-"#);
-        }
+        // F3 (v0.2.4): the hand-inlined pyInt mirror was DELETED — it lacked
+        // the receiver-type guard (int(None) → 0, int([1]) → 1 stayed
+        // silent-wrong under `pyths run`), the bytes-like arm, and the boxed-
+        // float unwrap. It now flows through the #170 extraction fallback
+        // (canonical operators.js pyInt with its deps).
         // pyDelItem: migrated to the #170 extraction with pySetItem (see the
         // blocker-2 comment above) — the canonical package copy carries the
         // 1b28bae5 error-kind fixes (TypeError for non-integer index / tuple /
         // non-subscriptable receivers) the inline mirror lacked.
-        if needed.contains("pyChr") {
-            rt.push_str(r#"function pyChr(n) {
-    const i = typeof n === "bigint" ? Number(n) : Math.trunc(Number(n));
-    if (!Number.isFinite(i) || i < 0 || i >= 0x110000) { const e = new Error("chr() arg not in range(0x110000)"); e.name = "ValueError"; throw e; }
-    return String.fromCodePoint(i);
-}
-"#);
-        }
+        // E7/F7: the hand-inlined pyChr mirror was DELETED — it lacked the
+        // receiver-type guard (chr('a') raised ValueError where CPython
+        // raises TypeError "'str' object cannot be interpreted as an
+        // integer"). It now flows through the #170 extraction fallback
+        // (canonical runtime/src/runtime.js pyChr with its deps —
+        // TypeError_/__pyTypeName/ValueError), the same anti-drift
+        // migration pyInt/pyLt/pyNeg went through.
         if needed.contains("pyOrd") {
             rt.push_str(r#"function pyOrd(s) {
     if (typeof s !== "string") { const e = new Error("ord() expected string of length 1"); e.name = "TypeError"; throw e; }
@@ -2997,7 +2734,7 @@ function pyComplex(re, im) { return new PyComplex(re, im); }
             // above); pyTuple likewise.
             rt.push_str(r#"function pyDivmod(a, b) {
     const __f = (x) => typeof x === "number" && !Number.isInteger(x);
-    if ((__f(a) || __f(b)) && Number(b) === 0) { const e = new Error("float divmod()"); e.name = "ZeroDivisionError"; throw e; }
+    if ((__f(a) || __f(b)) && Number(b) === 0) throw __zde("division by zero"); // CPython 3.14: unified (was "float divmod()"). __zde comes from PY_ARITH_JS (forced with pyFloorDiv/pyMod below) — E7: routed through the one ZeroDivisionError constructor so the message/kind surface has a single source.
     return pyTuple(pyFloorDiv(a, b), pyMod(a, b));
 }
 "#);
@@ -3184,39 +2921,12 @@ function pyBitXor(a, b, fctx) {
         // its deps (__fixedHalfEven, pyFormatFloat) are preloaded above and
         // still hand-written inline, so the extractor links against them.
 
-        if needed.contains("pyFormatDynamic") {
-            // Mirrors runtime/src/runtime.js parseFormatSpec +
-            // pyFormatDynamic (#108/#129).
-            rt.push_str(r##"function parseFormatSpec(s) {
-    const opts = {};
-    const chars = [...s];
-    let i = 0;
-    if (chars.length >= 2 && "<>=^".includes(chars[1])) {
-        opts.fill = chars[0]; opts.align = chars[1]; i = 2;
-    } else if (chars.length >= 1 && "<>=^".includes(chars[0])) {
-        opts.align = chars[0]; i = 1;
-    }
-    if (i < chars.length && "+- ".includes(chars[i])) { opts.sign = chars[i]; i++; }
-    if (i < chars.length && chars[i] === "#") { opts.alt = true; i++; }
-    if (i < chars.length && chars[i] === "0") { opts.zero = true; i++; }
-    let w = "";
-    while (i < chars.length && /[0-9]/.test(chars[i])) { w += chars[i]; i++; }
-    if (w) opts.width = parseInt(w, 10);
-    if (i < chars.length && (chars[i] === "," || chars[i] === "_")) { opts.grouping = chars[i]; i++; }
-    if (i < chars.length && chars[i] === ".") {
-        i++;
-        let p = "";
-        while (i < chars.length && /[0-9]/.test(chars[i])) { p += chars[i]; i++; }
-        if (p) opts.precision = parseInt(p, 10);
-    }
-    if (i < chars.length) { opts.type = chars[i]; i++; }
-    return opts;
-}
-function pyFormatDynamic(value, specStr) {
-    return pyFormatSpec(value, parseFormatSpec(String(specStr)));
-}
-"##);
-        }
+        // E3 de-inline: pyFormatDynamic + parseFormatSpec
+        // now extracted from the canonical package runtime by
+        // append_extracted_helpers (#170) with transitive deps — the
+        // hand-written mirror had drifted (stale parseFormatSpec grammar;
+        // no __reprSeen self-reference guard). See MIGRATED_TO_EXTRACTION
+        // in tests/inline_runtime_parity.rs.
 
         if needed.contains("__pyClass")
             || needed.contains("__pySuper")
@@ -3841,6 +3551,7 @@ function pyFormatDynamic(value, specStr) {
         self.hoisted_scopes.push(HashSet::new());
         self.sentinel_scopes.push(HashSet::new());
         self.local_types.push(HashMap::new());
+        self.local_cmp_kinds.push(HashMap::new());
         self.scope_import_decls.push(HashMap::new());
         self.dotted_import_scopes.push(DottedImportScope::default());
     }
@@ -3852,6 +3563,7 @@ function pyFormatDynamic(value, specStr) {
         self.hoisted_scopes.pop();
         self.sentinel_scopes.pop();
         self.local_types.pop();
+        self.local_cmp_kinds.pop();
         self.scope_import_decls.pop();
         self.dotted_import_scopes.pop();
     }
@@ -4023,12 +3735,39 @@ function pyFormatDynamic(value, specStr) {
     /// Used at assignment sites so later test-expression / binop emit
     /// can route through Python-faithful runtime helpers.
     fn record_type(&mut self, name: &str, ty: JsInferredType) {
-        if matches!(ty, JsInferredType::Unknown) {
-            return;
-        }
+        // F2-r2 (v0.2.4): Unknown IS recorded — it is an explicit DEMOTION.
+        // The old skip meant a re-assignment from an untracked RHS kept the
+        // stale earlier type, and (worse) an inner-scope binding fell
+        // through the scope walk to an OUTER name's type: `x = 1.0` at
+        // module scope + `def f(): x = g(); print(x)` classified the local
+        // x as Float and pre-formatted g()'s result through pyFormatFloat.
+        // Demotion is semantically conservative everywhere local_types is
+        // consulted (pyBool/pyEq wrapping, float pre-format, bare-compare
+        // gating): Unknown always selects the runtime-faithful path.
         if let Some(scope) = self.local_types.last_mut() {
             scope.insert(name.to_string(), ty);
         }
+    }
+
+    /// F1-r2: record `name`'s compare-operand kind in the innermost scope.
+    /// `Other` is recorded too — a re-assignment from an unknown RHS must
+    /// DEMOTE a previously-Num binding (unlike `record_type`, which skips
+    /// Unknown).
+    fn record_cmp_kind(&mut self, name: &str, kind: CmpOperandKind) {
+        if let Some(scope) = self.local_cmp_kinds.last_mut() {
+            scope.insert(name.to_string(), kind);
+        }
+    }
+
+    /// F1-r2: innermost-out lookup of a name's compare-operand kind.
+    /// `Other` when never recorded.
+    fn lookup_cmp_kind(&self, name: &str) -> CmpOperandKind {
+        for scope in self.local_cmp_kinds.iter().rev() {
+            if let Some(&k) = scope.get(name) {
+                return k;
+            }
+        }
+        CmpOperandKind::Other
     }
 
     /// Walk scopes innermost-out looking for `name`'s inferred type.
@@ -4137,7 +3876,15 @@ function pyFormatDynamic(value, specStr) {
             // float, so `print(float(2))`/`str(float(2))` pre-format to "2.0".
             // Safe here (unlike infer_type's blanket `Div => Float`): float()
             // never returns a Decimal/Fraction whose `__repr__` we'd corrupt.
-            ExprKind::Call { func, .. } if matches!(&func.kind, ExprKind::Name(n) if n == "float") => {
+            // F2 (v0.2.4): every builtin-call arm below requires the name to
+            // NOT be shadowed by a user binding — a rebound `float`/`round`/
+            // `abs` returns whatever the user's function returns, and
+            // pre-formatting that through pyFormatFloat corrupts it (same
+            // shadow class as the str/repr/print fast paths in emit_call).
+            ExprKind::Call { func, .. }
+                if matches!(&func.kind, ExprKind::Name(n) if n == "float")
+                    && self.fast_path_builtin_unshadowed("float") =>
+            {
                 true
             }
             // #136: calls to module-level `-> float`-annotated functions.
@@ -4153,6 +3900,7 @@ function pyFormatDynamic(value, specStr) {
             ExprKind::Call { func, args, .. }
                 if matches!(&func.kind, ExprKind::Name(n) if n == "round")
                     && args.len() >= 2
+                    && self.fast_path_builtin_unshadowed("round")
                     && self.is_definitely_float(&args[0]) =>
             {
                 true
@@ -4163,6 +3911,7 @@ function pyFormatDynamic(value, specStr) {
             ExprKind::Call { func, args, .. }
                 if matches!(&func.kind, ExprKind::Name(n) if n == "abs")
                     && args.len() == 1
+                    && self.fast_path_builtin_unshadowed("abs")
                     && self.is_definitely_complex(&args[0]) =>
             {
                 true
@@ -4194,6 +3943,15 @@ function pyFormatDynamic(value, specStr) {
                 // a complex operand disqualifies the whole expression.
                 if self.is_definitely_complex(left) || self.is_definitely_complex(right) {
                     return false;
+                }
+                // E3: `%` with a non-numeric LHS is printf-style STRING
+                // formatting (`"%d" % 3.7` is a str) — a float RHS must not
+                // classify the whole expression as float. `%` is float only
+                // when the LEFT side is float, or left is definitely numeric
+                // and the right is float.
+                if matches!(op, B::Mod) {
+                    return self.is_definitely_float(left)
+                        || (self.is_definitely_number(left) && self.is_definitely_float(right));
                 }
                 if self.is_definitely_float(left) || self.is_definitely_float(right) {
                     return true;
@@ -4263,6 +4021,128 @@ function pyFormatDynamic(value, specStr) {
         // Option-B spike: Float excluded — a boxed 0.0 is a JS object and
         // objects are always JS-truthy, so floats route through pyBool.
         matches!(self.infer_type(expr), JsInferredType::Primitive)
+    }
+
+    /// F1/F1-r2 (v0.2.4): operand-kind classification for the compare /
+    /// unary bare-op fast-path gates (see `CmpOperandKind`). r2: no longer
+    /// purely syntactic — Name lookups resolve through `local_cmp_kinds`
+    /// (seeded at assignment/param/for-target sites), numeric-returning
+    /// builtin calls (`len`/`ord`) classify Num, and arithmetic among Num
+    /// operands propagates Num — so `x = 0; x < n` and `i < len(xs)` keep
+    /// the bare hot path while a str-/None-typed variable or an arbitrary
+    /// call result routes through the helper.
+    fn cmp_operand_kind(&self, e: &Expr) -> CmpOperandKind {
+        use pyths_syntax::operators::BinOp as B;
+        match &e.kind {
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) => {
+                CmpOperandKind::Num
+            }
+            ExprKind::StringLiteral(_) | ExprKind::FString { .. } => CmpOperandKind::Str,
+            ExprKind::NoneLiteral => CmpOperandKind::NoneLit,
+            ExprKind::UnaryOp {
+                op: UnaryOp::Neg | UnaryOp::Pos,
+                operand,
+            } => {
+                if self.cmp_operand_kind(operand) == CmpOperandKind::Num {
+                    CmpOperandKind::Num
+                } else {
+                    CmpOperandKind::Other
+                }
+            }
+            // A comparison / `not` result is a bool — numeric-orderable
+            // (True < 5 is legal Python).
+            ExprKind::Compare { .. }
+            | ExprKind::UnaryOp {
+                op: UnaryOp::Not, ..
+            } => CmpOperandKind::Num,
+            // F1-r2: a variable resolves through the recorded kind table
+            // (a Float-typed binding is numeric by construction).
+            ExprKind::Name(n) => {
+                if matches!(self.lookup_type(n), JsInferredType::Float) {
+                    CmpOperandKind::Num
+                } else {
+                    self.lookup_cmp_kind(n)
+                }
+            }
+            // F1-r2: arithmetic among Num operands stays Num (`i + 1 < n`,
+            // `x % 2 > 0`). Division infers Float below (fallback arm).
+            ExprKind::BinOp {
+                left,
+                op: B::Add | B::Sub | B::Mul | B::Mod | B::Pow | B::FloorDiv,
+                right,
+            } => {
+                if self.cmp_operand_kind(left) == CmpOperandKind::Num
+                    && self.cmp_operand_kind(right) == CmpOperandKind::Num
+                {
+                    CmpOperandKind::Num
+                } else {
+                    CmpOperandKind::Other
+                }
+            }
+            // F1-r2: builtin calls with a provably-int result (len/ord/int),
+            // unless the name is shadowed by a user binding. Deliberately
+            // narrow: abs()/round()/min()/… can return user types via
+            // dunders and stay Other.
+            ExprKind::Call { func, .. } => {
+                if let ExprKind::Name(n) = &func.kind {
+                    if matches!(n.as_str(), "len" | "ord" | "int")
+                        && self.fast_path_builtin_unshadowed(n)
+                    {
+                        return CmpOperandKind::Num;
+                    }
+                }
+                if matches!(self.infer_type(e), JsInferredType::Float) {
+                    CmpOperandKind::Num
+                } else {
+                    CmpOperandKind::Other
+                }
+            }
+            ExprKind::IfExpr {
+                body, else_body, ..
+            } => {
+                if self.cmp_operand_kind(body) == CmpOperandKind::Num
+                    && self.cmp_operand_kind(else_body) == CmpOperandKind::Num
+                {
+                    CmpOperandKind::Num
+                } else {
+                    CmpOperandKind::Other
+                }
+            }
+            _ => {
+                // A Float-inferred expression is provably numeric even
+                // without a literal shape (float(x), true division, …).
+                if matches!(self.infer_type(e), JsInferredType::Float) {
+                    CmpOperandKind::Num
+                } else {
+                    CmpOperandKind::Other
+                }
+            }
+        }
+    }
+
+    /// F1-r2 (v0.2.4): may `left OP right` (OP ∈ {<, <=, >, >=}) keep the
+    /// bare JS operator? ONLY when BOTH operands are provably numeric —
+    /// numeric literal, Float-inferred expression, a Num-recorded variable,
+    /// or Num-propagating arithmetic. EVERYTHING else (str-typed, None-typed,
+    /// call-shaped, unknown) routes through pyLt/pyLe/pyGt/pyGe, whose
+    /// __cmpTypeGuard raises CPython's exact TypeError for incompatible
+    /// pairs and whose dunder dispatch orders the rest correctly.
+    ///
+    /// The r1 gate kept bare for Num–Other / Other–Other / Str–Str, so a
+    /// str-typed VARIABLE vs a numeric literal (`s = "a"; s < 5`), a
+    /// None-typed variable, and call-shaped operands (`5 < str(6)`) still
+    /// leaked silent-wrong JS coercions — the exact impact-enumeration gap
+    /// the r2 review found. Str–Str routes through the helper too (uniform
+    /// gate; NOTE the helper still falls back to JS string `<`, so
+    /// astral-plane code-point ordering remains a documented residual —
+    /// see docs/known-limitations.md, v0.2.4-r2 section).
+    ///
+    /// Hot numeric loops are NOT taxed: `x = 0; while x < n:` and
+    /// `for i in range(k): if i > m:` classify Num–Num via the recorded
+    /// kinds and keep the bare op.
+    fn cmp_bare_compatible(&self, left: &Expr, right: &Expr) -> bool {
+        self.cmp_operand_kind(left) == CmpOperandKind::Num
+            && self.cmp_operand_kind(right) == CmpOperandKind::Num
     }
 
     fn infer_type(&self, expr: &Expr) -> JsInferredType {
@@ -4424,6 +4304,21 @@ function pyFormatDynamic(value, specStr) {
     /// top-to-bottom, so a name referenced before its module-level assignment
     /// is not yet declared — matching pre-pre-pass behavior exactly. Used for
     /// builtin- and PSX-tag-shadow decisions.
+    /// E7 r2 — THE shadow gate every specially-lowered-builtin FAST PATH
+    /// must route through (replaces the per-site hand-pairing of a name
+    /// check with `is_declared_in_any_scope` + a star-import check).
+    /// Membership in `SPECIALLY_LOWERED_BUILTINS` is ASSERTED: a new fast
+    /// path calling this gate with an unlisted name panics across the
+    /// (debug) test suite — the delta4 `need_runtime` manifest pattern —
+    /// so a fast path cannot land without a manifest entry and hence its
+    /// generated shadow-matrix row. Returns true iff `name` is unshadowed
+    /// by BOTH a user binding and a star-import binding (star-import names
+    /// come from stdlib export lists; dunder names never appear there).
+    fn fast_path_builtin_unshadowed(&self, name: &str) -> bool {
+        assert_specially_lowered_manifest(name);
+        !self.is_declared_in_any_scope(name) && !self.star_import_bindings.contains_key(name)
+    }
+
     fn is_declared_in_any_scope(&self, name: &str) -> bool {
         // Review finding 2: if the innermost function scope declares `name`
         // `global`, it resolves ONLY at module/builtin scope — skip every
@@ -5628,7 +5523,8 @@ function pyFormatDynamic(value, specStr) {
                 {
                     if args.is_empty() && kwargs.is_empty() {
                         if let ExprKind::Name(n) = &func.kind {
-                            if n == "breakpoint" && !self.is_declared_in_any_scope("breakpoint") {
+                            if n == "breakpoint" && self.fast_path_builtin_unshadowed("breakpoint")
+                            {
                                 self.write_indent();
                                 self.write("debugger;\n");
                                 return;
@@ -7298,6 +7194,16 @@ function pyFormatDynamic(value, specStr) {
             // literal RHS, so `a, b = -1.0, 1.0` records `a`/`b` as Float and
             // `print(a)` keeps the `.0` (a whole float and int are the same JS
             // number at runtime).
+            // F1-r2: destructured names default to Other (an unknown RHS
+            // must demote previously-Num bindings); the matching-arity
+            // literal refinement below overwrites per element.
+            {
+                let mut names = Vec::new();
+                Self::collect_pattern_names(elts, &mut names);
+                for n in names {
+                    self.record_cmp_kind(&n, CmpOperandKind::Other);
+                }
+            }
             if let ExprKind::Tuple(vals) | ExprKind::List(vals) = &value.kind {
                 if vals.len() == elts.len() {
                     for (t, v) in elts.iter().zip(vals) {
@@ -7308,6 +7214,8 @@ function pyFormatDynamic(value, specStr) {
                                 self.infer_type(v)
                             };
                             self.record_type(n, vt);
+                            let kind = self.cmp_operand_kind(v);
+                            self.record_cmp_kind(n, kind);
                         }
                     }
                 }
@@ -7475,6 +7383,11 @@ function pyFormatDynamic(value, specStr) {
         // emission still gets the right wrap decision.
         if let ExprKind::Name(name) = &target.kind {
             self.record_type(name, value_ty);
+            // F1-r2: track the compare-operand kind (Num/Str/NoneLit/Other)
+            // for the bare-compare/unary gates. Other IS recorded — an
+            // unknown RHS must demote a previously-Num binding.
+            let kind = self.cmp_operand_kind(value);
+            self.record_cmp_kind(name, kind);
         }
     }
 
@@ -10674,20 +10587,38 @@ function pyFormatDynamic(value, specStr) {
             if param.name == "self" || param.name == "cls" {
                 continue;
             }
+            // F1-r2: every param gets an explicit compare-operand kind so a
+            // param SHADOWING an outer Num-recorded name cannot inherit the
+            // outer kind through the scope walk. Annotated int/bool/float →
+            // Num, str → Str; everything else (incl. unannotated) → Other.
+            let mut kind = CmpOperandKind::Other;
             if param.is_args {
                 self.record_type(&param.name, JsInferredType::List);
+                self.record_cmp_kind(&param.name, kind);
                 continue;
             }
             if param.is_kwargs {
                 self.record_type(&param.name, JsInferredType::Dict);
+                self.record_cmp_kind(&param.name, kind);
                 continue;
             }
+            // F2-r2: an UNANNOTATED param records an explicit Unknown, so a
+            // param shadowing an outer typed name (`x = 1.0` at module scope,
+            // `def f(x): print(x)`) cannot inherit the outer type through the
+            // scope walk (the float pre-format leak, same shadow class as F2).
+            let mut ty = JsInferredType::Unknown;
             if let Some(ann) = &param.annotation {
-                let ty = self.js_type_from_annotation(ann);
-                if !matches!(ty, JsInferredType::Unknown) {
-                    self.record_type(&param.name, ty);
+                ty = self.js_type_from_annotation(ann);
+                if let ExprKind::Name(n) = &ann.kind {
+                    kind = match n.as_str() {
+                        "int" | "bool" | "float" => CmpOperandKind::Num,
+                        "str" => CmpOperandKind::Str,
+                        _ => CmpOperandKind::Other,
+                    };
                 }
             }
+            self.record_type(&param.name, ty);
+            self.record_cmp_kind(&param.name, kind);
         }
     }
 
@@ -12727,7 +12658,7 @@ function pyFormatDynamic(value, specStr) {
                 optional: false,
             } => match &func.kind {
                 ExprKind::Name(fname)
-                    if fname == "range" && !self.is_declared_in_any_scope("range") =>
+                    if fname == "range" && self.fast_path_builtin_unshadowed("range") =>
                 {
                     (args, kwargs)
                 }
@@ -12822,6 +12753,9 @@ function pyFormatDynamic(value, specStr) {
             ri
         ));
         self.declare_target(target);
+        // F1-r2: a range() loop variable is provably an int — keep the bare
+        // compare hot path for `for i in range(n): if i > m:`.
+        self.record_cmp_kind(name, CmpOperandKind::Num);
         for stmt in body {
             self.emit_stmt(stmt);
         }
@@ -12958,6 +12892,23 @@ function pyFormatDynamic(value, specStr) {
         // variable (a JS TDZ ReferenceError). The body below still sees the
         // declaration.
         self.declare_target(target);
+        // F1-r2: a generic for-target's element kind is unknown — record
+        // Other so a loop variable shadowing/reusing a previously-Num name
+        // (`x = 5` … `for x in xs:`) demotes and routes compares through
+        // the helper. (The range() fast path records Num instead.)
+        {
+            let mut names = Vec::new();
+            match &target.kind {
+                ExprKind::Name(n) => names.push(n.clone()),
+                ExprKind::Tuple(elts) | ExprKind::List(elts) => {
+                    Self::collect_pattern_names(elts, &mut names);
+                }
+                _ => {}
+            }
+            for n in names {
+                self.record_cmp_kind(&n, CmpOperandKind::Other);
+            }
+        }
         self.write(") {\n");
         self.indent += 1;
         for stmt in body {
@@ -13837,7 +13788,7 @@ function pyFormatDynamic(value, specStr) {
                     // #452 family: a WRITE target is always the user binding.
                     if name == "__doc__"
                         && !self.in_lhs_target
-                        && !self.is_declared_in_any_scope(name)
+                        && self.fast_path_builtin_unshadowed(name)
                     {
                         match self.module_doc.clone() {
                             Some(d) => self.write(&js_string_literal(&d)),
@@ -14735,8 +14686,9 @@ function pyFormatDynamic(value, specStr) {
     /// when a statically-known float operand is present. A whole-valued float
     /// (`1.0`) is an indistinguishable JS number at runtime, so the flag tells
     /// the arithmetic helper to coerce a BigInt operand to float (raising
-    /// OverflowError when too large) and format the result as a float — the
-    /// same disambiguation pyDiv's `floatDiv` flag already carries.
+    /// OverflowError when too large) and format the result as a float. (pyDiv
+    /// needs no such flag — true division ALWAYS produces a float; its old
+    /// `floatDiv` message hint was removed with the 3.14 oracle bump.)
     fn emit_binop_helper_fctx(&mut self, helper: &str, left: &Expr, right: &Expr) {
         self.need_runtime(helper);
         self.write(helper);
@@ -15024,19 +14976,16 @@ function pyFormatDynamic(value, specStr) {
             BinOp::Div => {
                 // True division routes through pyDiv: always float + raises
                 // ZeroDivisionError (bare `/` yields Infinity / loses the
-                // int/BigInt distinction). F4: pass a `floatDiv` flag when an
-                // operand is a statically-known float so `1.0/0.0` raises
-                // "float division by zero" (a whole-valued float literal
-                // compiles to the same JS number as an int, so the runtime
-                // alone can't tell them apart).
+                // int/BigInt distinction). The old F4 `floatDiv` flag (a
+                // static-float hint that selected 3.12's "float division by
+                // zero" wording) was removed with the CPython 3.14 oracle
+                // bump: 3.14 unified the message, and the RESULT is always
+                // float regardless, so the hint carried no semantics.
                 self.need_runtime("pyDiv");
                 self.write("pyDiv(");
                 self.emit_expr(left);
                 self.write(", ");
                 self.emit_expr(right);
-                if self.is_definitely_float(left) || self.is_definitely_float(right) {
-                    self.write(", true");
-                }
                 self.write(")");
             }
             BinOp::FloorDiv => {
@@ -15226,9 +15175,14 @@ function pyFormatDynamic(value, specStr) {
                 // behave identically. Without this, `<`/`<=`/`>`/`>=` on
                 // objects fell through to the catch-all bare-op arm below
                 // and never dispatched comparison dunders at all.
-                let lt = self.infer_type(left);
-                let rt = self.infer_type(right);
-                if lt.is_scalar() && rt.is_scalar() {
+                // F1-r2 (v0.2.4): the bare fast path is kept ONLY when BOTH
+                // operands are provably numeric (`cmp_bare_compatible`) —
+                // a str-/None-typed VARIABLE, a call-shaped operand
+                // (`5 < str(6)`), and unknown-typed operands all route
+                // through the helper (whose __cmpTypeGuard raises CPython's
+                // TypeError for incompatible pairs). The r1 gate leaked
+                // every non-literal arm of the class.
+                if self.cmp_bare_compatible(left, right) {
                     let op_str = match op {
                         BinOp::Lt => "<",
                         BinOp::LtEq => "<=",
@@ -15391,7 +15345,15 @@ function pyFormatDynamic(value, specStr) {
                     self.write("__pyF(-__reqNum(");
                     self.emit_expr(operand);
                     self.write("))");
-                } else if matches!(self.infer_type(operand), JsInferredType::Primitive) {
+                } else if self.cmp_operand_kind(operand) == CmpOperandKind::Num {
+                    // F4-r2 (v0.2.4): bare `-x` ONLY for a provably-numeric
+                    // operand (literal, Num-recorded variable, Num-propagating
+                    // arithmetic). The r1 gate kept bare for any Primitive
+                    // that wasn't a str/None LITERAL, so a str-typed variable
+                    // (`s = "a"; -s` → NaN) and a None-typed variable
+                    // (`x = None; -x` → -0) leaked. Str-/None-/unknown-typed
+                    // operands route through pyNeg, whose __unaryTypeGuard
+                    // raises CPython's "bad operand type for unary -: 'str'".
                     self.write("(-");
                     self.emit_expr(operand);
                     self.write(")");
@@ -15978,7 +15940,7 @@ function pyFormatDynamic(value, specStr) {
             if func_name == "len"
                 && args.len() == 1
                 && kwargs.is_empty()
-                && !self.is_declared_in_any_scope("len")
+                && self.fast_path_builtin_unshadowed("len")
             {
                 let arg_ty = self.infer_type(&args[0]);
                 if matches!(arg_ty, JsInferredType::List | JsInferredType::Tuple) {
@@ -16021,10 +15983,17 @@ function pyFormatDynamic(value, specStr) {
         // list/dict element, or an unannotated function return) is a
         // documented, accepted residual gap — not a regression versus
         // current behavior.
+        // F2 (v0.2.4): like EVERY builtin lowering, these float fast paths
+        // must yield to a user binding that shadows the builtin name
+        // (`print = lambda *a: None; print(8.0)` must call the lambda, not
+        // pyPrint). Same naming-collision class as NB-1/NB-2/#420/DX-B1;
+        // the generic builtin_func_mapping path below already carries the
+        // `is_declared_in_any_scope` gate — these early returns bypassed it.
         if let ExprKind::Name(name) = &func.kind {
             if kwargs.is_empty()
                 && matches!(name.as_str(), "str" | "repr")
                 && args.len() == 1
+                && self.fast_path_builtin_unshadowed(name)
                 && self.is_definitely_float(&args[0])
             {
                 self.need_runtime("pyFormatFloat");
@@ -16035,6 +16004,7 @@ function pyFormatDynamic(value, specStr) {
             }
             if name == "print"
                 && kwargs.is_empty()
+                && self.fast_path_builtin_unshadowed(name)
                 && args.iter().any(|a| self.is_definitely_float(a))
             {
                 self.need_runtime("pyPrint");
@@ -16201,6 +16171,22 @@ function pyFormatDynamic(value, specStr) {
                             } else {
                                 emit_cls(self, &args[1]);
                             }
+                            self.write(")");
+                            return;
+                        }
+                        // E3: print WITH keyword args (sep/end/flush) lowers
+                        // to pyPrintKw with the kwargs object FIRST —
+                        // unambiguous (a dict positional arg can never be
+                        // mistaken for kwargs, unlike a trailing object).
+                        if name == "print" && !kwargs.is_empty() {
+                            self.need_runtime("pyPrintKw");
+                            self.write("pyPrintKw");
+                            self.write(open_paren);
+                            self.emit_call_args(&[], kwargs);
+                            if !args.is_empty() {
+                                self.write(", ");
+                            }
+                            self.emit_call_args(args, &[]);
                             self.write(")");
                             return;
                         }
@@ -16959,6 +16945,12 @@ function pyFormatDynamic(value, specStr) {
             InlineSpec::AppendList | InlineSpec::ExtendList | InlineSpec::InsertList => {
                 matches!(self.infer_type(receiver), JsInferredType::List)
             }
+            // E3: string inline specs only fire for Primitive (str-family)
+            // receivers — a bytes/user receiver has its OWN isalpha/isascii/
+            // removeprefix and must reach the runtime twin's dispatch.
+            InlineSpec::Isalpha | InlineSpec::Isspace | InlineSpec::Isascii => {
+                matches!(self.infer_type(receiver), JsInferredType::Primitive)
+            }
             _ => true,
         }
     }
@@ -17110,59 +17102,6 @@ function pyFormatDynamic(value, specStr) {
                 self.write(".pop()");
             }
             // -------------------- string inline --------------------
-            InlineSpec::Strip => {
-                if !args.is_empty() {
-                    return false;
-                }
-                self.emit_expr(receiver);
-                self.write(".replace(/^\\s+|\\s+$/g, \"\")");
-            }
-            InlineSpec::Lstrip => {
-                if !args.is_empty() {
-                    return false;
-                }
-                self.emit_expr(receiver);
-                self.write(".replace(/^\\s+/, \"\")");
-            }
-            InlineSpec::Rstrip => {
-                if !args.is_empty() {
-                    return false;
-                }
-                self.emit_expr(receiver);
-                self.write(".replace(/\\s+$/, \"\")");
-            }
-            InlineSpec::Zfill => {
-                if args.len() != 1 {
-                    return false;
-                }
-                self.emit_expr(receiver);
-                self.write(".padStart(");
-                self.emit_expr(&args[0]);
-                self.write(", \"0\")");
-            }
-            InlineSpec::Capitalize => {
-                if !args.is_empty() {
-                    return false;
-                }
-                // Receiver appears 3x — caller must have ensured simple.
-                self.write("(");
-                self.emit_expr(receiver);
-                self.write(" ? ");
-                self.emit_expr(receiver);
-                self.write("[0].toUpperCase() + ");
-                self.emit_expr(receiver);
-                self.write(".slice(1).toLowerCase() : ");
-                self.emit_expr(receiver);
-                self.write(")");
-            }
-            InlineSpec::Isdigit => {
-                if !args.is_empty() {
-                    return false;
-                }
-                self.write("/^[0-9]+$/.test(");
-                self.emit_expr(receiver);
-                self.write(")");
-            }
             InlineSpec::IsInteger => {
                 if !args.is_empty() {
                     return false;
@@ -17175,15 +17114,8 @@ function pyFormatDynamic(value, specStr) {
                 if !args.is_empty() {
                     return false;
                 }
-                self.write("/^[A-Za-z]+$/.test(");
-                self.emit_expr(receiver);
-                self.write(")");
-            }
-            InlineSpec::Isalnum => {
-                if !args.is_empty() {
-                    return false;
-                }
-                self.write("/^[A-Za-z0-9]+$/.test(");
+                // E3: the CPython spec is Unicode category L, not ASCII.
+                self.write("/^\\p{L}+$/u.test(");
                 self.emit_expr(receiver);
                 self.write(")");
             }
@@ -17191,20 +17123,12 @@ function pyFormatDynamic(value, specStr) {
                 if !args.is_empty() {
                     return false;
                 }
-                self.write("/^\\s+$/.test(");
+                // E3: Python's whitespace set — includes \x1c-\x1f and \x85,
+                // EXCLUDES the BOM ﻿ that JS \s admits. Mirrors
+                // __PY_WS_CC in runtime/src/runtime.js.
+                self.write("/^[ \\t\\n\\r\\v\\f\\u001c-\\u001f\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+$/.test(");
                 self.emit_expr(receiver);
                 self.write(")");
-            }
-            InlineSpec::Casefold => {
-                // ASCII-equivalent to `.lower()`. Python's casefold does
-                // additional Unicode case mapping (e.g., ß → ss); we
-                // approximate with toLowerCase. Sufficient for ASCII;
-                // documented as a limitation in summary.md.
-                if !args.is_empty() {
-                    return false;
-                }
-                self.emit_expr(receiver);
-                self.write(".toLowerCase()");
             }
             InlineSpec::Isascii => {
                 if !args.is_empty() {
@@ -17213,68 +17137,6 @@ function pyFormatDynamic(value, specStr) {
                 self.write("[...");
                 self.emit_expr(receiver);
                 self.write("].every(__c => __c.charCodeAt(0) < 128)");
-            }
-            InlineSpec::Removeprefix => {
-                if args.len() != 1 {
-                    return false;
-                }
-                self.write("(");
-                self.emit_expr(receiver);
-                self.write(".startsWith(");
-                self.emit_expr(&args[0]);
-                self.write(") ? ");
-                self.emit_expr(receiver);
-                self.write(".slice(");
-                self.emit_expr(&args[0]);
-                self.write(".length) : ");
-                self.emit_expr(receiver);
-                self.write(")");
-            }
-            InlineSpec::Removesuffix => {
-                if args.len() != 1 {
-                    return false;
-                }
-                self.write("(");
-                self.emit_expr(receiver);
-                self.write(".endsWith(");
-                self.emit_expr(&args[0]);
-                self.write(") ? ");
-                self.emit_expr(receiver);
-                self.write(".slice(0, ");
-                self.emit_expr(receiver);
-                self.write(".length - ");
-                self.emit_expr(&args[0]);
-                self.write(".length) : ");
-                self.emit_expr(receiver);
-                self.write(")");
-            }
-            InlineSpec::Islower => {
-                if !args.is_empty() {
-                    return false;
-                }
-                self.write("(");
-                self.emit_expr(receiver);
-                self.write(" === ");
-                self.emit_expr(receiver);
-                self.write(".toLowerCase() && ");
-                self.emit_expr(receiver);
-                self.write(" !== ");
-                self.emit_expr(receiver);
-                self.write(".toUpperCase())");
-            }
-            InlineSpec::Isupper => {
-                if !args.is_empty() {
-                    return false;
-                }
-                self.write("(");
-                self.emit_expr(receiver);
-                self.write(" === ");
-                self.emit_expr(receiver);
-                self.write(".toUpperCase() && ");
-                self.emit_expr(receiver);
-                self.write(" !== ");
-                self.emit_expr(receiver);
-                self.write(".toLowerCase())");
             }
             // -------------------- dict inline --------------------
             // DictKeys/DictValues/DictItems were Object.keys/values/entries
@@ -19402,10 +19264,12 @@ fn builtin_exception_descendants(name: &str) -> &'static [&'static str] {
         "ArithmeticError" => &["ArithmeticError", "ZeroDivisionError", "OverflowError"],
         "RuntimeError" => &["RuntimeError", "NotImplementedError"],
         "NameError" => &["NameError", "UnboundLocalError"],
+        // E3: str.encode errors subclass ValueError, as in CPython.
+        "ValueError" => &["ValueError", "UnicodeEncodeError"],
         // Leaf classes (and the leaf-like bases we treat as leaves): only the
         // name itself. `Exception`/`BaseException` never reach here — they are
         // handled as unconditional catch-alls by the caller.
-        "ValueError" => &["ValueError"],
+        "UnicodeEncodeError" => &["UnicodeEncodeError"],
         "AssertionError" => &["AssertionError"],
         "TypeError" => &["TypeError"],
         "IndexError" => &["IndexError"],
@@ -19420,6 +19284,76 @@ fn builtin_exception_descendants(name: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
+
+/// E7 sub-part 3 — the CHECKED MANIFEST of every builtin name the codegen
+/// gives a SPECIAL LOWERING / fast path that a user binding must be able to
+/// shadow (the F2/NB-1/NB-2/#420 naming-collision class). Second column: the
+/// fast-path trigger (documentation + the matrix generator's key).
+///
+/// Drift guards (both directions), mirroring `EMITTABLE_RUNTIME_SYMBOLS`
+/// (r2 — STRUCTURAL, not a text scan):
+///   * every fast-path site that routes its shadow decision through
+///     `fast_path_builtin_unshadowed` (all 10 known sites do) hits
+///     `assert_specially_lowered_manifest`, which debug-panics across the
+///     test suite on any name not listed here — a fast path USING THE GATE
+///     cannot land without a manifest entry, by construction (proved by
+///     the `#[should_panic]` injection test in behavioral_differential.rs).
+///   * behavioral_differential.rs `test_specially_lowered_builtins_shadow_matrix`
+///     GENERATES one shadowed-call differential row per entry from this
+///     const — an entry without a row template fails the test loudly, so a
+///     name cannot be listed without being exercised — and its source scan
+///     (LEXICAL, same-line string literals; honest scope stated there)
+///     rejects the one known bypass shape: a raw
+///     `is_declared_in_any_scope("<literal>")` gate in emit.rs.
+///   * HONEST LIMIT: a future site that hand-rolls its shadow check with a
+///     dynamic name, or splits the literal across lines, evades both the
+///     assert (never called) and the scan (lexical). The review gate for
+///     emit.rs changes owns that residual — the same accepted residual as
+///     delta4's `need_runtime` discipline.
+/// The manifest-membership assertion behind `fast_path_builtin_unshadowed`
+/// (E7 sub-part 3, r2). A `debug_assert` so release codegen pays nothing,
+/// while the (debug) test suite panics the moment any fast-path site gates
+/// on an unlisted name — the by-construction guarantee that a new special
+/// lowering cannot land without a `SPECIALLY_LOWERED_BUILTINS` entry and
+/// hence its generated shadow-matrix row. `#[doc(hidden)] pub` so the
+/// injection test (`test_unlisted_fast_path_name_panics`) can prove the
+/// panic fires.
+#[doc(hidden)]
+pub fn assert_specially_lowered_manifest(name: &str) {
+    debug_assert!(
+        SPECIALLY_LOWERED_BUILTINS.iter().any(|(n, _)| *n == name),
+        "fast-path shadow gate called for {name:?}, which is NOT in \
+         SPECIALLY_LOWERED_BUILTINS — add it there plus a row in \
+         test_specially_lowered_builtins_shadow_matrix (E7 sub-part 3)"
+    );
+}
+
+pub const SPECIALLY_LOWERED_BUILTINS: &[(&str, &str)] = &[
+    ("__doc__", "bare module-docstring read"),
+    ("abs", "float/complex arg (pyFormatFloat classification)"),
+    ("breakpoint", "no-arg debugger lowering"),
+    (
+        "float",
+        "numeric literal arg (pyFormatFloat classification)",
+    ),
+    (
+        "int",
+        "provably-int result in a comparison (CmpOperandKind::Num)",
+    ),
+    (
+        "len",
+        "provably-int result in a comparison (CmpOperandKind::Num)",
+    ),
+    (
+        "ord",
+        "provably-int result in a comparison (CmpOperandKind::Num)",
+    ),
+    ("print", "definitely-float arg fast path"),
+    ("range", "for-loop numeric-range lowering"),
+    ("repr", "definitely-float arg fast path"),
+    ("round", "float arg (pyFormatFloat classification)"),
+    ("str", "definitely-float arg fast path"),
+];
 
 /// delta4 — the CHECKED MANIFEST of every runtime symbol the codegen can
 /// emit an `import { ... } from "pyths-runtime"` / `"pyths-runtime/core"`
@@ -19467,6 +19401,7 @@ pub const EMITTABLE_RUNTIME_SYMBOLS: &[&str] = &[
     "StopIteration",
     "TypeError",
     "UnboundLocalError",
+    "UnicodeEncodeError",
     "ValueError",
     "ZeroDivisionError",
     "__UNBOUND",
@@ -19611,6 +19546,7 @@ pub const EMITTABLE_RUNTIME_SYMBOLS: &[&str] = &[
     "pyPow",
     "pyPowBuiltin",
     "pyPrint",
+    "pyPrintKw",
     "pyProperty",
     "pyRange",
     "pyRemove",
@@ -19639,19 +19575,33 @@ pub const EMITTABLE_RUNTIME_SYMBOLS: &[&str] = &[
     "pySorted",
     "pyStr",
     "pyStrCapitalize",
+    "pyStrCasefold",
     "pyStrCenter",
+    "pyStrEncode",
     "pyStrEndswith",
     "pyStrExpandtabs",
     "pyStrFormat",
+    "pyStrFormatMap",
+    "pyStrIsalnum",
+    "pyStrIsalpha",
+    "pyStrIsascii",
+    "pyStrIsdecimal",
+    "pyStrIsdigit",
     "pyStrIsidentifier",
     "pyStrIslower",
+    "pyStrIsnumeric",
     "pyStrIsprintable",
+    "pyStrIsspace",
     "pyStrIstitle",
     "pyStrIsupper",
     "pyStrJoin",
     "pyStrLjust",
     "pyStrLstrip",
+    "pyStrMaketrans",
+    "pyStrMod",
     "pyStrPartition",
+    "pyStrRemoveprefix",
+    "pyStrRemovesuffix",
     "pyStrReplace",
     "pyStrReplaceSmart",
     "pyStrRfind",
@@ -19667,6 +19617,7 @@ pub const EMITTABLE_RUNTIME_SYMBOLS: &[&str] = &[
     "pyStrSwapcase",
     "pyStrTitle",
     "pyStrTranslate",
+    "pyStrZfill",
     "pySub",
     "pySum",
     "pyTuple",
@@ -19717,6 +19668,9 @@ const BUILTIN_EXCEPTIONS: &[&str] = &[
     // runtime grew the classes, so raise/except sites auto-import.
     "NameError",
     "UnboundLocalError",
+    // E3: str.encode strict-mode errors (a ValueError subclass, as in
+    // CPython) — raise/except sites auto-import.
+    "UnicodeEncodeError",
 ];
 
 fn is_builtin_exception(name: &str) -> bool {
@@ -20029,11 +19983,14 @@ mod tests {
             jl.contains("pyStrIslower("),
             "complex islower not lowered to helper:\n{jl}"
         );
-        // simple receiver keeps the inline fast path (no helper)
+        // E3: SIMPLE receivers use the same runtime helper now — the inline
+        // `s === s.toUpperCase()` compare was ASCII-approximate (missed
+        // Other_Uppercase/Other_Lowercase and titlecase chars), so isupper/
+        // islower are Runtime-only: ONE Unicode-correct copy, no drift.
         let js = compile("s = \"Ab\"\nx = s.isupper()");
         assert!(
-            !js.contains("pyStrIsupper"),
-            "simple isupper should stay inline:\n{js}"
+            js.contains("pyStrIsupper("),
+            "simple isupper must use the one runtime helper too:\n{js}"
         );
     }
 

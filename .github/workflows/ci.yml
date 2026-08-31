@@ -178,7 +178,9 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          # CPython differential ORACLE — pinned to the current stable CPython.
+          # See docs/python-oracle-policy.md. Bump deliberately + regenerate.
+          python-version: '3.14'
 
       - name: Build pyths binary (release)
         run: cargo build --release --bin pyths
@@ -196,11 +198,32 @@ jobs:
       - name: Operand-type guard (binary-op TypeError matrix, E2/#466)
         run: node --test runtime/src/operand_type.test.mjs
 
+      - name: E3 r3 string-fidelity witnesses (__index__ authority, surrogate scan, error taxonomy, printf ints, digit bounds)
+        run: node --test runtime/src/str_r3_fidelity.test.mjs
+
       - name: Format-spec differential vs CPython (30)
         run: node --test crates/pyths_runtime/js/format_diff_test.mjs
 
-      - name: CPython semantic differential corpus (1,307, incl. decimal/fraction/Sweep-A/Track-A async-gather/wave-19 string methods/wave-20 dict methods)
+      - name: CPython semantic differential corpus (1,307 + corpus.d arms, incl. the E7 blindspot F1–F8 probe corpus)
         run: node tests/differential/run.mjs
+
+      # E7 recurring conformance net: the ported Transcrypt autotester
+      # testlets (tests/conformance/autotester/, Apache-2.0) run as a
+      # PythScribe-vs-CPython differential with a TWO-SIDED ratchet against
+      # the committed baseline.json — a regression fails, and an improvement
+      # also fails until the baseline is updated in the same PR. Oracle is
+      # the pinned CPython above (never Transcrypt's expected outputs).
+      - name: Transcrypt-autotester conformance ratchet (47 testlets + 13 boundary rows)
+        run: python tests/conformance/autotester/run_autotester.py
+
+      # E7 message-string layer: every witness in
+      # verification/message-table.json runs through the REAL pyths binary
+      # AND the CPython oracle; both terminal `Kind: message` lines must
+      # equal the table (the same table MessageData.lean is generated from —
+      # drift gate in the verification job), so a runtime message change
+      # cannot leave the Lean #guards asserting an obsolete literal.
+      - name: C1C3C4 message-layer shipped-binding differential (45 witnesses)
+        run: python verification/message_shipped_binding.py
 
       - name: Promise / async-JS interop suite (43, pinned expectations)
         run: node tests/jsinterop/run.mjs
@@ -429,6 +452,15 @@ jobs:
 
       - name: IdiomData.lean in sync with idiom-table.toml (generated-file gate)
         run: python verification/gen-idiom-data.py --check
+
+      # E7 message-layer drift gate: MessageData.lean is generated from
+      # verification/message-table.json (the same table the shipped-binding
+      # differential in the `frontend` job pins against the real pyths
+      # binary + the CPython oracle), so the C1C3C4Outcome message model can
+      # never drift from the differentially-bound table — the 3.14
+      # oracle-bump transcribed-literal drift cannot recur.
+      - name: MessageData.lean in sync with message-table.json (generated-file gate)
+        run: python verification/gen-message-data.py --check
 
       - name: Build proofs + executable model
         working-directory: verification

@@ -112,6 +112,14 @@ name = "C8HostInterop"
 [[lean_lib]]
 name = "Union8"
 
+# GENERATED from verification/message-table.json by gen-message-data.py
+# (CI regenerates + diffs — same drift gate as DictData). The E7 message
+# layer: the live exception-message literals of the C1C3C4 model, kept
+# differentially bound to the shipped binary + CPython oracle by
+# verification/message_shipped_binding.py.
+[[lean_lib]]
+name = "MessageData"
+
 # The unified C1∧C3∧C4 outcome-preservation theorem (value ∧ error-occurrence
 # ∧ error-KIND+MESSAGE, jointly ⟺ full outcome equality via the Union7 crown
 # lemma) on the non-recursive operation fragment, transliteration-pinned to

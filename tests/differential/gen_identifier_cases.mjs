@@ -14,6 +14,7 @@
 // Run:  node tests/differential/gen_identifier_cases.mjs
 
 import { checkPythonAvailable, runPython, runCase } from "./harness.mjs";
+import { ORACLE_BIN, oracleArgs } from "./oracle_python.mjs";
 import { spawnSync } from "node:child_process";
 
 const WORDS = (
@@ -32,7 +33,7 @@ if (!checkPythonAvailable()) {
 // --- Step 1: programmatic Python-identifier-validity filter -----------
 function isValidPythonIdentifier(word) {
     const code = `compile(${JSON.stringify(word + " = 1")}, "<string>", "exec")`;
-    const r = spawnSync("python", ["-c", code], { encoding: "utf8" });
+    const r = spawnSync(ORACLE_BIN, oracleArgs(["-c", code]), { encoding: "utf8" });
     return r.status === 0;
 }
 

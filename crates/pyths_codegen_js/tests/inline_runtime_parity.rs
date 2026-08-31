@@ -113,7 +113,6 @@ const FROZEN_HAND_INLINED: &[&str] = &[
     "PyDict",
     "PyObject",
     "__MAX_SAFE_BIG",
-    "__NP_RANGES",
     "__PY_MIXIN",
     "__TUPKEY",
     "__arithNumOk",
@@ -129,7 +128,6 @@ const FROZEN_HAND_INLINED: &[&str] = &[
     "__boolNum",
     "__complexFmtPart",
     "__complexRepr",
-    "__cpNonPrintable",
     "__encodeTupleKey",
     "__fits32",
     "__fixedHalfEven",
@@ -148,8 +146,6 @@ const FROZEN_HAND_INLINED: &[&str] = &[
     // no __pyfloat__ arm → leaked 'PyFloat'). Every operand/bit message now
     // routes through __pyTypeName, extracted from the canonical runtime.js
     // (see MIGRATED_TO_EXTRACTION).
-    "__pyAddrMap",
-    "__pyAddrNext",
     "__pyC3",
     "__pyClass",
     "__pyClassAttr",
@@ -158,7 +154,6 @@ const FROZEN_HAND_INLINED: &[&str] = &[
     "__pyIsInstance",
     "__pyKey",
     "__pyKeyObjs",
-    "__pyObjAddr",
     "__pyPropKey",
     "__pyRangeIter",
     "__pyRangeLen",
@@ -168,18 +163,13 @@ const FROZEN_HAND_INLINED: &[&str] = &[
     "__reqArithNum",
     "__reqBitInt",
     "__reqNum",
-    "__roundBigNeg",
-    "__seqLt",
     "__toBig",
     "__toComplex",
-    "parseFormatSpec",
-    "pyAbs",
     "pyAdd",
     "pyBitAnd",
     "pyBitNot",
     "pyBitOr",
     "pyBitXor",
-    "pyChr",
     "pyComplex",
     "pyDictKeys",
     "pyDictMerge",
@@ -189,35 +179,21 @@ const FROZEN_HAND_INLINED: &[&str] = &[
     "pyDivmod",
     "pyEnumerate",
     "pyFixed",
-    "pyFloat",
     "pyFloorDiv",
     "pyForIter",
-    "pyFormatDynamic",
-    "pyFormatFloat",
-    "pyGe",
     "pyGetItem",
-    "pyGt",
-    "pyInt",
     "pyIter",
-    "pyLe",
     "pyLen",
-    "pyLt",
     "pyMap",
     "pyMod",
     "pyMul",
-    "pyNeg",
     "pyNext",
     "pyOrd",
     "pyPow",
-    "pyPrint",
     "pyProperty",
     "pyRange",
-    "pyRepr",
     "pyReversed",
-    "pyRound",
     "pySeq",
-    "pySorted",
-    "pyStr",
     "pySub",
     "pySum",
     "pyTuple",
@@ -256,6 +232,60 @@ const MIGRATED_TO_EXTRACTION: &[&str] = &[
     // copies were deleted, so a hand copy re-appearing would re-open the
     // three-computers divergence.
     "__pyTypeName",
+    // E7/F7: the hand-inlined pyChr lacked the receiver-type guard
+    // (chr('a') raised ValueError where CPython raises TypeError "'str'
+    // object cannot be interpreted as an integer") — migrated to the
+    // canonical runtime/src/runtime.js pyChr with its deps.
+    "pyChr",
+    // F6 (v0.2.4): the hand-inlined pyRound kept the scale-multiply ndigits
+    // path after the package moved to exact decimal rounding
+    // (__pyRoundDecimal) — inline `pyths run` would have silently mis-rounded
+    // (round(0.05, 1) → 0.0). pyRound + __roundBigNeg (+ the new
+    // __pyRoundDecimal) now extract from the canonical runtime.js.
+    "pyRound",
+    "__roundBigNeg",
+    // E3: the text-authority family was de-inlined — the hand mirrors had
+    // drifted (stale parseFormatSpec grammar with silent-no-op invalid
+    // specs; pyRepr without the __reprSeen self-reference guard, the
+    // titlecase/casefold tables, or the new string-spec validation). All
+    // six now extract from the canonical runtime/src with transitive deps
+    // (__specPad, __NP_RANGES, __cpNonPrintable, __pyObjAddr, the generated
+    // Unicode tables).
+    "pyFormatFloat",
+    "pyRepr",
+    "pyStr",
+    "pyPrint",
+    "pyFormatDynamic",
+    "parseFormatSpec",
+    // (their non-exported deps — __NP_RANGES/__cpNonPrintable/__pyObjAddr/
+    // __pyAddrMap/__pyAddrNext/__specPad and the generated Unicode tables —
+    // extract transitively and are deliberately not listed: the battery
+    // resolves entries against the package EXPORT surface; the freeze scan
+    // catches any re-appearing hand copy.)
+    // F1/F3/F4 (v0.2.4): the compare family (pyLt/pyLe/pyGt/pyGe — plus
+    // their non-exported deps __seqLt/__setLe/__bytesLt/__cmpTypeGuard),
+    // the unary family (pyNeg/pyAbs), the int()/float() conversions, and
+    // pySorted were de-inlined: their hand copies had drifted (no cross-type
+    // TypeError guard, no bytes ordering, no unary guard, no int()/float()
+    // receiver guard, pySorted's local raw-`<` comparator), so inline
+    // `pyths run` kept every silent-wrong coercion the package fixed
+    // (1 < 'a' → False, -'a' → NaN, int(None) → 0, sorted([1,'a']) no-raise).
+    "pyLt",
+    "pyLe",
+    "pyGt",
+    "pyGe",
+    "pyNeg",
+    "pyAbs",
+    "pyInt",
+    "pyFloat",
+    "pySorted",
+    // F1-r2 (v0.2.4): __seqLt (with __setLe/__bytesLt/__cmpTypeGuard) is a
+    // NON-EXPORTED dep of the compare family — it extracts transitively and
+    // is deliberately NOT listed here: the battery harness resolves entries
+    // against the package's EXPORT surface, and the freeze test already
+    // catches a re-appearing hand copy via the package decl-name scan. Its
+    // behavior (same-kind lexicographic order + the r2 list-vs-tuple
+    // TypeError) is pinned through the pyLt/pyLe/pyGt/pyGe entries.
 ];
 
 #[test]
@@ -289,6 +319,20 @@ fn freeze_no_new_hand_inlined_package_helpers() {
         "frozen hand-inlined helpers no longer found in the hand region: \
          {gone:?}. If migrated to extraction (good!), remove them from \
          FROZEN_HAND_INLINED and add them to MIGRATED_TO_EXTRACTION."
+    );
+}
+
+/// #477: a DUPLICATE battery key silently shadows the earlier (richer)
+/// entry — JS object literals keep the last one. Coverage then shrinks with
+/// no signal. Assert key uniqueness so a duplicate fails loud.
+#[test]
+fn test_battery_keys_are_unique() {
+    let names = battery_entry_names();
+    let mut seen = BTreeSet::new();
+    let dupes: Vec<&&str> = names.iter().filter(|n| !seen.insert(**n)).collect();
+    assert!(
+        dupes.is_empty(),
+        "duplicate battery keys (the later entry silently SHADOWS the          earlier one — #477): {dupes:?}"
     );
 }
 
@@ -641,7 +685,15 @@ const battery = {
     },
     // migrated helper (battery-coverage rule): pins package format-spec
     // behavior — float precision, zero-pad width, numeric code on a str.
-    pyFormatSpec: (H) => [t(() => H.pyFormatSpec(3.14159, { precision: 2, type: "f" })), t(() => H.pyFormatSpec(42, { width: 6, zero: true, type: "d" })), t(() => H.pyFormatSpec("hi", { type: "f" }))],
+    pyFormatSpec: (H) => [t(() => H.pyFormatSpec(3.14159, { precision: 2, type: "f" })), t(() => H.pyFormatSpec(42, { width: 6, zero: true, type: "d" })), t(() => H.pyFormatSpec("hi", { type: "f" })), t(() => H.pyFormatSpec(1234, { width: 11, zero: true, grouping: "," })), t(() => H.pyFormatSpec("ab", { align: "=", width: 4 })), t(() => H.pyFormatSpec(255, { grouping: ",", type: "x" })), t(() => H.pyFormatSpec(5, { precision: 2, type: "d" })), t(() => H.pyFormatSpec(true, { width: 6, align: ">" })), t(() => H.pyFormatSpec(null, {})), t(() => H.pyFormatSpec([1], { width: 8 }))],
+    // E3 migrated text-authority family (battery-coverage rule): value,
+    // error KIND, and message paths for each.
+    pyFormatFloat: (H) => [t(() => H.pyFormatFloat(1)), t(() => H.pyFormatFloat(1e16)), t(() => H.pyFormatFloat(1e17)), t(() => H.pyFormatFloat(5e-7)), t(() => H.pyFormatFloat(-0)), t(() => H.pyFormatFloat(NaN)), t(() => H.pyFormatFloat(Infinity)), t(() => H.pyFormatFloat(0.1)), t(() => H.pyFormatFloat(1e20))],
+    pyRepr: (H) => { const xs = [1, "a"]; xs.push(xs); return [t(() => H.pyRepr("a'b\u0007")), t(() => H.pyRepr([1.5, "x"])), t(() => H.pyRepr(xs)), t(() => H.pyRepr(new Map([["k", 1n]]))), t(() => H.pyRepr(null)), t(() => H.pyRepr(true)), t(() => H.pyRepr("\ud800")), t(() => H.pyRepr(1.5)), t(() => H.pyRepr([1, "x", true, null]))]; },
+    pyStr: (H) => [t(() => H.pyStr("hi")), t(() => H.pyStr(true)), t(() => H.pyStr(null)), t(() => H.pyStr([1, "a"])), t(() => H.pyStr(new Map())), t(() => H.pyStr(1.5))],
+    pyPrint: (H) => { const logs = []; const orig = console.log; console.log = (s) => logs.push(s); try { H.pyPrint(1.5, "x", [1, null]); } finally { console.log = orig; } return [ser(logs)]; },
+    pyFormatDynamic: (H) => [t(() => H.pyFormatDynamic(255, '#06x')), t(() => H.pyFormatDynamic(3.5, "q")), t(() => H.pyFormatDynamic("ab", "z")), t(() => H.pyFormatDynamic(-0.0001, "z.1f")), t(() => H.pyFormatDynamic(12345, ".2")), t(() => H.pyFormatDynamic(3.14159, ".2f")), t(() => H.pyFormatDynamic(42, "06d")), t(() => H.pyFormatDynamic("hi", ">5"))],
+    parseFormatSpec: (H) => [t(() => JSON.stringify(H.parseFormatSpec('+#010_.3f'))), t(() => JSON.stringify(H.parseFormatSpec("*<8s"))), t(() => H.parseFormatSpec(".x")), t(() => H.parseFormatSpec("qq"))],
     // ---- extracted dict family: pins behavior against the package ----
     pyDictGet: (H) => [t(() => H.pyDictGet({ k: 1 }, "k")), t(() => H.pyDictGet({}, "m", "dflt")), t(() => H.pyDictGet(new Map([["k", 2]]), "k")), t(() => H.pyDictGet(null, "k", "d"))],
     pyDictItems: (H) => {
@@ -774,11 +826,12 @@ const battery = {
     pyDiv: (H) => [t(() => H.pyDiv(7, 2)), t(() => H.pyDiv(1, 0))],
     pyFloorDiv: (H) => [t(() => H.pyFloorDiv(-7, 2)), t(() => H.pyFloorDiv(7, 2)), t(() => H.pyFloorDiv(1, 0))],
     pyMod: (H) => [t(() => H.pyMod(-7, 2)), t(() => H.pyMod(7, -2)),
-        // em() carries the MESSAGE (battery-coverage rule): a drift back to
-        // "integer division or modulo by zero" is the same ZeroDivisionError
-        // NAME, so t() alone would not catch it.
-        em(() => H.pyMod(1, 0)),                                   // integer modulo by zero (CPython 3.12 `%` wording)
-        em(() => H.pyMod(2.5, 0))],                                // float modulo by zero
+        // em() carries the MESSAGE (battery-coverage rule): a drift in the
+        // "division by zero" text is the same ZeroDivisionError NAME, so t()
+        // alone would not catch it. (CPython 3.14 unified every division/modulo
+        // ZeroDivisionError message to "division by zero".)
+        em(() => H.pyMod(1, 0)),                                   // division by zero (3.14 unified; was "integer modulo by zero")
+        em(() => H.pyMod(2.5, 0))],                                // division by zero (3.14 unified; was "float modulo by zero")
     pyPow: (H) => [t(() => H.pyPow(2, 10)), t(() => H.pyPow(2, -1)), t(() => H.pyPow(4, 0.5)),
         // Bug 3 (enriched differential): zero to a negative power is
         // CPython's ZeroDivisionError with its exact message, never the
@@ -830,9 +883,27 @@ const battery = {
     },
     pyIBitXor: (H) => { const s = new Set([1, 2]); const r = H.pyIBitXor(s, new Set([2, 3])); return [ser(r), String(r === s), t(() => H.pyIBitXor(6, 3)), em(() => H.pyIBitXor(1.5, 1))]; },
     pyDivmod: (H) => [t(() => H.pyDivmod(7, 2)), t(() => H.pyDivmod(-7, 2))],
-    pyAbs: (H) => [t(() => H.pyAbs(-5)), t(() => H.pyAbs(-5.5)), t(() => H.pyAbs("x"))],
-    pyNeg: (H) => [t(() => H.pyNeg(5)), t(() => H.pyNeg(-0.0))],
-    pyRound: (H) => [t(() => H.pyRound(2.5)), t(() => H.pyRound(3.5)), t(() => H.pyRound(-2.5)), t(() => H.pyRound(2.675, 2))],
+    // F4 (v0.2.4): em() rows pin the __unaryTypeGuard TypeError the old
+    // inline copies lacked (abs('x') → NaN, -'a' → NaN, abs(None) → 0).
+    pyAbs: (H) => [t(() => H.pyAbs(-5)), t(() => H.pyAbs(-5.5)),
+        em(() => H.pyAbs("x")), em(() => H.pyAbs(null)),
+        t(() => H.pyRepr(H.pyAbs(-(10n ** 20n))))],
+    pyNeg: (H) => [t(() => H.pyNeg(5)), t(() => H.pyNeg(-0.0)),
+        em(() => H.pyNeg("a")), em(() => H.pyNeg(null)),
+        t(() => H.pyRepr(H.pyNeg(10n ** 20n)))],
+    pyRound: (H) => [t(() => H.pyRound(2.5)), t(() => H.pyRound(3.5)), t(() => H.pyRound(-2.5)), t(() => H.pyRound(2.675, 2)),
+        // F6: exact decimal rounding (scale-multiply mis-rounded all of these)
+        t(() => H.pyRound(0.05, 1)), t(() => H.pyRound(0.015, 2)), t(() => H.pyRound(-0.005, 2)),
+        t(() => H.pyRound(0.125, 2)), t(() => H.pyRound(1234.5678, -2)),
+        em(() => H.pyRound(1.7e308, -308)),
+        // F6-r2: ndigits validates via __index__; huge-negative saturates
+        em(() => H.pyRound(1.25, 1.5)),                            // 'float' cannot be interpreted
+        em(() => H.pyRound(1.25, "1")),                            // 'str' cannot be interpreted
+        t(() => H.pyRound(1.567, { __index__: () => 2 })),         // 1.57
+        t(() => H.pyRound(2n ** 60n, -(10n ** 5n))),               // 0, not RangeError
+        t(() => H.pyRepr(H.pyRound(-1.5, -400)))],                 // '-0.0'
+    // F6: BigInt negative-ndigits arm (round(int, -k) half-even to a power of 10)
+    __roundBigNeg: (H) => [t(() => H.pyRound(1235n, -1)), t(() => H.pyRound(-1235n, -1)), t(() => H.pyRound(12345678901234567890123n, -2)), t(() => H.pyRound(150n, -2)), t(() => H.pyRound(250n, -2))],
     pyBitAnd: (H) => [t(() => H.pyBitAnd(6, 3)), t(() => H.pyBitAnd(true, 1)), t(() => H.pyBitAnd(1.5, 1)),
         // E2 (#466): bytes operand must be named 'bytes' in BOTH copies.
         em(() => H.pyBitAnd(H.pyBytesOf([97]), 1)),
@@ -855,30 +926,72 @@ const battery = {
     // deleted copies mis-named; the rest are the regression sweep).
     __pyTypeName: (H) => { function fx() {} class Kls {} return [t(() => H.__pyTypeName(fx)), t(() => H.__pyTypeName(Kls)), t(() => H.__pyTypeName({ a: 1 })), t(() => H.__pyTypeName(H.__pyF(2))), t(() => H.__pyTypeName(7)), t(() => H.__pyTypeName(9007199254740993n)), t(() => H.__pyTypeName(true)), t(() => H.__pyTypeName("ab")), t(() => H.__pyTypeName([1])), t(() => H.__pyTypeName(H.pyTuple(1))), t(() => H.__pyTypeName(new Set([1]))), t(() => H.__pyTypeName(new Map())), t(() => H.__pyTypeName(H.pyBytesOf([97]))), t(() => H.__pyTypeName(H.pyBytearrayOf([97]))), t(() => H.__pyTypeName(null)), t(() => H.__pyTypeName(2.5))]; },
     // ---- comparisons ----
-    pyLt: (H) => [t(() => H.pyLt(1, 2)), t(() => H.pyLt("a", "b")), t(() => H.pyLt([1, 2], [1, 3])), t(() => H.pyLt(1, "a"))],
-    pyLe: (H) => [t(() => H.pyLe(2, 2)), t(() => H.pyLe([1], [1]))],
-    pyGt: (H) => [t(() => H.pyGt(2, 1)), t(() => H.pyGt("b", "a"))],
-    pyGe: (H) => [t(() => H.pyGe(2, 2)), t(() => H.pyGe([2], [1, 9]))],
+    // F1 (v0.2.4): the em() rows pin the cross-type __cmpTypeGuard TypeError
+    // (message included) and the __bytesLt byte-value ordering the old inline
+    // copies lacked (battery-coverage rule — these are the fix-changed cases).
+    pyLt: (H) => [t(() => H.pyLt(1, 2)), t(() => H.pyLt("a", "b")), t(() => H.pyLt([1, 2], [1, 3])),
+        em(() => H.pyLt(1, "a")),                                  // '<' not supported: 'int' and 'str'
+        em(() => H.pyLt(null, 1)),                                 // NoneType never orders
+        em(() => H.pyLt(1, H.pyBytesOf([97]))),                    // 'int' and 'bytes'
+        t(() => H.pyLt(H.pyBytesOf([2]), H.pyBytesOf([16]))),      // byte-value order (b'\x02' < b'\x10')
+        t(() => H.pyLt(1, H.__pyF(2))), t(() => H.pyLt(false, true)),
+        em(() => H.pyLt([1], H.pyTuple(2))),                       // F1-r2: 'list' and 'tuple'
+        em(() => H.pyLe(H.pyTuple(1), [1]))],                      // F1-r2: 'tuple' and 'list'
+    pyLe: (H) => [t(() => H.pyLe(2, 2)), t(() => H.pyLe([1], [1])),
+        em(() => H.pyLe(1, "a")), t(() => H.pyLe(H.pyBytesOf([97, 98]), H.pyBytesOf([97, 98])))],
+    pyGt: (H) => [t(() => H.pyGt(2, 1)), t(() => H.pyGt("b", "a")),
+        em(() => H.pyGt(null, null)), t(() => H.pyGt(H.pyBytesOf([98]), H.pyBytesOf([97, 98]))),
+        t(() => H.pyGt(H.pyTuple(1, "b"), H.pyTuple(1, "a"))),     // __seqLt nested/typed recursion
+        em(() => H.pyGt([1, 2], H.pyTuple(1, 2)))],                // F1-r2: 'list' and 'tuple'
+
+    pyGe: (H) => [t(() => H.pyGe(2, 2)), t(() => H.pyGe([2], [1, 9])),
+        em(() => H.pyGe("a", 1)), t(() => H.pyGe(H.pyBytesOf([97]), H.pyBytesOf([97]))),
+        t(() => H.pyGe([1, 2], [1, 2, 0])),                        // __seqLt prefix rule
+        em(() => H.pyGe(H.pyTuple(), []))],                        // F1-r2: 'tuple' and 'list'
     // ---- conversions / predicates ----
-    pyInt: (H) => [t(() => H.pyInt("42")), t(() => H.pyInt(3.9)), t(() => H.pyInt(-3.9)), t(() => H.pyInt("3.5")), t(() => H.pyInt("ff", 16))],
-    pyFloat: (H) => [t(() => H.pyFloat("3.5")), t(() => H.pyFloat("nan")), t(() => H.pyFloat("x"))],
-    pyBool: (H) => [t(() => H.pyBool(0)), t(() => H.pyBool("")), t(() => H.pyBool([])), t(() => H.pyBool({})), t(() => H.pyBool(null)), t(() => H.pyBool(new Map()))],
+    // F3 (v0.2.4): em() rows pin the receiver-type guard (int(None)/int([1])/
+    // float(None)/float([1]) were silent-wrong JS coercions) and the
+    // bytes-like arm the old inline copies lacked.
+    pyInt: (H) => [t(() => H.pyInt("42")), t(() => H.pyInt(3.9)), t(() => H.pyInt(-3.9)), t(() => H.pyInt("3.5")), t(() => H.pyInt("ff", 16)),
+        em(() => H.pyInt(null)),                                   // TypeError, not 0
+        em(() => H.pyInt([1])),                                    // TypeError, not 1
+        t(() => H.pyInt(H.pyBytesOf([49, 50]))),                   // int(b'12') → 12
+        em(() => H.pyInt(H.pyBytesOf([120]))),                     // ValueError with b'x' repr
+        t(() => H.pyInt(H.__pyF(8))),                              // boxed 8.0 → 8
+        // F3-r2: numeric protocol + explicit-base validation
+        em(() => H.pyInt({ __int__: () => 1.5 })),                 // __int__ returned non-int
+        t(() => H.pyInt({ __int__: () => 7, __index__: () => 3 })), // __int__ wins → 7
+        t(() => H.pyInt({ __index__: () => 5 })),                  // __index__ → 5
+        em(() => H.pyInt({ valueOf: () => 42 })),                  // bare valueOf rejected
+        em(() => H.pyInt(7, 2)),                                   // non-string with explicit base
+        em(() => H.pyInt("101", "2")),                             // base via __index__ only
+        em(() => H.pyInt("101", 99)),                              // base range ValueError
+        t(() => H.pyInt("101", { __index__: () => 2 }))],          // base __index__ → 5
+    pyFloat: (H) => [t(() => H.pyFloat("3.5")), t(() => H.pyFloat("nan")), t(() => H.pyFloat("x")),
+        em(() => H.pyFloat(null)),                                 // TypeError, not 0.0
+        em(() => H.pyFloat([1])),                                  // TypeError, not 1.0
+        t(() => H.pyRepr(H.pyFloat(H.pyBytesOf([49, 46, 53])))),   // float(b'1.5') → 1.5
+        // F3-r2: numeric protocol (__float__ validated, then __index__)
+        t(() => H.pyFloat({ __float__: () => 2.5 })),
+        em(() => H.pyFloat({ __float__: () => 3 })),               // returned non-float
+        t(() => H.pyRepr(H.pyFloat({ __index__: () => 5 }))),      // 5.0
+        em(() => H.pyFloat({ valueOf: () => 1.5 }))],              // bare valueOf rejected
     // #467: the trailing tm() probes pin the MESSAGE type-name ('float'/'int'/
     // 'bool', not JS 'number'/'boolean') — name-only t() cannot see that drift.
     pyLen: (H) => [t(() => H.pyLen([1, 2])), t(() => H.pyLen("ab")), t(() => H.pyLen({ a: 1 })), t(() => H.pyLen(new Map())), t(() => H.pyLen(new Set([1]))), t(() => H.pyLen(5)), tm(() => H.pyLen(8.5)), tm(() => H.pyLen(true))],
-    pyStr: (H) => [t(() => H.pyStr(1.5)), t(() => H.pyStr(true)), t(() => H.pyStr(null)), t(() => H.pyStr([1, "x"]))],
-    pyRepr: (H) => [t(() => H.pyRepr("a'b")), t(() => H.pyRepr(1.0)), t(() => H.pyRepr([1, "x", true, null])), t(() => H.pyRepr(new Map([["k", 1]])))],
-    pyFormatFloat: (H) => [t(() => H.pyFormatFloat(0.1)), t(() => H.pyFormatFloat(-0.0)), t(() => H.pyFormatFloat(1e20)), t(() => H.pyFormatFloat(NaN)), t(() => H.pyFormatFloat(Infinity))],
-    pyFormatDynamic: (H) => [t(() => H.pyFormatDynamic(3.14159, ".2f")), t(() => H.pyFormatDynamic(42, "06d")), t(() => H.pyFormatDynamic("hi", ">5"))],
-    pyChr: (H) => [t(() => H.pyChr(97)), t(() => H.pyChr(128512))],
+    pyChr: (H) => [t(() => H.pyChr(97)), t(() => H.pyChr(128512)),
+                   // E7/F7 receiver-type + range arms (TypeError vs ValueError)
+                   t(() => H.pyChr("a")), t(() => H.pyChr(-1)), t(() => H.pyChr(true))],
     pyOrd: (H) => [t(() => H.pyOrd("a")), t(() => H.pyOrd("ab"))],
     // ---- iteration / builtins ----
     pySum: (H) => [t(() => H.pySum([1, 2, 3])), t(() => H.pySum([0.1, 0.2]))],
-    pyAll: (H) => [t(() => H.pyAll([1, 2])), t(() => H.pyAll([1, 0]))],
-    pyAny: (H) => [t(() => H.pyAny([0, 1])), t(() => H.pyAny([]))],
-    pyAnd: (H) => [t(() => H.pyAnd(0, () => 5)), t(() => H.pyAnd(1, () => 5))],
-    pyOr: (H) => [t(() => H.pyOr(0, () => 5)), t(() => H.pyOr(2, () => 5))],
-    pySorted: (H) => [t(() => H.pySorted([3, 1, 2])), t(() => H.pySorted(["b", "a"]))],
+    // F1 (v0.2.4): pySorted now compares through pyLt — the em() row pins the
+    // cross-type TypeError (sorted([1,'a']) was silently permissive), the
+    // bytes row the byte-value ordering, the mixed row numeric bool/int/float.
+    pySorted: (H) => [t(() => H.pySorted([3, 1, 2])), t(() => H.pySorted(["b", "a"])),
+        em(() => H.pySorted([1, "a"])),
+        t(() => H.pySorted([H.pyBytesOf([16]), H.pyBytesOf([2])]).map((b) => b.__repr__())),
+        t(() => H.pySorted([2.5, 1, true]))],
     pyRange: (H) => [t(() => [...H.pyRange(3)]), t(() => [...H.pyRange(5, 1, -2)])],
     // #467: tm() probes pin the not-iterable MESSAGE type-name.
     pyIter: (H) => [t(() => { const it = H.pyIter([7]); return typeof it.next; }), tm(() => H.pyIter(8.5)), tm(() => H.pyIter(7)), tm(() => H.pyIter(true))],

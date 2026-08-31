@@ -24,6 +24,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ORACLE_BIN, ORACLE_DISPLAY, oracleArgs } from "../oracle_python.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -36,11 +37,11 @@ await fs.mkdir(SCRATCH, { recursive: true });
 
 let pythonOk = true;
 try {
-    const r = spawnSync("python", ["--version"], { encoding: "utf8" });
+    const r = spawnSync(ORACLE_BIN, oracleArgs(["--version"]), { encoding: "utf8" });
     if (r.status !== 0) pythonOk = false;
 } catch { pythonOk = false; }
 if (!pythonOk) {
-    console.log("[livermore] python not on PATH — skipping");
+    console.log(`[livermore] oracle CPython (${ORACLE_DISPLAY}) not runnable — skipping`);
     process.exit(0);
 }
 
@@ -50,7 +51,7 @@ function rewireImports(js) {
 }
 
 function runPython(file) {
-    const r = spawnSync("python", [file], { encoding: "utf8" });
+    const r = spawnSync(ORACLE_BIN, oracleArgs([file]), { encoding: "utf8" });
     if (r.status !== 0) throw new Error(`python failed: ${r.stderr}`);
     return r.stdout.replace(/\r?\n$/, "");
 }

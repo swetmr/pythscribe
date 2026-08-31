@@ -1,0 +1,534 @@
+[
+ {
+  "id": "bs_f1_cmp_0_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 < 'a')"
+ },
+ {
+  "id": "bs_f1_cmp_0_le",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 <= 'a')"
+ },
+ {
+  "id": "bs_f1_cmp_0_gt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 > 'a')"
+ },
+ {
+  "id": "bs_f1_cmp_0_ge",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 >= 'a')"
+ },
+ {
+  "id": "bs_f1_cmp_1_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a' < 1)"
+ },
+ {
+  "id": "bs_f1_cmp_1_le",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a' <= 1)"
+ },
+ {
+  "id": "bs_f1_cmp_1_gt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a' > 1)"
+ },
+ {
+  "id": "bs_f1_cmp_1_ge",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a' >= 1)"
+ },
+ {
+  "id": "bs_f1_cmp_2_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: None < 1)"
+ },
+ {
+  "id": "bs_f1_cmp_2_le",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: None <= 1)"
+ },
+ {
+  "id": "bs_f1_cmp_2_gt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: None > 1)"
+ },
+ {
+  "id": "bs_f1_cmp_2_ge",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: None >= 1)"
+ },
+ {
+  "id": "bs_f1_cmp_3_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 < None)"
+ },
+ {
+  "id": "bs_f1_cmp_3_le",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 <= None)"
+ },
+ {
+  "id": "bs_f1_cmp_3_gt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 > None)"
+ },
+ {
+  "id": "bs_f1_cmp_3_ge",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 >= None)"
+ },
+ {
+  "id": "bs_f1_cmp_4_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 < [1])"
+ },
+ {
+  "id": "bs_f1_cmp_5_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: (1, 'a') < (1, 2))"
+ },
+ {
+  "id": "bs_f1_cmp_6_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a' < None)"
+ },
+ {
+  "id": "bs_f1_cmp_7_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: [1, 'a'] < [1, 2])"
+ },
+ {
+  "id": "bs_f1_cmp_8_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: {} < 1)"
+ },
+ {
+  "id": "bs_f1_cmp_9_lt",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1.5 < 'a')"
+ },
+ {
+  "id": "bs_f1_min_mixed",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: min(3, 'a'))"
+ },
+ {
+  "id": "bs_f1_max_mixed",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: max(None, 1))"
+ },
+ {
+  "id": "bs_f1_sorted_mixed",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: sorted([1, 'a']))"
+ },
+ {
+  "id": "bs_f1_sort_mixed",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)\nx = [1, 'a']",
+  "expr": "_probe(lambda: (x.sort(), x))"
+ },
+ {
+  "id": "bs_f1_sorted_key_ok",
+  "expr": "sorted(['bb', 'a'], key=len)"
+ },
+ {
+  "id": "bs_f1_ok_tuple",
+  "expr": "(1, 2) < (1, 3)"
+ },
+ {
+  "id": "bs_f1_ok_str",
+  "expr": "'a' < 'b'"
+ },
+ {
+  "id": "bs_f1_ok_list",
+  "expr": "[1] < [1, 2]"
+ },
+ {
+  "id": "bs_f1_ok_boolint",
+  "expr": "True < 2"
+ },
+ {
+  "id": "bs_f1_ok_intfloat",
+  "expr": "1 < 1.5"
+ },
+ {
+  "id": "bs_f1_ok_minmax",
+  "expr": "(min(3, 1), max(2.5, 2))"
+ },
+ {
+  "id": "bs_f2_shadow_print_float",
+  "_setup": "def f():\n    print = lambda *a: 'shadow'\n    return print(8.0)",
+  "expr": "f()"
+ },
+ {
+  "id": "bs_f2_shadow_print_int",
+  "_setup": "def f():\n    print = lambda *a: 'shadow'\n    return print(8)",
+  "expr": "f()"
+ },
+ {
+  "id": "bs_f2_shadow_str_float",
+  "_setup": "str = lambda x: 'S'",
+  "expr": "str(8.0)"
+ },
+ {
+  "id": "bs_f2_shadow_repr_float",
+  "_setup": "repr = lambda x: 'R'",
+  "expr": "repr(8.0)"
+ },
+ {
+  "id": "bs_f2_shadow_float_lit",
+  "_setup": "float = lambda x: 'F'",
+  "expr": "float(2)"
+ },
+ {
+  "id": "bs_f2_shadow_round",
+  "_setup": "round = lambda x: 'RD'",
+  "expr": "round(2.5)"
+ },
+ {
+  "id": "bs_f2_shadow_abs",
+  "_setup": "abs = lambda x: 'A'",
+  "expr": "abs(-2.5)"
+ },
+ {
+  "id": "bs_f2_shadow_len_cmp",
+  "_setup": "len = lambda x: 1",
+  "expr": "'yes' if len('abc') < 2 else 'no'"
+ },
+ {
+  "id": "bs_f2_shadow_ord",
+  "_setup": "ord = lambda x: 7",
+  "expr": "ord('a')"
+ },
+ {
+  "id": "bs_f2_shadow_int_str",
+  "_setup": "int = lambda x: 'I'",
+  "expr": "int('12')"
+ },
+ {
+  "id": "bs_f2_shadow_range",
+  "_setup": "range = lambda n: [9]",
+  "expr": "[i for i in range(3)]"
+ },
+ {
+  "id": "bs_f3_int_none",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: int(None))"
+ },
+ {
+  "id": "bs_f3_int_tuple",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: int((2,)))"
+ },
+ {
+  "id": "bs_f3_int_dict",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: int({}))"
+ },
+ {
+  "id": "bs_f3_int_list",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: int([1]))"
+ },
+ {
+  "id": "bs_f3_float_list",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: float([1]))"
+ },
+ {
+  "id": "bs_f3_float_none",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: float(None))"
+ },
+ {
+  "id": "bs_f3_float_dict",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: float({}))"
+ },
+ {
+  "id": "bs_f3_ok_int_str",
+  "expr": "int('12')"
+ },
+ {
+  "id": "bs_f3_ok_int_strip",
+  "expr": "int('  -7  ')"
+ },
+ {
+  "id": "bs_f3_ok_int_float",
+  "expr": "int(2.9)"
+ },
+ {
+  "id": "bs_f3_ok_int_negfloat",
+  "expr": "int(-2.9)"
+ },
+ {
+  "id": "bs_f3_ok_int_bool",
+  "expr": "int(True)"
+ },
+ {
+  "id": "bs_f3_ok_float_int",
+  "expr": "float(2)"
+ },
+ {
+  "id": "bs_f3_ok_float_str",
+  "expr": "float('1.5')"
+ },
+ {
+  "id": "bs_f4_neg_str",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: -'a')"
+ },
+ {
+  "id": "bs_f4_pos_str",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: +'a')"
+ },
+ {
+  "id": "bs_f4_neg_list",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: -[1])"
+ },
+ {
+  "id": "bs_f4_neg_none",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: -None)"
+ },
+ {
+  "id": "bs_f4_abs_none",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: abs(None))"
+ },
+ {
+  "id": "bs_f4_abs_str",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: abs('a'))"
+ },
+ {
+  "id": "bs_f4_ok_neg_bool",
+  "expr": "-True"
+ },
+ {
+  "id": "bs_f4_ok_abs_negfloat",
+  "expr": "abs(-2.5)"
+ },
+ {
+  "id": "bs_f4_ok_abs_negint",
+  "expr": "abs(-2)"
+ },
+ {
+  "id": "bs_f4_ok_pos_float",
+  "expr": "+2.5"
+ },
+ {
+  "id": "bs_f5_slice_stop_float",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: [1, 2, 3][0:2.0])"
+ },
+ {
+  "id": "bs_f5_slice_start_float",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: [1, 2, 3][1.0:])"
+ },
+ {
+  "id": "bs_f5_slice_step_float",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: [1, 2, 3][::2.0])"
+ },
+ {
+  "id": "bs_f5_slice_str_stop_float",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'abc'[0:2.5])"
+ },
+ {
+  "id": "bs_f5_index_float",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: [1, 2, 3][1.0])"
+ },
+ {
+  "id": "bs_f5_ok_slice",
+  "expr": "[1, 2, 3][0:2]"
+ },
+ {
+  "id": "bs_f5_ok_slice_neg_step",
+  "expr": "[1, 2, 3][::-1]"
+ },
+ {
+  "id": "bs_f5_ok_slice_str",
+  "expr": "'abcdef'[1:5:2]"
+ },
+ {
+  "id": "bs_f5_ok_slice_bool",
+  "expr": "[1, 2, 3][True:]"
+ },
+ {
+  "id": "bs_f6_round_2675",
+  "expr": "round(2.675, 2)"
+ },
+ {
+  "id": "bs_f6_round_0125",
+  "expr": "round(0.125, 2)"
+ },
+ {
+  "id": "bs_f6_round_1005",
+  "expr": "round(1.005, 2)"
+ },
+ {
+  "id": "bs_f6_round_25_0",
+  "expr": "round(2.5)"
+ },
+ {
+  "id": "bs_f6_round_neg25_0",
+  "expr": "round(-2.5)"
+ },
+ {
+  "id": "bs_f6_round_35_0",
+  "expr": "round(3.5)"
+ },
+ {
+  "id": "bs_f6_round_neg",
+  "expr": "round(2675.0, -1)"
+ },
+ {
+  "id": "bs_f6_round_1arg_float",
+  "expr": "round(2.675)"
+ },
+ {
+  "id": "bs_f7_chr_str",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: chr('a'))"
+ },
+ {
+  "id": "bs_f7_chr_oob",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: chr(1114112))"
+ },
+ {
+  "id": "bs_f7_ok_chr",
+  "expr": "chr(97)"
+ },
+ {
+  "id": "bs_f7_ok_chr_astral",
+  "expr": "ord(chr(128169))"
+ },
+ {
+  "id": "bs_f7_ord_long",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: ord('ab'))"
+ },
+ {
+  "id": "bs_f7_chr_index_ok",
+  "_setup": "class _Ix:\n    def __index__(self):\n        return 65",
+  "expr": "chr(_Ix())"
+ },
+ {
+  "id": "bs_f7_chr_index_bad",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)\nclass _Bx:\n    def __index__(self):\n        return 'x'",
+  "expr": "_probe(lambda: chr(_Bx()))"
+ },
+ {
+  "id": "bs_f7_chr_huge_int",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: chr(2**70))"
+ },
+ {
+  "id": "bs_f8_hash_list",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: hash([1]))",
+  "_skip": "builtin 'hash' unsupported at compile time (loud error, not the F8 silent bare-JS hazard); activate when hash lands (pythscribe-v3.x)"
+ },
+ {
+  "id": "bs_f8_hash_dict",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: hash({}))",
+  "_skip": "builtin 'hash' unsupported at compile time (loud error, not the F8 silent bare-JS hazard); activate when hash lands (pythscribe-v3.x)"
+ },
+ {
+  "id": "bs_f8_ok_hash_int_id",
+  "expr": "hash(5) == hash(5)",
+  "_skip": "builtin 'hash' unsupported at compile time (loud error, not the F8 silent bare-JS hazard); activate when hash lands (pythscribe-v3.x)"
+ },
+ {
+  "id": "bs_ob_repr_whole_float",
+  "expr": "8.0"
+ },
+ {
+  "id": "bs_ob_list_float",
+  "expr": "[8.0, 1.5]"
+ },
+ {
+  "id": "bs_ob_dict_float_val",
+  "expr": "{1: 2.0}"
+ },
+ {
+  "id": "bs_ob_pow_float",
+  "expr": "2.0 ** 2"
+ },
+ {
+  "id": "bs_ob_add_point",
+  "expr": "0.1 + 0.2"
+ },
+ {
+  "id": "bs_ob_fdiv_float",
+  "expr": "7.0 // 2"
+ },
+ {
+  "id": "bs_ob_str_float",
+  "expr": "str(8.0)"
+ },
+ {
+  "id": "bs_ob_fstring_float",
+  "expr": "f'{8.0} {1.5}'"
+ },
+ {
+  "id": "bs_ob_tuple_mixed",
+  "expr": "(1, 2.0, '3')"
+ },
+ {
+  "id": "bs_ob_sum_floats",
+  "expr": "sum([0.5, 0.25, 8.0])"
+ },
+ {
+  "id": "bs_ob_neg_zero",
+  "expr": "-0.0"
+ },
+ {
+  "id": "bs_ob_float_eq_int",
+  "expr": "2.0 == 2"
+ },
+ {
+  "id": "bs_dm_ok_int",
+  "expr": "divmod(7, 2)"
+ },
+ {
+  "id": "bs_dm_ok_negint",
+  "expr": "divmod(-7, 2)"
+ },
+ {
+  "id": "bs_dm_ok_float",
+  "expr": "divmod(7.5, 2)"
+ },
+ {
+  "id": "bs_dm_zero_float",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: divmod(1.5, 0))"
+ },
+ {
+  "id": "bs_mem_ok_str",
+  "expr": "'a' in 'abc'"
+ },
+ {
+  "id": "bs_mem_ok_list",
+  "expr": "1 in [1]"
+ },
+ {
+  "id": "bs_mem_ok_dictkey",
+  "expr": "2 in {1: 'x'}"
+ },
+ {
+  "id": "bs_mem_int_recv",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 1 in 5)"
+ }
+]

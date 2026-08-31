@@ -1,0 +1,25 @@
+{
+ "_comment": [
+  "E7 r2 (review blocker 4) \u2014 the corpus.d RATCHET. run.mjs REQUIRES this",
+  "manifest: a missing corpus.d/, a missing or unlisted corpus file, a",
+  "row-count drift, an unlisted _skip row, or a stale listed skip all fail",
+  "RED. Adding/regenerating a corpus or changing its skips is therefore an",
+  "explicit manifest edit in the same PR \u2014 a standing corpus cannot",
+  "silently disappear or shrink (the two-sided-baseline discipline of",
+  "tests/conformance/autotester/baseline.json, applied here)."
+ ],
+ "corpora": {
+  "blindspot_f1_f8.json": {
+   "rows": 116,
+   "skips": [
+    "bs_f8_hash_dict",
+    "bs_f8_hash_list",
+    "bs_f8_ok_hash_int_id"
+   ]
+  },
+  "e3_str_format.json": {
+   "rows": 172,
+   "skips": []
+  }
+ }
+}

@@ -129,11 +129,15 @@ except ZeroDivisionError:
     print("ZeroDivisionError caught")
 '''
 
+# 4th column: EXPECTED observation-line count (E7 harness-integrity pin) —
+# the number of output lines each module MUST produce (excmod: the first
+# divk print + the caught-exception message; its zero-division print raises
+# before printing). Update together with the module source.
 MODULES = [
-    ("intmod", INT_MOD, ["pick", "total", "add"]),
-    ("floatmod", FLOAT_MOD, ["fsum", "fmul"]),
-    ("boolmod", BOOL_MOD, ["bcount", "isneg"]),
-    ("excmod", EXC_MOD, ["divk"]),
+    ("intmod", INT_MOD, ["pick", "total", "add"], 14),
+    ("floatmod", FLOAT_MOD, ["fsum", "fmul"], 3),
+    ("boolmod", BOOL_MOD, ["bcount", "isneg"], 3),
+    ("excmod", EXC_MOD, ["divk"], 2),
 ]
 
 # The exact guard line the false-world control deletes (must match bridge.rs).
@@ -171,7 +175,7 @@ def main() -> None:
             cwd=d, shell=(sys.platform == "win32"))
 
         int_glue = None
-        for name, src, kernels in MODULES:
+        for name, src, kernels, expected_obs in MODULES:
             ps = d / f"{name}.ps"
             ps.write_text(src, encoding="utf-8")
 
@@ -199,8 +203,18 @@ def main() -> None:
             py.write_text(src, encoding="utf-8")
             py_out = normalize_d1(run([sys.executable, str(py)]))
 
-            # 5. The differential.
-            assert len(js_out) == len(py_out) != 0, (name, js_out, py_out)
+            # 5. The differential — with the E7 harness-integrity assertion:
+            # output lines must equal the module's PINNED observation count
+            # on BOTH sides (a batching/compile defect that swallows
+            # observations must fail loud BEFORE the diff, not shrink the
+            # compared corpus; cross-side equality alone cannot catch a
+            # shrink that hits both sides).
+            assert len(py_out) == expected_obs != 0, (
+                f"HARNESS INTEGRITY ({name}): cpython emitted {len(py_out)} "
+                f"observation(s), source declares {expected_obs}")
+            assert len(js_out) == expected_obs, (
+                f"HARNESS INTEGRITY ({name}): js+wasm emitted {len(js_out)} "
+                f"observation(s), source declares {expected_obs}")
             diverged = [(i, a, b) for i, (a, b) in enumerate(zip(js_out, py_out)) if a != b]
             assert not diverged, f"{name}: shipped js+wasm diverges from CPython: {diverged}"
             total_obs += len(js_out)

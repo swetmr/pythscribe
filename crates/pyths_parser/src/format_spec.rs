@@ -2,7 +2,7 @@
 //!
 //! Format spec grammar:
 //! ```text
-//! format_spec     ::= [[fill]align][sign]["#"]["0"][width][grouping_option]["." precision][type]
+//! format_spec     ::= [[fill]align][sign]["z"]["#"]["0"][width][grouping_option]["." precision [grouping_option]][type]
 //! fill            ::= <any character>
 //! align           ::= "<" | ">" | "=" | "^"
 //! sign            ::= "+" | "-" | " "
@@ -26,11 +26,16 @@ pub struct FormatSpec {
     pub fill: Option<char>,
     pub align: Option<Align>,
     pub sign: Option<Sign>,
+    /// PEP 682 `z` — coerce negative zero (float presentations only).
+    pub coerce_zero: bool,
     pub alt_form: bool,
     pub zero_pad: bool,
     pub width: Option<u32>,
     pub grouping: Option<Grouping>,
     pub precision: Option<u32>,
+    /// 3.14: optional grouping of the FRACTIONAL digits, written after the
+    /// precision (`{:,.9_f}`).
+    pub frac_grouping: Option<Grouping>,
     pub ty: Option<FormatType>,
 }
 
@@ -115,6 +120,12 @@ pub fn parse(s: &str) -> Option<FormatSpec> {
         }
     }
 
+    // ["z"] — PEP 682 negative-zero coercion.
+    if i < chars.len() && chars[i] == 'z' {
+        spec.coerce_zero = true;
+        i += 1;
+    }
+
     // ["#"]
     if i < chars.len() && chars[i] == '#' {
         spec.alt_form = true;
@@ -139,7 +150,16 @@ pub fn parse(s: &str) -> Option<FormatSpec> {
         i += 1;
     }
     if !width_digits.is_empty() {
-        spec.width = width_digits.parse::<u32>().ok();
+        // E3 r3: an over-u32 digit run must NOT silently drop the width
+        // (the old `.ok()` turned overflow into None-width and formatted
+        // WITHOUT it). Bail to the dynamic path: the caller lowers a
+        // parse-failure to pyFormatDynamic, whose runtime grammar raises
+        // CPython's exact "Too many decimal digits in format string" for
+        // > PY_SSIZE_T_MAX (and attempts/raises like CPython below it).
+        match width_digits.parse::<u32>() {
+            Ok(w) => spec.width = Some(w),
+            Err(_) => return None,
+        }
     }
 
     // [grouping_option]
@@ -165,10 +185,34 @@ pub fn parse(s: &str) -> Option<FormatSpec> {
             prec_digits.push(chars[i]);
             i += 1;
         }
-        if prec_digits.is_empty() {
+        // 3.14: '.' with no digits is legal when a frac-grouping char
+        // follows ('{:.,f}'); otherwise missing-precision → invalid.
+        if prec_digits.is_empty() && !matches!(chars.get(i), Some(',') | Some('_')) {
             return None;
         }
-        spec.precision = prec_digits.parse::<u32>().ok();
+        if !prec_digits.is_empty() {
+            // E3 r3: same rule as width — overflow routes to the dynamic
+            // parser instead of silently dropping the precision.
+            match prec_digits.parse::<u32>() {
+                Ok(p) => spec.precision = Some(p),
+                Err(_) => return None,
+            }
+        }
+
+        // 3.14: optional FRACTIONAL grouping char after the precision.
+        if i < chars.len() {
+            match chars[i] {
+                ',' => {
+                    spec.frac_grouping = Some(Grouping::Comma);
+                    i += 1;
+                }
+                '_' => {
+                    spec.frac_grouping = Some(Grouping::Underscore);
+                    i += 1;
+                }
+                _ => {}
+            }
+        }
     }
 
     // [type]
@@ -223,7 +267,7 @@ fn parse_type(c: char) -> Option<FormatType> {
 /// Lower a parsed FormatSpec applied to `expr` into a JS expression.
 /// Callers pass through any spec that returns `None` (treats it as a
 /// no-op formatting).
-pub fn lower(spec: &FormatSpec, expr: Expr, span: Span) -> Expr {
+pub fn lower(spec: &FormatSpec, raw: &str, expr: Expr, span: Span) -> Expr {
     // The lowering composes a chain of helper calls. To keep emitted
     // code legible, we build it in stages:
     //   1. Apply type conversion (toFixed, toExponential, toString(radix)…)
@@ -236,7 +280,7 @@ pub fn lower(spec: &FormatSpec, expr: Expr, span: Span) -> Expr {
     // unset compile to the identity. We delegate the orchestration to
     // a single runtime helper `pyFormatSpec(value, opts)` so the JS
     // remains compact. The opts object encodes the spec.
-    let opts = build_opts_object(spec, span);
+    let opts = build_opts_object(spec, raw, span);
     let helper = ident_expr("pyFormatSpec", span);
     Expr {
         kind: ExprKind::Call {
@@ -285,9 +329,17 @@ fn bool_lit(value: bool, span: Span) -> Expr {
 
 /// Build a JS object literal carrying the spec fields. The runtime
 /// helper inspects this object and applies the formatting steps.
-fn build_opts_object(spec: &FormatSpec, span: Span) -> Expr {
+fn build_opts_object(spec: &FormatSpec, raw: &str, span: Span) -> Expr {
     use pyths_syntax::ast::DictItem;
     let mut items = Vec::<DictItem>::new();
+
+    // The RAW spec string rides along for the __format__ protocol (a user
+    // object formatted through the static path receives the original spec)
+    // — mirrors parseFormatSpec's `opts.raw` on the runtime side.
+    items.push(DictItem::KeyValue {
+        key: str_lit("raw", span),
+        value: str_lit(raw, span),
+    });
 
     if let Some(c) = spec.fill {
         items.push(DictItem::KeyValue {
@@ -320,6 +372,12 @@ fn build_opts_object(spec: &FormatSpec, span: Span) -> Expr {
                 },
                 span,
             ),
+        });
+    }
+    if spec.coerce_zero {
+        items.push(DictItem::KeyValue {
+            key: str_lit("z", span),
+            value: bool_lit(true, span),
         });
     }
     if spec.alt_form {
@@ -356,6 +414,18 @@ fn build_opts_object(spec: &FormatSpec, span: Span) -> Expr {
         items.push(DictItem::KeyValue {
             key: str_lit("precision", span),
             value: int_lit(p as i128, span),
+        });
+    }
+    if let Some(g) = spec.frac_grouping {
+        items.push(DictItem::KeyValue {
+            key: str_lit("fracGrouping", span),
+            value: str_lit(
+                match g {
+                    Grouping::Comma => ",",
+                    Grouping::Underscore => "_",
+                },
+                span,
+            ),
         });
     }
     if let Some(t) = spec.ty {
@@ -454,6 +524,21 @@ mod tests {
         let s = parse("+.2f").unwrap();
         assert_eq!(s.sign, Some(Sign::Plus));
         assert_eq!(s.precision, Some(2));
+    }
+
+    #[test]
+    fn parse_width_precision_overflow_routes_dynamic() {
+        // E3 r3: over-u32 digit runs must NOT parse to a spec with the
+        // width/precision silently dropped — None routes the spec to
+        // pyFormatDynamic, whose grammar raises CPython's "Too many
+        // decimal digits in format string" past PY_SSIZE_T_MAX.
+        assert!(parse("999999999999999999999d").is_none());
+        assert!(parse("4294967296d").is_none()); // u32::MAX + 1
+        assert!(parse(".999999999999999999999f").is_none());
+        assert!(parse(".4294967296f").is_none());
+        // In-range values still parse statically.
+        assert_eq!(parse("10d").unwrap().width, Some(10));
+        assert_eq!(parse(".7f").unwrap().precision, Some(7));
     }
 
     #[test]

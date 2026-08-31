@@ -10,11 +10,18 @@ pub mod sourcemap;
 
 pub use emit::JsCodegen;
 pub use emit::{take_emit_overflow, MAX_EMIT_DEPTH};
-// delta4: the checked manifest of every compiler-emittable runtime symbol —
-// consumed by the cli_test.rs export-surface drift guard.
+// E7 sub-part 3 r2: the manifest-membership assertion behind the
+// fast-path shadow gate — exported (hidden) for the injection proof test.
+#[doc(hidden)]
+pub use emit::assert_specially_lowered_manifest;
 #[doc(hidden)]
 pub use emit::inline_runtime_for_test;
+// delta4: the checked manifest of every compiler-emittable runtime symbol —
+// consumed by the cli_test.rs export-surface drift guard.
 pub use emit::EMITTABLE_RUNTIME_SYMBOLS;
+// E7 sub-part 3: the checked manifest of every specially-lowered builtin —
+// consumed by the generated shadow matrix in behavioral_differential.rs.
+pub use emit::SPECIALLY_LOWERED_BUILTINS;
 pub use sourcemap::SourceMapBuilder;
 
 /// Result of compilation with optional source map.

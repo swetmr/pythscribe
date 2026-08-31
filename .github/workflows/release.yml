@@ -1,5 +1,15 @@
 name: Release
 
+# PRE-TAG GATE (E7, 2026-08-27): this workflow only BUILDS and PUBLISHES —
+# it runs no tests. Every conformance gate lives in ci.yml and runs on the
+# main-branch push of the commit being tagged: the CPython differential
+# corpus + corpus.d ratchet (MANIFEST.json), the Transcrypt-autotester
+# two-sided ratchet (tests/conformance/autotester/baseline.json), the
+# C1C3C4 message-layer shipped binding (verification/message-table.json),
+# and the Lean drift gates. The internal pre-tag checklist requires that the
+# ci.yml run be GREEN at the exact tagged commit before `git tag` — do not tag
+# over a red or skipped CI run.
+
 on:
   push:
     tags:

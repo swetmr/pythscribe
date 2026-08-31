@@ -99,13 +99,6 @@ impl Entry {
             strategy: Strategy::Runtime(helper),
         }
     }
-    const fn u(name: &'static str, receiver: ReceiverKind, reason: &'static str) -> Self {
-        Self {
-            name,
-            receiver,
-            strategy: Strategy::Unsupported(reason),
-        }
-    }
 }
 
 /// The authoritative table of Python method lowerings. Read by
@@ -115,11 +108,13 @@ pub static TABLE: &[Entry] = &[
     // ============================================================
     // str methods (47) — docs.python.org/3/library/stdtypes.html#string-methods
     // ============================================================
-    Entry::h("capitalize", ReceiverKind::Str, InlineSpec::Capitalize, "pyStrCapitalize"),
-    Entry::i("casefold", ReceiverKind::Str, InlineSpec::Casefold),
+    // E3: capitalize/casefold need the titlecase/casefold tables — runtime only.
+    Entry::rt("capitalize", ReceiverKind::Str, "pyStrCapitalize"),
+    Entry::rt("casefold", ReceiverKind::Str, "pyStrCasefold"),
     Entry::rt("center", ReceiverKind::Str, "pyStrCenter"),
     Entry::rt("count", ReceiverKind::Multi, "pyCount"), // shared with list/tuple — runtime dispatches
-    Entry::u("encode", ReceiverKind::Str, "encode() returns bytes; not yet supported. Use TextEncoder().encode(s) directly."),
+    // E3: common codecs (utf-8/ascii/latin-1) with strict/ignore/replace.
+    Entry::rt("encode", ReceiverKind::Str, "pyStrEncode"),
     Entry::rt("endswith", ReceiverKind::Str, "pyStrEndswith"),
     Entry::rt("expandtabs", ReceiverKind::Str, "pyStrExpandtabs"),
     // #301: `.find` collides with Array.prototype.find(callback) — the old
@@ -129,28 +124,51 @@ pub static TABLE: &[Entry] = &[
     // their own native .find.
     Entry::rt("find", ReceiverKind::Multi, "pyFind"),
     Entry::rt("format", ReceiverKind::Str, "pyStrFormat"),
-    Entry::u("format_map", ReceiverKind::Str, "format_map() not yet supported. Use s.format(**d) instead."),
+    Entry::rt("format_map", ReceiverKind::Str, "pyStrFormatMap"),
     Entry::rt("index", ReceiverKind::Multi, "pyIndex"), // shared with list/tuple
-    Entry::i("isalnum", ReceiverKind::Str, InlineSpec::Isalnum),
-    Entry::i("isalpha", ReceiverKind::Str, InlineSpec::Isalpha),
-    Entry::i("isascii", ReceiverKind::Str, InlineSpec::Isascii),
-    Entry::i("isdecimal", ReceiverKind::Str, InlineSpec::Isdigit), // ASCII-equiv to isdigit
-    Entry::i("isdigit", ReceiverKind::Str, InlineSpec::Isdigit),
+    Entry::rt("isalnum", ReceiverKind::Str, "pyStrIsalnum"),
+    // E3: Hybrid — inline regex only for provably-str receivers; bytes/user
+    // receivers (own .isalpha etc.) dispatch through the runtime twin.
+    Entry::h(
+        "isalpha",
+        ReceiverKind::Str,
+        InlineSpec::Isalpha,
+        "pyStrIsalpha",
+    ),
+    Entry::h(
+        "isascii",
+        ReceiverKind::Str,
+        InlineSpec::Isascii,
+        "pyStrIsascii",
+    ),
+    // E3: isdecimal/isdigit/isnumeric are THREE DISTINCT Unicode predicates
+    // (Nd; +Numeric_Type=Digit; +Numeric_Type=Numeric) — generated tables.
+    Entry::rt("isdecimal", ReceiverKind::Str, "pyStrIsdecimal"),
+    Entry::rt("isdigit", ReceiverKind::Str, "pyStrIsdigit"),
     Entry::rt("isidentifier", ReceiverKind::Str, "pyStrIsidentifier"),
-    Entry::h("islower", ReceiverKind::Str, InlineSpec::Islower, "pyStrIslower"),
-    Entry::i("isnumeric", ReceiverKind::Str, InlineSpec::Isdigit), // ASCII-equiv
+    Entry::rt("islower", ReceiverKind::Str, "pyStrIslower"),
+    Entry::rt("isnumeric", ReceiverKind::Str, "pyStrIsnumeric"),
     Entry::rt("isprintable", ReceiverKind::Str, "pyStrIsprintable"),
-    Entry::i("isspace", ReceiverKind::Str, InlineSpec::Isspace),
+    Entry::h(
+        "isspace",
+        ReceiverKind::Str,
+        InlineSpec::Isspace,
+        "pyStrIsspace",
+    ),
     Entry::rt("istitle", ReceiverKind::Str, "pyStrIstitle"),
-    Entry::h("isupper", ReceiverKind::Str, InlineSpec::Isupper, "pyStrIsupper"),
+    Entry::rt("isupper", ReceiverKind::Str, "pyStrIsupper"),
     Entry::rt("join", ReceiverKind::Str, "pyStrJoin"),
     Entry::rt("ljust", ReceiverKind::Str, "pyStrLjust"),
     Entry::r("lower", ReceiverKind::Str, "toLowerCase"),
-    Entry::h("lstrip", ReceiverKind::Str, InlineSpec::Lstrip, "pyStrLstrip"),
-    Entry::u("maketrans", ReceiverKind::Str, "maketrans() is a static method building translation tables. Use str.replaceAll() chains instead."),
+    // E3: strip family — the inline JS-\s mirrors drifted from Python's
+    // whitespace set; runtime only (ONE copy).
+    Entry::rt("lstrip", ReceiverKind::Str, "pyStrLstrip"),
+    Entry::rt("maketrans", ReceiverKind::Str, "pyStrMaketrans"),
     Entry::rt("partition", ReceiverKind::Str, "pyStrPartition"),
-    Entry::i("removeprefix", ReceiverKind::Str, InlineSpec::Removeprefix),
-    Entry::i("removesuffix", ReceiverKind::Str, InlineSpec::Removesuffix),
+    // E3 r2: Runtime-only — the inline arm evaluated the AFFIX ARGUMENT twice
+    // (side effects ran twice) and silently coerced non-str affixes.
+    Entry::rt("removeprefix", ReceiverKind::Str, "pyStrRemoveprefix"),
+    Entry::rt("removesuffix", ReceiverKind::Str, "pyStrRemovesuffix"),
     // WB-18: route through the runtime smart dispatcher so a regex held in a
     // VARIABLE (invisible to the WB-10 syntactic arg check) is applied as a
     // regex, not mis-routed to Python str.replace. Plain-string args keep
@@ -165,19 +183,18 @@ pub static TABLE: &[Entry] = &[
     Entry::rt("rjust", ReceiverKind::Str, "pyStrRjust"),
     Entry::rt("rpartition", ReceiverKind::Str, "pyStrRpartition"),
     Entry::rt("rsplit", ReceiverKind::Str, "pyStrRsplit"),
-    Entry::h("rstrip", ReceiverKind::Str, InlineSpec::Rstrip, "pyStrRstrip"),
+    Entry::rt("rstrip", ReceiverKind::Str, "pyStrRstrip"),
     Entry::rt("split", ReceiverKind::Str, "pyStrSplit"),
     Entry::rt("splitlines", ReceiverKind::Str, "pyStrSplitlines"),
     // Full CPython spec (tuple prefixes + start/end): runtime helper —
     // the bare .startsWith rename dropped every optional argument.
     Entry::rt("startswith", ReceiverKind::Str, "pyStrStartswith"),
-    Entry::h("strip", ReceiverKind::Str, InlineSpec::Strip, "pyStrStrip"),
+    Entry::rt("strip", ReceiverKind::Str, "pyStrStrip"),
     Entry::rt("swapcase", ReceiverKind::Str, "pyStrSwapcase"),
     Entry::rt("title", ReceiverKind::Str, "pyStrTitle"),
     Entry::rt("translate", ReceiverKind::Str, "pyStrTranslate"),
     Entry::r("upper", ReceiverKind::Str, "toUpperCase"),
-    Entry::i("zfill", ReceiverKind::Str, InlineSpec::Zfill),
-
+    Entry::rt("zfill", ReceiverKind::Str, "pyStrZfill"),
     // ============================================================
     // list methods (11) — docs.python.org/3/tutorial/datastructures.html
     // ============================================================
@@ -188,20 +205,39 @@ pub static TABLE: &[Entry] = &[
     // `hybrid_inline_applies`); everything else dispatches through pyAppend,
     // which keeps Python list semantics for arrays and calls the receiver's
     // own native append otherwise.
-    Entry::h("append", ReceiverKind::List, InlineSpec::AppendList, "pyAppend"),
-    Entry::h("clear", ReceiverKind::Multi, InlineSpec::ClearList, "pyClear"), // shared with dict/set
-    Entry::h("copy", ReceiverKind::Multi, InlineSpec::CopyList, "pyCopy"),    // shared
+    Entry::h(
+        "append",
+        ReceiverKind::List,
+        InlineSpec::AppendList,
+        "pyAppend",
+    ),
+    Entry::h(
+        "clear",
+        ReceiverKind::Multi,
+        InlineSpec::ClearList,
+        "pyClear",
+    ), // shared with dict/set
+    Entry::h("copy", ReceiverKind::Multi, InlineSpec::CopyList, "pyCopy"), // shared
     // count, index — shared with str above (Multi). Listed in str group.
     // #301: extend/insert — same receiver-collision discipline as `append`:
     // inline only on provably-list receivers, else runtime dispatch (native
     // method wins for non-list receivers that have one).
-    Entry::h("extend", ReceiverKind::List, InlineSpec::ExtendList, "pyExtend"),
-    Entry::h("insert", ReceiverKind::List, InlineSpec::InsertList, "pyInsert"),
+    Entry::h(
+        "extend",
+        ReceiverKind::List,
+        InlineSpec::ExtendList,
+        "pyExtend",
+    ),
+    Entry::h(
+        "insert",
+        ReceiverKind::List,
+        InlineSpec::InsertList,
+        "pyInsert",
+    ),
     Entry::rt("pop", ReceiverKind::Multi, "pyPop"), // shared with dict/set
     Entry::rt("remove", ReceiverKind::Multi, "pyRemove"), // shared with set
     Entry::r("reverse", ReceiverKind::List, "reverse"),
     Entry::rt("sort", ReceiverKind::List, "pyListSort"),
-
     // ============================================================
     // generator methods (3) — round-4 pythonic sweep
     // docs.python.org/3/reference/expressions.html#generator-iterator-methods
@@ -214,7 +250,6 @@ pub static TABLE: &[Entry] = &[
     Entry::rt("close", ReceiverKind::Multi, "pyGenClose"),
     Entry::rt("send", ReceiverKind::Multi, "pyGenSend"),
     Entry::rt("throw", ReceiverKind::Multi, "pyGenThrow"),
-
     // ============================================================
     // dict methods (11) — docs.python.org/3/library/stdtypes.html#mapping-types-dict
     // ============================================================
@@ -245,24 +280,39 @@ pub static TABLE: &[Entry] = &[
     // receiver. Marked Multi so the duplicate-name check passes.
     Entry::rt("update", ReceiverKind::Multi, "pyUpdate"),
     Entry::rt("values", ReceiverKind::Dict, "pyDictValues"),
-
     // ============================================================
     // set methods (17) — docs.python.org/3/library/stdtypes.html#set-types-set-frozenset
     // ============================================================
     Entry::r("add", ReceiverKind::Set, "add"),
     // clear, copy, pop, remove — shared above.
     Entry::rt("difference", ReceiverKind::Set, "pySetDifference"),
-    Entry::rt("difference_update", ReceiverKind::Set, "pySetDifferenceUpdate"),
+    Entry::rt(
+        "difference_update",
+        ReceiverKind::Set,
+        "pySetDifferenceUpdate",
+    ),
     // #301: runtime-dispatched so a non-Set receiver with its own .discard
     // (user classes) isn't silently sent to a nonexistent .delete.
     Entry::rt("discard", ReceiverKind::Set, "pyDiscard"),
     Entry::rt("intersection", ReceiverKind::Set, "pySetIntersection"),
-    Entry::rt("intersection_update", ReceiverKind::Set, "pySetIntersectionUpdate"),
+    Entry::rt(
+        "intersection_update",
+        ReceiverKind::Set,
+        "pySetIntersectionUpdate",
+    ),
     Entry::rt("isdisjoint", ReceiverKind::Set, "pySetIsdisjoint"),
     Entry::rt("issubset", ReceiverKind::Set, "pySetIssubset"),
     Entry::rt("issuperset", ReceiverKind::Set, "pySetIssuperset"),
-    Entry::rt("symmetric_difference", ReceiverKind::Set, "pySetSymmetricDifference"),
-    Entry::rt("symmetric_difference_update", ReceiverKind::Set, "pySetSymmetricDifferenceUpdate"),
+    Entry::rt(
+        "symmetric_difference",
+        ReceiverKind::Set,
+        "pySetSymmetricDifference",
+    ),
+    Entry::rt(
+        "symmetric_difference_update",
+        ReceiverKind::Set,
+        "pySetSymmetricDifferenceUpdate",
+    ),
     Entry::rt("union", ReceiverKind::Set, "pySetUnion"),
     // `update` is consolidated above with ReceiverKind::Multi — runtime
     // helper pyUpdate sniffs the receiver to pick dict/set behavior.

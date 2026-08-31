@@ -10,23 +10,26 @@ fragment — integers, floor-division, code-point strings, `round`, `sorted`, bi
 **deliberately does not** match CPython are listed here up front, so nothing surprises you at
 runtime. These are stances, not bugs.
 
-### D1 — whole-valued floats can display as ints
+### D1 — int/float distinction (RESOLVED in v0.2.2, minimal-B float boxing)
 
-Python `int` and `float` are both compiled to a single JS `number`, so a **whole-valued float
-loses its `.0` when its float-ness can't be tracked statically** — most visibly *inside
-containers* and *through untyped function boundaries*:
+Historical entry. Python `int` and `float` used to share a single untagged JS `number`, so a
+**whole-valued float lost its `.0`** inside containers and through untyped function boundaries
+(`print([1.0, 2.0])` → `[1, 2]`, `isinstance(3.0, int)` → `True`). The v0.2.2 minimal-B value
+model **fixed this at the representation level**: an integer-valued float is carried as a boxed
+`PyFloat` (non-integer floats stay native JS numbers, ints are untouched), so float-ness survives
+every runtime channel:
 
 ```python
-print([1.0, 2.0])          # PythScribe: [1, 2]        CPython: [1.0, 2.0]
-print({0.0: 'x'})          # PythScribe: {0: 'x'}      CPython: {0.0: 'x'}
-isinstance(3.0, int)       # PythScribe: True          CPython: False
+print([1.0, 2.0])          # PythScribe: [1.0, 2.0]    CPython: [1.0, 2.0]
+print({0.0: 'x'})          # PythScribe: {0.0: 'x'}    CPython: {0.0: 'x'}
+isinstance(3.0, int)       # PythScribe: False          CPython: False
 ```
 
-Direct, statically-tracked cases are correct (`x = 2.0; print(x)` → `2.0`; `print(float(2))` →
-`2.0`). **Values and lookups are always Python-correct** — `0.0 == 0` share a dict slot, arithmetic
-is unaffected; only the *repr* of a whole float differs. Full fidelity would need a float-wrapper
-type that taxes every numeric op on the edge target — deliberately rejected. (See the A4/F4 entries
-below for the precise tracked/untracked boundary.)
+Values and lookups were always Python-correct (`0.0 == 0` share a dict slot); the repr divergence
+is what the boxing closed, at a measured ~9% tax on float-heavy arithmetic only. **Residual
+boundary:** a whole-valued float produced by *native JS interop* (a JS library returning `2.0`
+as a plain number, without passing through a pyths operator) is indistinguishable from an int and
+still displays as `2` — see the A4/F4 entries below.
 
 ### D2 — `eval` / `exec` / `compile` — and every other unimplemented builtin — are rejected
 
@@ -44,11 +47,35 @@ builtin with no lowering — `open`, `input`, `hash`, `id`, `globals`, `locals`,
 (`format`, `slice`, `ascii`, and 1-arg `vars` gained real implementations in the same change;
 zero-arg `vars()` is `locals()` and is rejected with its own message.)
 
-### D3 — `str.encode()` / `bytes` are not (yet) modeled
+### D3 — `str.encode()`: common codecs only (E3)
 
-`str.encode()` and the `bytes` type emit an explicit "not yet supported" diagnostic. Unlike D1/D2
-this is a **capability gap, not a permanent stance** — it could be implemented later (TextEncoder-
-backed) if a real workload needs it.
+`str.encode(encoding='utf-8', errors='strict')` is implemented for the COMMON codecs —
+**utf-8, ascii, latin-1** (and their standard aliases) with `strict`/`ignore`/`replace`
+error handling, returning real `bytes` and raising CPython's `UnicodeEncodeError`
+(a `ValueError` subclass) with the exact message, including lone-surrogate rejection.
+Any other codec name raises `LookupError: unknown encoding: <name>` — the full codec
+registry (cp1252, utf-16, …) is deliberately out of scope.
+
+### D3b — remaining E3 text-surface deviations (documented)
+
+- **`'n'` presentation type formats with NO locale** — it behaves as `'d'` (int) /
+  `'g'` (float) without locale-aware grouping (`locale.setlocale` is not modeled).
+- **`format(x, 'c')` overflow threshold** for huge ints uses the 64-bit C-long
+  boundary ("Python int too large to convert to C long"); CPython on
+  32-bit-long platforms (Windows) trips the same error at 2**31. (`'%c'` is NOT
+  affected — E3 r3: printf `%c` range-checks first and raises CPython's exact
+  `OverflowError: %c arg not in range(0x110000)` for any out-of-range int on
+  every platform, `'%c' % 2**100` included.)
+- **`print(..., file=...)`** is not supported (no `sys.stdout` object); `flush` is
+  accepted and ignored (console I/O is unbuffered).
+- The Unicode tables behind `casefold`/`isdecimal`/`isdigit`/`isnumeric` and the
+  titlecase map are GENERATED from the pinned oracle CPython
+  (`scripts/gen_unicode_tables.py`) — regenerate when the oracle's Unicode
+  version moves.
+
+printf-style `%` formatting (`fmt % args`), `str.maketrans`/`str.translate` (all
+three forms), and `str.format_map` are fully implemented (E3) — they are no longer
+limitations.
 
 ### D4 — loop-variable closure capture is per-iteration (early-bound)
 
@@ -160,21 +187,32 @@ Two paths deliberately keep JS-native (per-invocation) default evaluation:
   shared one. This is an accepted residual; hoisting method defaults to
   module scope would require restructuring method emission and is deferred.
 
-## Float division-by-zero message on whole-valued float *variables* (F4)
+## Float division-by-zero message on whole-valued float *variables* (F4 — RESOLVED in v0.2.2)
 
-`1.0 / 0.0` raises `ZeroDivisionError("float division by zero")` and `1 / 0`
-raises `ZeroDivisionError("division by zero")`, matching CPython, because the
-compiler tags statically-known float operands. A whole-valued float held in a
-*variable* (`x = 2.0; x / 0`) compiles to the same untagged JS number as an
-int, so it reports `"division by zero"`. Non-whole float values (`1.5 / 0`) are
-detected at runtime and report the float message correctly.
+Historical entry: a whole-valued float held in a *variable* (`x = 2.0; x / 0`)
+used to compile to the same untagged JS number as an int and report
+`"division by zero"` instead of `"float division by zero"`. The v0.2.2
+minimal-B float boxing (see D1) carries the float tag through variables, so
+`x = 2.0; x / 0` reported `"float division by zero"` like the CPython 3.12
+oracle of the time.
 
-## Whole-float display through untracked channels (pre-existing, A4)
+**3.14 postscript (oracle bump):** CPython 3.14 unified every
+division/modulo `ZeroDivisionError` message to the single
+`"division by zero"`, so the float/int message split this entry describes is
+obsolete — both `x = 2.0; x / 0` and `1 / 0` now say `"division by zero"`,
+matching the pinned 3.14.7 oracle (see `docs/python-oracle-policy.md`). The
+float boxing itself is unaffected (it still drives float *display* and
+result types, e.g. A4 below).
 
-`print(float(2))` renders `2.0`, but a whole-valued float reaching `print` /
-`str` / `repr` through an untracked channel (an unannotated variable, a
-list/dict element, an unannotated return) may render `2` — PythScribe ints and
-whole floats share one untagged JS `number`. Unchanged by this batch.
+## Whole-float display through untracked channels (A4 — RESOLVED in v0.2.2 for pyths-produced values)
+
+Historical entry: a whole-valued float reaching `print` / `str` / `repr`
+through an untracked channel (an unannotated variable, a list/dict element,
+an unannotated return) used to render `2`. The v0.2.2 minimal-B float boxing
+(see D1) preserves float-ness through all of these — `[1.0, 2.0]`, dict
+keys/values, and returns render with `.0` like CPython. Residual: a
+whole-valued float entering from *native JS interop* without passing through
+a pyths operator is an untagged number and still renders as an int.
 
 ## `next(gen, default)` (B-011)
 
@@ -225,9 +263,9 @@ Remaining residuals (each narrow, none new — see issue #83 close-out):
   tuple-marked now, so `sorted(d.items())` reprs correctly).
 - Two different NaN objects are distinct CPython dict keys (identity);
   JS Map folds every NaN into one key (SameValueZero) — best-effort.
-- A whole-valued float key (`{2.0: 'x'}`) displays as `2` — the
-  pre-existing untagged int/float `Number` ambiguity (A4 class), not a
-  dict-representation issue.
+- FIXED by the v0.2.2 minimal-B float boxing (A4/D1 class): a
+  whole-valued float key (`{2.0: 'x'}`) now displays as `2.0` like
+  CPython.
 - FIXED (#106, 2026-07-10): destructuring assignment into subscript
   targets (`d[0], x = a, b`) now evaluates the RHS into a temp and
   assigns element-wise through the shape-dispatching single-target
@@ -351,3 +389,33 @@ scheme:
   predates the ownership section, so its first rebuild under v0.2.2 needs
   `--force` once (the error message says exactly this); the rebuilt module
   carries the section and all later rebuilds are free.
+
+## v0.2.4-r2 fidelity batch — honest residuals
+
+Documented while closing the r2 review blockers (typed-variable compares,
+list-vs-tuple ordering, the int()/float() numeric protocol, bytearray slice
+write guards, round() ndigits validation). These are the arms deliberately
+left open, each with the exact diverging case:
+
+- **`int(s, 0)` does not auto-detect base prefixes.** `int('101', 0)` → 101
+  works (base 0 falls through to a radix-auto `parseInt` for plain
+  decimals), but `int('0x1f', 0)` raises `ValueError: invalid literal…`
+  where CPython 3.14.7 returns 31 (prefix detection for `0x`/`0o`/`0b` plus
+  the base-0 rejection of leading zeros like `'010'` is not implemented).
+  Explicit bases 2–36 are fully validated and correct.
+- **Astral-plane string ordering compares UTF-16 code units, not code
+  points.** `'￿' < '\U00010000'` is True in CPython (code-point order)
+  but False here — both the bare JS `<` fast path (two string literals) and
+  the pyLt/pyLe/pyGt/pyGe final `a < b` fall back to JS string comparison.
+  BMP-only strings (the overwhelmingly common case) order identically.
+  Surfaces: direct compares, sorted()/min()/max() on str lists.
+- **Reflected-comparison precedence uses method identity, not MRO
+  position.** The r2 fix dispatches the right operand's reflected dunder
+  first when `b instanceof a.constructor` with a *different* method
+  implementation — CPython's subclass-override rule. A pathological
+  subclass that re-assigns the parent's own function object as its override
+  (`B.__gt__ = A.__gt__` — same identity) keeps left-first order here.
+- **`int()`/`round()` accept a bool result from `__index__` silently.**
+  CPython 3.14.7 emits a DeprecationWarning (and will reject in a later
+  version); this runtime has no warning channel, so the value is accepted
+  without notice (`__index__` returning True acts as 1).

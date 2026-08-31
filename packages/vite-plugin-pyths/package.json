@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-pyths",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Vite plugin for PythScribe \u2014 compile .ps and .psc files to JavaScript with Fast Refresh",
   "type": "module",
   "main": "index.js",

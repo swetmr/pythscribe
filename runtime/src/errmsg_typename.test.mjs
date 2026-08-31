@@ -125,13 +125,14 @@ test("dict(8.5) names 'float' (CPython-exact)", () => {
 });
 
 test("membership over a non-container names the Python type (pyContains)", () => {
-    // CPython: 1 in 8.5 → TypeError: argument of type 'float' is not iterable
+    // CPython 3.14: 1 in 8.5 → TypeError: argument of type 'float' is not a
+    // container or iterable (3.12 said "... is not iterable").
     throwsPy(() => pyContains(8.5, 1), "TypeError",
-        "argument of type 'float' is not iterable");
+        "argument of type 'float' is not a container or iterable");
     throwsPy(() => pyContains(7, 1), "TypeError",
-        "argument of type 'int' is not iterable");
+        "argument of type 'int' is not a container or iterable");
     throwsPy(() => pyContains(true, 1), "TypeError",
-        "argument of type 'bool' is not iterable");
+        "argument of type 'bool' is not a container or iterable");
 });
 
 test("range() over a class instance names the class (CPython-exact)", () => {
@@ -222,12 +223,12 @@ test("missing attribute on a primitive raises CPython's AttributeError", () => {
     throwsPy(() => pyBoundMethod(2.5, "denominator"), "AttributeError", "'float' object has no attribute 'denominator'");
 });
 
-test("% by zero says 'integer modulo by zero' (CPython 3.12), // unchanged", () => {
-    throwsPy(() => pyMod(1, 0), "ZeroDivisionError", "integer modulo by zero");
-    throwsPy(() => pyMod(9007199254740993n, 0), "ZeroDivisionError", "integer modulo by zero");
-    throwsPy(() => pyMod(2.5, 0), "ZeroDivisionError", "float modulo by zero");
-    throwsPy(() => pyFloorDiv(1, 0), "ZeroDivisionError", "integer division or modulo by zero");
-    throwsPy(() => pyDivmod(7, 0), "ZeroDivisionError", "integer division or modulo by zero");
+test("ZeroDivisionError from %, //, divmod all say 'division by zero' (CPython 3.14 unified)", () => {
+    throwsPy(() => pyMod(1, 0), "ZeroDivisionError", "division by zero");
+    throwsPy(() => pyMod(9007199254740993n, 0), "ZeroDivisionError", "division by zero");
+    throwsPy(() => pyMod(2.5, 0), "ZeroDivisionError", "division by zero");
+    throwsPy(() => pyFloorDiv(1, 0), "ZeroDivisionError", "division by zero");
+    throwsPy(() => pyDivmod(7, 0), "ZeroDivisionError", "division by zero");
     assert.equal(pyMod(7, 3), 1);
     assert.equal(pyMod(-7, 3), 2);
 });

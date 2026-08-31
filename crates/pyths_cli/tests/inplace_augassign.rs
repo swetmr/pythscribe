@@ -321,8 +321,8 @@ print(0 ** 0, 0 ** 2, 2 ** -1)
     );
     assert_eq!(
         out,
-        "I 0.0 cannot be raised to a negative power\n\
-         F 0.0 cannot be raised to a negative power\n\
+        "I zero to a negative power\n\
+         F zero to a negative power\n\
          1 0 0.5\n"
     );
 }

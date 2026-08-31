@@ -454,7 +454,9 @@ fn float_numerator_still_raises_attributeerror() {
     );
 }
 
-// ── `%` by zero message (CPython: modulo, not division-or-modulo) ────────
+// ── division/modulo by zero message (CPython 3.14 unified them all to the
+//    single "division by zero"; 3.12 said "integer modulo by zero" for `%`
+//    and "integer division or modulo by zero" for `//`/divmod) ─────────────
 
 #[test]
 fn int_modulo_by_zero_message_matches_cpython() {
@@ -462,19 +464,19 @@ fn int_modulo_by_zero_message_matches_cpython() {
         "mod_zero",
         "print(1 % 0)\n",
         "ZeroDivisionError",
-        "integer modulo by zero",
-        "integer division or modulo by zero",
+        "division by zero",
+        "integer modulo by zero", // 3.12 wording must no longer leak
     );
 }
 
 #[test]
-fn floor_div_by_zero_message_unchanged() {
+fn floor_div_by_zero_message_matches_cpython() {
     expect_err(
         "floordiv_zero",
         "print(1 // 0)\n",
         "ZeroDivisionError",
-        "integer division or modulo by zero",
-        "% is not",
+        "division by zero",
+        "integer division or modulo by zero", // 3.12 wording must no longer leak
     );
 }
 

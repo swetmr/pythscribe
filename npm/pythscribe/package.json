@@ -1,6 +1,6 @@
 {
   "name": "pythscribe",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "PythScribe \u2014 Python for the browser and the edge, compiled. The pyths AOT compiler CLI (provides the `pyths` command), distributed as a prebuilt native binary.",
   "keywords": [
     "python",
@@ -36,16 +36,16 @@
     "node": ">=18"
   },
   "dependencies": {
-    "pyths-runtime": "^0.2.3",
-    "vite-plugin-pyths": "^0.2.3",
-    "next-plugin-pyths": "^0.2.3"
+    "pyths-runtime": "^0.2.4",
+    "vite-plugin-pyths": "^0.2.4",
+    "next-plugin-pyths": "^0.2.4"
   },
   "optionalDependencies": {
-    "@pythscribe/cli-win32-x64": "0.2.3",
-    "@pythscribe/cli-linux-x64": "0.2.3",
-    "@pythscribe/cli-linux-arm64": "0.2.3",
-    "@pythscribe/cli-darwin-x64": "0.2.3",
-    "@pythscribe/cli-darwin-arm64": "0.2.3"
+    "@pythscribe/cli-win32-x64": "0.2.4",
+    "@pythscribe/cli-linux-x64": "0.2.4",
+    "@pythscribe/cli-linux-arm64": "0.2.4",
+    "@pythscribe/cli-darwin-x64": "0.2.4",
+    "@pythscribe/cli-darwin-arm64": "0.2.4"
   },
   "publishConfig": {
     "access": "public"

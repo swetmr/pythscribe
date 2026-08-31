@@ -441,9 +441,24 @@ def run(cmd: list[str], stdin_text: str | None = None,
 
 def run_tier(name: str, cases: list[str], lean_args: list[str],
              pyths: str, lean_exe: str, rust_src: str,
-             toml: Path | None = None) -> int:
+             toml: Path | None = None, expected_cases: int | None = None,
+             expected_out_lines: int | None = None) -> int:
     # All cases are balanced (strings closed), so one concatenated document
     # expands identically to per-case expansion — one process each side.
+    # E7 harness-integrity r2 (review blocker 3): PINNED per-tier case
+    # counts — a generator regression that shrinks (or grows) the corpus
+    # fails RED and must be an explicit pin update, exactly like the
+    # ratchet. (r1 only refused <10 cases, which let a 418→417 shrink
+    # pass silently.)
+    if expected_cases is not None and len(cases) != expected_cases:
+        print(f"[diff-harness/{name}] HARNESS INTEGRITY FAILURE: generated "
+              f"{len(cases)} case(s), pinned expectation is {expected_cases} "
+              f"— update the pin ONLY with a deliberate corpus change")
+        return 1
+    if len(cases) < 10:
+        print(f"[diff-harness/{name}] HARNESS INTEGRITY FAILURE: generated "
+              f"corpus has only {len(cases)} case(s) — generator regression?")
+        return 1
     doc = "".join(cases)
 
     with tempfile.TemporaryDirectory() as td:
@@ -460,6 +475,24 @@ def run_tier(name: str, cases: list[str], lean_args: list[str],
 
     real_n = real.replace("\r\n", "\n")
     model_n = model.replace("\r\n", "\n")
+    # E7 r2 per-SIDE completeness, before diffing: EACH side must emit the
+    # tier's expected output line count — for the line-preserving tiers
+    # (dict/kwargs/hooks/tiera: the zone classifier substitutes within
+    # lines, never adds/removes newlines) that is the corpus document's own
+    # line count; the idioms tier expands `%NAME` fragments to MULTI-line
+    # snippets, so its deterministic output line count is pinned explicitly
+    # by the caller. A side that truncates output (a crashed/partial
+    # expander) fails here even if BOTH sides truncate identically — the
+    # shrink the equal-bytes comparison alone cannot see.
+    want_lines = expected_out_lines if expected_out_lines is not None else doc.count("\n")
+    for side, text in (("pyths", real_n), ("lean", model_n)):
+        got = text.count("\n")
+        if got != want_lines:
+            print(f"[diff-harness/{name}] HARNESS INTEGRITY FAILURE ({side}): "
+                  f"emitted {got} line(s), expected {want_lines} "
+                  f"— dropped/extra output (or update the pinned count with "
+                  f"a deliberate corpus change)")
+            return 1
     if real_n == model_n:
         print(f"[diff-harness/{name}] model == implementation on {len(cases)} "
               f"cases ({len(doc)} bytes) — byte-identical")
@@ -492,23 +525,31 @@ def main() -> int:
                     ("expanddiff.exe" if sys.platform == "win32" else "expanddiff")))
     opts = ap.parse_args()
 
+    # E7 r2: PINNED case counts per tier (review blocker 3) — the deliberate
+    # corpus sizes as of 2026-08-27. A generator change fails until the pin
+    # is updated alongside it.
     rc = 0
     if opts.tier in ("dict", "all"):
         rc |= run_tier("dict", gen_cases(), [], opts.pyths, opts.lean_exe,
-                       "strings.rs")
+                       "strings.rs", expected_cases=418)
     if opts.tier in ("kwargs", "all"):
         rc |= run_tier("kwargs", gen_kwarg_cases(), ["--kwargs"], opts.pyths,
-                       opts.lean_exe, "kwargs.rs")
+                       opts.lean_exe, "kwargs.rs", expected_cases=432)
     if opts.tier in ("hooks", "all"):
         rc |= run_tier("hooks", gen_hook_cases(), ["--hooks"], opts.pyths,
-                       opts.lean_exe, "hooks.rs")
+                       opts.lean_exe, "hooks.rs", expected_cases=400)
     if opts.tier in ("idioms", "all"):
         rc |= run_tier("idioms", gen_idiom_cases(), ["--idioms"], opts.pyths,
                        opts.lean_exe, "idioms.rs",
-                       toml=ROOT / "verification" / "idiom-table.toml")
+                       toml=ROOT / "verification" / "idiom-table.toml",
+                       expected_cases=373,
+                       # %NAME fragments expand multi-line: 553 corpus lines
+                       # expand to 639 (deterministic; pinned 2026-08-27).
+                       expected_out_lines=639)
     if opts.tier in ("tiera", "all"):
         rc |= run_tier("tiera", gen_tiera_cases(), ["--tiera"], opts.pyths,
-                       opts.lean_exe, "presets.rs/decorators.rs")
+                       opts.lean_exe, "presets.rs/decorators.rs",
+                       expected_cases=416)
     return rc
 
 

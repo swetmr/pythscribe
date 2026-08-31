@@ -3518,45 +3518,40 @@ fn test_method_lowering_list_count_complex() {
     assert!(js.contains("pyCount("), "count complex→runtime: {}", js);
 }
 
+// E3: strip/lstrip/rstrip/zfill/capitalize lower to their runtime helpers
+// for EVERY receiver — the old inline JS mirrors used the JS \s whitespace
+// set (which includes \ufeff and misses \x1c-\x1f/\x85), a sign-unaware
+// padStart, and an uppercase-not-titlecase first char. ONE canonical copy.
 #[test]
 fn test_method_lowering_str_strip() {
     let js = compile("s = \"  hi  \"\nx = s.strip()");
-    assert!(
-        js.contains(r#"s.replace(/^\s+|\s+$/g, "")"#),
-        "strip: {}",
-        js
-    );
+    assert!(js.contains("pyStrStrip(s)"), "strip: {}", js);
 }
 
 #[test]
 fn test_method_lowering_str_lstrip() {
     let js = compile("s = \"  hi\"\nx = s.lstrip()");
-    assert!(js.contains(r#"s.replace(/^\s+/, "")"#), "lstrip: {}", js);
+    assert!(js.contains("pyStrLstrip(s)"), "lstrip: {}", js);
 }
 
 #[test]
 fn test_method_lowering_str_rstrip() {
     let js = compile("s = \"hi  \"\nx = s.rstrip()");
-    assert!(js.contains(r#"s.replace(/\s+$/, "")"#), "rstrip: {}", js);
+    assert!(js.contains("pyStrRstrip(s)"), "rstrip: {}", js);
 }
 
 #[test]
 fn test_method_lowering_str_zfill() {
     let js = compile("s = \"7\"\nx = s.zfill(3)");
-    assert!(js.contains("s.padStart(3, \"0\")"), "zfill: {}", js);
+    assert!(js.contains("pyStrZfill(s, 3)"), "zfill: {}", js);
 }
 
 #[test]
 fn test_method_lowering_str_capitalize_simple() {
     let js = compile("s = \"hello\"\nx = s.capitalize()");
     assert!(
-        js.contains("s[0].toUpperCase()"),
-        "capitalize inline: {}",
-        js
-    );
-    assert!(
-        js.contains(".slice(1).toLowerCase()"),
-        "capitalize body: {}",
+        js.contains("pyStrCapitalize(s)"),
+        "capitalize (titlecase-first per 3.8+ spec): {}",
         js
     );
 }
@@ -3574,20 +3569,23 @@ fn test_method_lowering_str_capitalize_complex() {
 
 #[test]
 fn test_method_lowering_str_isdigit() {
+    // E3: isdecimal/isdigit/isnumeric are THREE distinct Unicode predicates
+    // (generated tables) — runtime helpers, never the old ASCII regex.
     let js = compile("s = \"42\"\nb = s.isdigit()");
-    assert!(js.contains("/^[0-9]+$/.test(s)"), "isdigit: {}", js);
+    assert!(js.contains("pyStrIsdigit(s)"), "isdigit: {}", js);
 }
 
 #[test]
 fn test_method_lowering_str_isalpha() {
+    // E3: Unicode category L — the inline regex is now \p{L}-based.
     let js = compile("s = \"abc\"\nb = s.isalpha()");
-    assert!(js.contains("/^[A-Za-z]+$/.test(s)"), "isalpha: {}", js);
+    assert!(js.contains("p{L}+$/u.test(s)"), "isalpha: {}", js);
 }
 
 #[test]
 fn test_method_lowering_str_isalnum() {
     let js = compile("s = \"abc123\"\nb = s.isalnum()");
-    assert!(js.contains("/^[A-Za-z0-9]+$/.test(s)"), "isalnum: {}", js);
+    assert!(js.contains("pyStrIsalnum(s)"), "isalnum: {}", js);
 }
 
 #[test]
@@ -4010,7 +4008,7 @@ fn test_fstring_format_spec_thousands() {
     // Force "en-US" locale so the runtime always uses `,` as the
     // grouping separator (matches CPython's locale-independent format).
     let js = compile("x = 1000000\ns = f\"{x:,}\"");
-    assert!(js.contains("pyFormatSpec(x, ({\"grouping\": \",\"}))"),
+    assert!(js.contains("pyFormatSpec(x, ({\"raw\": \",\", \"grouping\": \",\"}))"),
         "thousands (Pythonic-checks: grouping routes through pyFormatSpec; the old toLocaleString fast path truncated float fractions): {}", js);
 }
 
@@ -4075,14 +4073,16 @@ m = f\"{x == 1}\"",
 }
 
 #[test]
-fn test_fstring_format_spec_unknown_falls_through() {
-    // Unknown specs are silently ignored — the unwrapped expression
-    // appears (still routed through pyStr like any other no-spec
-    // interpolation — see the A4 fix on FStringPart::Expr).
+fn test_fstring_format_spec_unknown_routes_to_dynamic() {
+    // E3 (#108 class closed): an UNPARSEABLE spec is NOT a silent no-op —
+    // it lowers to pyFormatDynamic with the literal spec string, so the
+    // runtime's parseFormatSpec raises CPython's exact ValueError
+    // ("Invalid format specifier 'weird' for object of type 'int'") at the
+    // exact moment CPython would.
     let js = compile("x = 1\ns = f\"{x:weird}\"");
     assert!(
-        js.contains("${pyStr(x)}"),
-        "unknown spec falls through: {}",
+        js.contains("pyFormatDynamic(x, \"weird\")"),
+        "unknown spec must route through pyFormatDynamic: {}",
         js
     );
 }
@@ -4137,7 +4137,9 @@ class P:
 fn test_fstring_format_spec_zero_padded_int() {
     let js = compile("x = 7\ns = f\"{x:02d}\"");
     assert!(
-        js.contains("pyFormatSpec(x, ({\"zero\": true, \"width\": 2, \"type\": \"d\"}))"),
+        js.contains(
+            "pyFormatSpec(x, ({\"raw\": \"02d\", \"zero\": true, \"width\": 2, \"type\": \"d\"}))"
+        ),
         "02d → pyFormatSpec (Pythonic-checks: the old padStart fast path was sign-unaware): {}",
         js
     );
@@ -4196,36 +4198,43 @@ fn test_table_covers_python_surface() {
 
 #[test]
 fn test_unsupported_method_emits_throw_and_diagnostic() {
+    // E3: encode() is now a REAL lowering (pyStrEncode) — the diagnostic
+    // machinery is still exercised through an unknown dunder-ish name kept
+    // Unsupported in no table row; use a table-less method to confirm
+    // encode no longer errors, and keep the throw-machinery covered by the
+    // WASM/other Unsupported surfaces.
     let module = pyths_parser::parse("s = \"hi\"\nb = s.encode()").unwrap();
     let mut gen = pyths_codegen_js::JsCodegen::new();
     gen.emit_module(&module);
     let errors = gen.take_errors();
-    assert_eq!(errors.len(), 1, "expected one diagnostic");
-    assert!(
-        errors[0].contains("encode"),
-        "diag mentions method: {:?}",
-        errors
+    assert_eq!(
+        errors.len(),
+        0,
+        "encode() must compile clean now: {errors:?}"
     );
     let js = gen.finish();
-    assert!(js.contains("throw new Error("), "throw emitted: {}", js);
+    assert!(js.contains("pyStrEncode(s)"), "encode lowering: {}", js);
 }
 
 #[test]
 fn test_method_lowering_str_casefold() {
+    // E3: FULL Unicode casefold (ß→ss) via the generated fold table.
     let js = compile("s = \"HEY\"\nx = s.casefold()");
     assert!(
-        js.contains("s.toLowerCase()"),
-        "casefold→toLowerCase: {}",
+        js.contains("pyStrCasefold(s)"),
+        "casefold→runtime helper: {}",
         js
     );
 }
 
 #[test]
 fn test_method_lowering_str_removeprefix() {
+    // E3 r2: Runtime-only — the inline ternary evaluated the affix argument
+    // twice (side effects ran twice) and silently coerced non-str affixes.
     let js = compile("s = \"abc-foo\"\nx = s.removeprefix(\"abc-\")");
     assert!(
-        js.contains("startsWith(\"abc-\")"),
-        "removeprefix uses startsWith: {}",
+        js.contains("pyStrRemoveprefix(s, \"abc-\")"),
+        "removeprefix -> runtime helper: {}",
         js
     );
 }
@@ -4234,8 +4243,8 @@ fn test_method_lowering_str_removeprefix() {
 fn test_method_lowering_str_removesuffix() {
     let js = compile("s = \"foo-abc\"\nx = s.removesuffix(\"-abc\")");
     assert!(
-        js.contains("endsWith(\"-abc\")"),
-        "removesuffix uses endsWith: {}",
+        js.contains("pyStrRemovesuffix(s, \"-abc\")"),
+        "removesuffix -> runtime helper: {}",
         js
     );
 }

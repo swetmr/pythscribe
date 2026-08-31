@@ -10,12 +10,16 @@ import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pyFormatSpec, parseFormatSpec } from "./runtime.js";
+// Repo-test-only file (not part of the npm package): the oracle CPython is
+// resolved through the ONE shared module so PYTHS_ORACLE_PYTHON governs this
+// lane too (docs/python-oracle-policy.md).
+import { ORACLE_BIN, oracleArgs } from "../../../tests/differential/oracle_python.mjs";
 
 // Lightweight Python availability probe — skip the suite cleanly if
-// python isn't installed (CI matrices that don't include it).
+// the oracle CPython isn't runnable (CI matrices that don't include it).
 let pythonOk = true;
 try {
-    execFileSync("python", ["-c", "print(format(3.14, '.2f'))"], { stdio: "pipe" });
+    execFileSync(ORACLE_BIN, oracleArgs(["-c", "print(format(3.14, '.2f'))"]), { stdio: "pipe" });
 } catch {
     pythonOk = false;
 }
@@ -119,7 +123,7 @@ const CASES = [
 function pyFormat(value, spec) {
     // Value embedded as JSON (Python-compatible for ints/floats/strings).
     const expr = `format(${JSON.stringify(value)}, ${JSON.stringify(spec)})`;
-    const out = execFileSync("python", ["-c", `import sys; sys.stdout.write(${expr})`], { stdio: ["ignore", "pipe", "pipe"] });
+    const out = execFileSync(ORACLE_BIN, oracleArgs(["-c", `import sys; sys.stdout.write(${expr})`]), { stdio: ["ignore", "pipe", "pipe"] });
     return out.toString();
 }
 
@@ -144,3 +148,84 @@ if (!pythonOk) {
         });
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// E3 — the format-spec GRAMMAR MATRIX (tests/fixtures/format_spec_grammar.json,
+// generated from the pinned CPython oracle by scripts/gen_format_spec_grammar.py).
+// Two obligations per row:
+//   1. PARSER PARITY — parseFormatSpec must accept/reject exactly like the
+//      canonical grammar and produce the SAME opts object the Rust
+//      compile-time parser (format_spec.rs, pinned by
+//      crates/pyths_parser/tests/format_spec_grammar.rs) lowers to.
+//   2. RENDER DIFFERENTIAL — pyFormatSpec's output (value or "Type: message"
+//      error) must equal the frozen CPython outcome for EVERY value label.
+// ═══════════════════════════════════════════════════════════════════════
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __e3dir = path.dirname(fileURLToPath(import.meta.url));
+const GRAMMAR = JSON.parse(readFileSync(
+    path.join(__e3dir, "..", "..", "..", "tests", "fixtures", "format_spec_grammar.json"), "utf8"));
+// Exact pins (codex r2): a shrunken or re-oracled fixture fails loud.
+assert.equal(GRAMMAR.rows.length, 172, "grammar fixture row count changed — regenerate deliberately and update BOTH pins (here + format_spec_grammar.rs)");
+assert.ok(String(GRAMMAR.oracle).startsWith("3.14"), `grammar fixture oracle ${GRAMMAR.oracle} — expected the pinned 3.14 line`);
+
+const E3_VALUES = {
+    int: 4660,
+    negint: -42,
+    bigint: 18446744073709551617n,
+    float: 1234.5678,
+    negfloat: -0.0625,
+    // Option-B boxed integer-valued float (the runtime brand).
+    wholefloat: { __pyfloat__: true, valueOf: () => 8 },
+    negzero: -0,
+    inf: Infinity,
+    nan: NaN,
+    str: "h\u00e9llo",
+    bool: true,
+    none: null,
+    list: [1],
+};
+// negzero/inf/nan/negfloat/float are Python FLOATS; plain JS numbers that are
+// integer-valued would be classified int — box where needed.
+E3_VALUES.negzero = { __pyfloat__: true, valueOf: () => -0 };
+
+test("E3 grammar matrix: parser parity (accept/reject + opts)", () => {
+    for (const row of GRAMMAR.rows) {
+        let got = null;
+        try {
+            const o = parseFormatSpec(row.spec);
+            got = {};
+            for (const k of ["fill", "align", "sign", "z", "alt", "zero", "width", "grouping", "precision", "fracGrouping", "type"]) {
+                if (o[k] !== undefined) got[k] = o[k];
+            }
+        } catch {
+            got = null;
+        }
+        assert.deepEqual(got, row.parse,
+            `parseFormatSpec(${JSON.stringify(row.spec)}) opts mismatch vs canonical grammar`);
+    }
+});
+
+test("E3 grammar matrix: render differential vs frozen CPython", () => {
+    const failures = [];
+    for (const row of GRAMMAR.rows) {
+        for (const [label, expected] of Object.entries(row.cases)) {
+            const v = E3_VALUES[label];
+            let got;
+            try {
+                got = { ok: pyFormatSpec(v, parseFormatSpec(row.spec, v)) };
+            } catch (e) {
+                got = { err: (e.name || "Error") + ": " + (e.message ?? "") };
+            }
+            const want = expected.ok !== undefined ? JSON.stringify(expected.ok) : JSON.stringify(expected.err);
+            const gotS = got.ok !== undefined ? JSON.stringify(got.ok) : JSON.stringify(got.err);
+            if (want !== gotS) {
+                failures.push(`spec=${JSON.stringify(row.spec)} ${label}: js=${gotS} py=${want}`);
+            }
+        }
+    }
+    assert.equal(failures.length, 0,
+        `${failures.length} grammar-matrix divergence(s):\n` + failures.join("\n"));
+});

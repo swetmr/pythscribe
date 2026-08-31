@@ -10,6 +10,15 @@ import {
     pyStr, pyRepr, pyTuple, pyEq, pyFormatFloat,
     pyInt, pyFloat, pyListOf, pyTupleOf, __pyF,
     pyBytesOf, pyBytearrayOf,
+    // F1 (v0.2.4): pySorted/pyListSort/__minmax consolidate their local
+    // raw-`<` comparators onto THE comparison authority (cross-type
+    // TypeError guard, bytes ordering, dunder + reflected dispatch).
+    // Call-time-only dereference, so the import cycle stays safe.
+    pyLt, pyGt,
+    // F6-r2 (v0.2.4): round()'s ndigits validates through THE
+    // interpreted-as-integer authority (__index__ protocol) instead of
+    // Math.trunc(Number(...)) coercion.
+    __pyAsIndexInt,
 } from "./operators.js";
 import { pyBool } from "./types.js";
 
@@ -267,21 +276,12 @@ export function pySorted(iterable, { key, reverse } = {}) {
     // Round-3 pythonic sweep: Python's sort is defined in terms of
     // `<` — instances with __lt__ (and dataclasses with order=True)
     // must sort by it, not by JS default comparison.
-    const lt = (a, b) => {
-        if (a !== null && typeof a?.__lt__ === "function") return !!a.__lt__(b);
-        // #214: tuple/list keys (e.g. `key=lambda x: (-len(x), x)`) compare
-        // lexicographically element-by-element, not by JS string coercion.
-        if (Array.isArray(a) && Array.isArray(b)) {
-            const n = Math.min(a.length, b.length);
-            for (let i = 0; i < n; i++) {
-                if (lt(a[i], b[i])) return true;
-                if (lt(b[i], a[i])) return false;
-            }
-            return a.length < b.length;
-        }
-        return a < b;
-    };
-    const cmp = (a, b) => (lt(a, b) ? -1 : lt(b, a) ? 1 : 0);
+    // F1 (v0.2.4): comparison routes through pyLt, THE comparison
+    // authority — the old LOCAL raw-`<` comparator bypassed the
+    // cross-type guard (sorted([1, 'a']) stayed silently permissive
+    // where CPython raises TypeError) and the bytes byte-value arm.
+    // pyLt already recurses on tuple/list elements (#214).
+    const cmp = (a, b) => (pyLt(a, b) ? -1 : pyLt(b, a) ? 1 : 0);
     // #247: `reverse=True` must keep Python's STABLE order on ties. A
     // sort-then-`.reverse()` flips equal elements too; negate the comparator
     // instead so ties (cmp 0) stay in input order under JS's stable sort.
@@ -361,8 +361,28 @@ function __unitToCp(s, unit) {
 // offsets (negative + clamped), the empty-needle rule, and lone-surrogate
 // needles/haystacks (search runs in code-point space, so a surrogate half never
 // matches an astral char). This is the shared engine for the four str methods.
-function __pyStrFind(s, sub, start, end, last) {
-    if (typeof sub !== "string") throw new TypeError_("must be str");
+/** start/end of the find/index/count/startswith family: CPython slice-bound
+ * semantics — int / None / __index__ only, TypeError otherwise. E3 r3: this
+ * DELEGATES to __pySliceIndex (the ONE slice-component authority) so the
+ * __index__ RESULT is validated too — a "__index__ returned non-int (type
+ * str)" object raises CPython's TypeError instead of being Number()-coerced
+ * to NaN (which silently returned -1). Only BigInt is narrowed here (these
+ * bounds feed Number arithmetic). */
+function __strSliceBound(x) {
+    const v = __pySliceIndex(x);
+    return typeof v === "bigint" ? Number(v) : v;
+}
+
+function __pyStrFind(s, sub, start, end, last, name) {
+    if (typeof sub !== "string") {
+        // E3 r3: CPython 3.14's argument-clinic wording carries the METHOD
+        // name ("find() argument 1 must be str, not int"); the value None
+        // prints as None, not NoneType.
+        const shown = sub === null || sub === undefined ? "None" : __pyTypeName(sub);
+        throw new TypeError_(`${name || "find"}() argument 1 must be str, not ${shown}`);
+    }
+    start = __strSliceBound(start);
+    end = __strSliceBound(end);
     // Fast path: no surrogates on either side → UTF-16 units == code points.
     if (!__hasSurrogate(s) && !__hasSurrogate(sub)) {
         const n = s.length;
@@ -434,7 +454,8 @@ export function pyLen(obj) {
  */
 // #318: banker's rounding of a BigInt to a power of 10 (negative ndigits).
 // k = -ndigits > 0; returns a BigInt. round(int, n) always returns an int.
-function __roundBigNeg(x, k) {
+// (exported for the inline-vs-package parity battery, F6)
+export function __roundBigNeg(x, k) {
     const p = 10n ** BigInt(k);
     const neg = x < 0n;
     const a = neg ? -x : x;
@@ -452,19 +473,29 @@ function __roundBigNeg(x, k) {
 export function pyRound(x, ndigits) {
     // Python: bool ⊆ int — round(True) == 1, round(x, True) uses ndigits=1.
     if (typeof x === "boolean") x = x ? 1 : 0;
-    if (typeof ndigits === "boolean") ndigits = ndigits ? 1 : 0;
     // Option-B spike: unwrap a boxed float; the 2-arg form re-boxes below.
     const __wasF = x != null && x.__pyfloat__ === true;
     if (__wasF) x = x.valueOf();
-    if (ndigits != null && ndigits.__pyfloat__ === true) {
-        throw new TypeError_("'float' object cannot be interpreted as an integer");
-    }
+    // F6-r2 (v0.2.4): ndigits validates through the __index__ protocol
+    // (__pyAsIndexInt) — the old Math.trunc(Number(ndigits)) silently
+    // coerced round(1.25, 1.5) and round(1.25, "1") where CPython raises
+    // "'float'/'str' object cannot be interpreted as an integer". bool
+    // (ndigits=True → 1), int of any magnitude, and __index__-bearing
+    // objects are accepted; everything else raises CPython's TypeError.
+    if (ndigits != null) ndigits = __pyAsIndexInt(ndigits);
     // #318 (a): round(int, ndigits) returns an int for ANY magnitude,
     // including BigInt-routed huge ints (was a spurious TypeError from
     // mixing BigInt with the Number path). nd>=0 is a no-op; nd<0 rounds.
     if (typeof x === "bigint") {
-        const nd = ndigits == null ? 0 : Math.trunc(Number(ndigits));
-        return nd >= 0 ? x : __roundBigNeg(x, -nd);
+        const nd = ndigits == null ? 0 : ndigits;
+        if (nd >= 0) return x; // Number and BigInt both compare correctly
+        // F6-r2: a sufficiently-negative ndigits rounds every digit away —
+        // CPython returns int 0. The old unconditional __roundBigNeg hit
+        // V8's BigInt size cap (10n ** k → RangeError) for a huge |ndigits|.
+        const digits = BigInt((x < 0n ? -x : x).toString().length);
+        const k = typeof nd === "bigint" ? -nd : BigInt(-nd);
+        if (k > digits) return 0;
+        return __roundBigNeg(x, Number(k));
     }
     // #341: single-arg round() returns an int, so a non-finite input can't be
     // converted → ValueError (NaN) / OverflowError (±inf), like CPython. The
@@ -481,25 +512,80 @@ export function pyRound(x, ndigits) {
     }
     // Option-B spike: the 2-arg form of a float input returns a float — box.
     const __reF = ndigits != null && (__wasF || !Number.isInteger(x));
-    const nd = ndigits == null ? 0 : Math.trunc(ndigits);
-    // #318 (b): extreme ndigits. A finite double can't gain precision from a
-    // huge positive nd, so rounding is a no-op → return x (the old code hit
-    // Math.pow(10, 400) = Infinity → NaN). A huge negative nd rounds every
-    // finite value to a signed 0.0.
-    const factor = Math.pow(10, nd);
-    if (factor === 0) return __reF ? __pyF(x < 0 ? -0 : 0) : (x < 0 ? -0 : 0); // nd ≪ 0
-    if (!isFinite(factor)) return __reF ? __pyF(x) : x;          // nd ≫ 0
-    const scaled = x * factor;
-    if (!isFinite(scaled)) return __reF ? __pyF(x) : x;          // scaled overflow → no-op
-    // Round half to even.
-    const floor = Math.floor(scaled);
-    const diff = scaled - floor;
-    let rounded;
-    if (diff > 0.5) rounded = floor + 1;
-    else if (diff < 0.5) rounded = floor;
-    else rounded = floor % 2 === 0 ? floor : floor + 1; // exactly .5 → nearest even
-    const result = rounded / factor;
+    if (ndigits == null) {
+        // 1-arg form: half-even on the double itself (exact — no scaling) → int.
+        const floor = Math.floor(x);
+        const diff = x - floor;
+        if (diff > 0.5) return floor + 1;
+        if (diff < 0.5) return floor;
+        return floor % 2 === 0 ? floor : floor + 1; // exactly .5 → nearest even
+    }
+    // F6 (v0.2.4): the ndigits form must round the DECIMAL value of the
+    // ORIGINAL double (CPython double_round → _Py_dg_dtoa mode 3): half-even
+    // at the target digit of x's EXACT decimal expansion, then convert the
+    // rounded decimal back to the nearest double. The old scale-multiply
+    // (`x * 10^nd` then half-even) re-rounds in BINARY first, so any value
+    // whose product misrounds diverged silently: round(0.05, 1) — exact
+    // expansion 0.05000000000000000277… → CPython 0.1, but 0.05 * 10
+    // lands exactly on 0.5 → half-even → old result 0.0. (round(0.145, 2)
+    // is 0.14 BOTH ways — its exact expansion 0.14499999999999999001… is
+    // below the half — so it is a non-witness; the r1 comment had it
+    // reversed.) Class fix: exact BigInt decimal rounding (see
+    // __pyRoundDecimal), no scaling.
+    // F6-r2: ndigits is already a validated int (Number or BigInt). A BigInt
+    // clamps into the Number band __pyRoundDecimal saturates at anyway
+    // (≥1074 → x unchanged; ≤-309 → signed zero), so round(x, ±10**100)
+    // returns CPython's value instead of overflowing.
+    const nd = typeof ndigits === "bigint"
+        ? (ndigits > 2000n ? 2000 : ndigits < -2000n ? -2000 : Number(ndigits))
+        : ndigits;
+    const result = x === 0 ? x : __pyRoundDecimal(x, nd); // ±0 passes through
+    // CPython: a finite x whose ROUNDED value exceeds the double range raises
+    // (round(1.7e308, -308) → 2e308) rather than returning inf.
+    if (!isFinite(result)) {
+        throw new OverflowError("rounded value too large to represent");
+    }
     return __reF ? __pyF(result) : result;
+}
+
+// F6 (v0.2.4): exact decimal rounding of a finite nonzero double — the JS
+// equivalent of CPython's double_round/_Py_dg_dtoa mode-3 path. Decomposes
+// x into mant * 2^e (BigInt-exact), computes round-half-even of |x| * 10^nd
+// as an exact integer quotient, and re-enters double land through the
+// decimal string parse `Number("<q>e<-nd>")`, which ECMA-262 requires to be
+// correctly rounded (its exponent stays far inside the ±(2^31) cap the spec
+// allows engines to clamp at, so the parse is exact-nearest here).
+function __pyRoundDecimal(x, nd) {
+    // A double's exact decimal expansion has at most 1074 fractional digits
+    // (min subnormal = 2^-1074): rounding at/past digit 1074 changes nothing.
+    if (nd >= 1074) return x;
+    // |x| ≤ 1.8e308 < 0.5 * 10^309: everything rounds to (signed) zero.
+    if (nd <= -309) return x < 0 ? -0 : 0;
+    const dv = new DataView(new ArrayBuffer(8));
+    dv.setFloat64(0, x);
+    const hi = dv.getUint32(0);
+    const lo = dv.getUint32(4);
+    const neg = (hi >>> 31) === 1;
+    const be = (hi >>> 20) & 0x7ff; // biased exponent (finite ⇒ be < 0x7ff)
+    let mant = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo);
+    let e;
+    if (be === 0) {
+        e = -1074; // subnormal
+    } else {
+        mant |= 1n << 52n;
+        e = be - 1075;
+    }
+    // |x| = mant * 2^e, so |x| * 10^nd = num / den EXACTLY.
+    const num = mant
+        * (nd > 0 ? 10n ** BigInt(nd) : 1n)
+        * (e > 0 ? 1n << BigInt(e) : 1n);
+    const den = (nd < 0 ? 10n ** BigInt(-nd) : 1n)
+        * (e < 0 ? 1n << BigInt(-e) : 1n);
+    let q = num / den;
+    const twice = (num % den) * 2n;
+    if (twice > den || (twice === den && (q & 1n) === 1n)) q += 1n; // half-even
+    const res = Number(q.toString() + "e" + -nd);
+    return neg ? -res : res;
 }
 
 /**
@@ -658,13 +744,48 @@ export function pySliceOf(...args) {
     return new PySlice(args[0], args[1], args.length === 3 ? args[2] : null);
 }
 
+// F5 (v0.2.4): CPython's _PyEval_SliceIndex — a slice component must be an
+// int, None, or expose __index__; EVERYTHING else (floats — boxed or native
+// non-integer — strs, containers, None-typed misc) is a TypeError. The index
+// arm has carried this guard since crit-8/F7; the slice arm silently accepted
+// floats (`[1,2,3][0:2.0]` → [1,2] instead of TypeError). One validator, used
+// by ALL THREE slice ops (get/set/del) so the class can't reopen per-arm.
+// THEOREM-BLIND: the Lean slice theorems quantify over integer bounds, so
+// this is a pure runtime guard in front of them — no Lean statement changes.
+export function __pySliceIndex(v) {
+    if (v == null) return null;                   // missing bound → None
+    if (typeof v === "boolean") return v ? 1 : 0; // bool ⊂ int
+    if (typeof v === "bigint") return v;          // huge int literal (callers demote)
+    if (typeof v === "number") {
+        if (Number.isInteger(v)) return v;        // int (whole floats are boxed, Option B)
+    } else if (v.__pyfloat__ !== true && typeof v.__index__ === "function") {
+        const r = v.__index__();                  // CPython __index__ protocol
+        // F5-r2: a bool result is accepted as its int value — CPython 3.12
+        // takes it (with a DeprecationWarning), it does not raise.
+        if (typeof r === "boolean") return r ? 1 : 0;
+        if (typeof r === "bigint") return r;
+        if (typeof r === "number" && Number.isInteger(r)) return r;
+        throw new TypeError_("__index__ returned non-int (type "
+            + __pyTypeName(r) + ")");
+    }
+    throw new TypeError_(
+        "slice indices must be integers or None or have an __index__ method");
+}
+
 export function pySlice(obj, start, stop, step) {
     // crit-9: a custom object with __getitem__ handles the slice itself — don't
     // force it through the array/string path (which returns [] for a
-    // non-sequence). It receives a real PySlice (with .indices()).
+    // non-sequence). It receives a real PySlice (with .indices()) UNVALIDATED —
+    // CPython only validates components when a built-in sequence consumes them.
     if (obj != null && typeof obj !== "string" && !Array.isArray(obj) && typeof obj.__getitem__ === "function") {
         return obj.__getitem__(new PySlice(start, stop, step));
     }
+    // F5: validate in CPython's PySlice_Unpack order — step first (its zero
+    // check precedes start/stop validation), then start, then stop.
+    step = __pySliceIndex(step);
+    if (step === 0 || step === 0n) throw new ValueError("slice step cannot be zero");
+    start = __pySliceIndex(start);
+    stop = __pySliceIndex(stop);
     // crit-10: BigInt bounds/step (from huge int literals) can't mix with the
     // Number index arithmetic below; demote to Number. A huge step becomes a
     // large finite float, so the walk takes just the first element, per CPython
@@ -737,6 +858,14 @@ export function pySetSlice(arr, start, stop, step, values) {
     if (__pyBytesKind(arr) !== null) {
         throw new TypeError_(`'${__pyBytesName(arr)}' object does not support item assignment`);
     }
+    // F5 (v0.2.4): same int-or-None component guard as pySlice (write arm).
+    step = __pySliceIndex(step);
+    if (step === 0 || step === 0n) throw new ValueError("slice step cannot be zero");
+    start = __pySliceIndex(start);
+    stop = __pySliceIndex(stop);
+    if (typeof start === "bigint") start = Number(start);
+    if (typeof stop === "bigint") stop = Number(stop);
+    if (typeof step === "bigint") step = Number(step);
     const len = arr.length;
     const vals = [...values];
     if (step == null || step === 1) {
@@ -790,6 +919,14 @@ export function pyDelSlice(arr, start, stop, step) {
         // covers null→NoneType and bytes/bytearray via pyType.
         throw new TypeError_(`'${__pyTypeName(arr)}' object does not support item deletion`);
     }
+    // F5 (v0.2.4): same int-or-None component guard as pySlice (delete arm).
+    step = __pySliceIndex(step);
+    if (step === 0 || step === 0n) throw new ValueError("slice step cannot be zero");
+    start = __pySliceIndex(start);
+    stop = __pySliceIndex(stop);
+    if (typeof start === "bigint") start = Number(start);
+    if (typeof stop === "bigint") stop = Number(stop);
+    if (typeof step === "bigint") step = Number(step);
     const len = arr.length;
     if (step == null || step === 1) {
         let s = start == null ? 0 : start < 0 ? Math.max(0, len + start) : Math.min(start, len);
@@ -823,10 +960,12 @@ export function pyDelSlice(arr, start, stop, step) {
  * Python-compatible contains check.
  */
 export function pyContains(container, item) {
-    if (container == null) throw new TypeError("argument of type 'NoneType' is not iterable");
+    // CPython 3.14 reworded the containment TypeError to
+    // "...is not a container or iterable" (3.12 said "...is not iterable").
+    if (container == null) throw new TypeError("argument of type 'NoneType' is not a container or iterable");
     // Option B: a boxed float container must raise, not read as an empty dict.
     if (container.__pyfloat__ === true) {
-        throw new TypeError_("argument of type 'float' is not iterable");
+        throw new TypeError_("argument of type 'float' is not a container or iterable");
     }
     if (typeof container.__contains__ === "function") return container.__contains__(item);
     if (typeof container === "string") {
@@ -867,12 +1006,12 @@ export function pyContains(container, item) {
         return false;
     }
     // FULL_SURFACE #2: a CLASS object (or plain function) with no
-    // __contains__/__iter__ is NOT a container — CPython raises
-    // `TypeError: argument of type 'type' is not iterable` (Transcrypt's
-    // attr-name-membership behavior was the bug this replaces).
+    // __contains__/__iter__ is NOT a container — CPython 3.14 raises
+    // `TypeError: argument of type 'type' is not a container or iterable`
+    // (Transcrypt's attr-name-membership behavior was the bug this replaces).
     if (typeof container === "function") {
         // #467: pyType classifies classes vs plain functions ('type'/'function').
-        throw new TypeError_(`argument of type '${__pyTypeName(container)}' is not iterable`);
+        throw new TypeError_(`argument of type '${__pyTypeName(container)}' is not a container or iterable`);
     }
     // Object dict — F3: use hasOwnProperty so inherited prototype members
     // (`hasOwnProperty`, `toString`, `constructor`, `__proto__`, ...) don't
@@ -934,7 +1073,7 @@ export function pyContains(container, item) {
             if (pyEq(x, item)) return true;
         }
     }
-    throw new TypeError_(`argument of type '${__pyTypeName(container)}' is not iterable`); // #467
+    throw new TypeError_(`argument of type '${__pyTypeName(container)}' is not a container or iterable`); // #467
 }
 
 // ── Python exception hierarchy ─────────────────────────────────────────
@@ -987,6 +1126,23 @@ class AssertionError extends Exception {
 }
 class TypeError_ extends Exception {
     static __name__ = "TypeError";
+    // E7 message-binding fix: node's uncaught-exception printer renders the
+    // CONSTRUCTOR name, so an uncaught runtime TypeError printed
+    // `TypeError_: msg` (the JS collision-avoidance class name) instead of
+    // CPython's `TypeError: msg`. Re-point the class's `name` property at
+    // the Python name (configurable, instanceof/catch unaffected). Lives
+    // INSIDE the class body (static block) so the #170 inline extraction
+    // carries it with the class slice — same reason the `__name__` stamps
+    // are static fields. TypeError_ is the ONLY exception class whose JS
+    // name differs from its `__name__`; message_shipped_binding.py pins
+    // this terminal surface for the whole taxonomy.
+    static {
+        // `configurable: true` explicitly (review r2): a class's own `name`
+        // is spec-default configurable, and redefining with only `value`
+        // would preserve that — but the comment's claim is now enforced in
+        // code, not inherited from property-descriptor trivia.
+        Object.defineProperty(this, "name", { value: "TypeError", configurable: true });
+    }
 }
 class AttributeError extends Exception {
     static __name__ = "AttributeError";
@@ -1610,7 +1766,18 @@ export function pyDelItem(obj, key) {
  * check. Issue #89.
  */
 export function pyChr(n) {
-    const i = typeof n === "bigint" ? Number(n) : Math.trunc(Number(n));
+    // E7/F7 kind fix, r2: route the receiver through THE "interpreted as an
+    // integer" authority (__pyAsIndexInt — CPython's PyNumber_Index): bool ⊆
+    // int, int/BigInt pass, an object with a valid __index__ is ACCEPTED
+    // (chr(I()) where I().__index__() == 65 is 'A' in CPython), and every
+    // other receiver raises CPython's exact TypeError (incl. "__index__
+    // returned non-int"). r1 re-derived the check locally and rejected
+    // __index__ receivers — the same class as F3; do NOT re-derive here.
+    // Range: CPython 3.14 raises ValueError for ANY out-of-range int, incl.
+    // beyond-ssize_t magnitudes (probed: chr(2**70) → ValueError, not the
+    // pre-3.14 OverflowError), which the BigInt → Number funnel preserves.
+    const v = __pyAsIndexInt(n);
+    const i = typeof v === "bigint" ? Number(v) : v;
     if (!Number.isFinite(i) || i < 0 || i >= 0x110000) {
         throw new ValueError("chr() arg not in range(0x110000)");
     }
@@ -1715,9 +1882,11 @@ function __minmax(name, wantGreater, args) {
     for (let i = 1; i < items.length; i++) {
         const k = key ? key(items[i]) : items[i];
         // Python keeps the FIRST occurrence on ties, so strictly-better only.
-        const better = wantGreater
-            ? (typeof k?.__gt__ === "function" ? k.__gt__(bestKey) : k > bestKey)
-            : (typeof k?.__lt__ === "function" ? k.__lt__(bestKey) : k < bestKey);
+        // F1 (v0.2.4): route through pyGt/pyLt (THE comparison authority) —
+        // the local dunder-or-raw-`>` fallback bypassed the cross-type
+        // TypeError guard (min(3, 'a') silently returned 3) and the
+        // reflected-dunder + bytes/sequence arms.
+        const better = wantGreater ? pyGt(k, bestKey) : pyLt(k, bestKey);
         if (better) {
             best = items[i];
             bestKey = k;
@@ -1745,19 +1914,489 @@ export function pyMax(...args) {
 
 // ----- string helpers -----
 
-/** Python `sep.join(iter)` — note the arg order vs JS `arr.join(sep)`.
- * #301: a non-string receiver with its own .join (a JS Array — the
- * ubiquitous `arr.join(",")` idiom) dispatches to the native method;
- * the old unconditional form fed the ARRAY in as the separator. */
+// === BEGIN GENERATED UNICODE TABLES (scripts/gen_unicode_tables.py; oracle 3.14.7) ===
+// str.isdecimal(): all Nd per the oracle's Unicode tables.
+const __RE_DECIMAL = /^[\u0030-\u0039\u0660-\u0669\u06f0-\u06f9\u07c0-\u07c9\u0966-\u096f\u09e6-\u09ef\u0a66-\u0a6f\u0ae6-\u0aef\u0b66-\u0b6f\u0be6-\u0bef\u0c66-\u0c6f\u0ce6-\u0cef\u0d66-\u0d6f\u0de6-\u0def\u0e50-\u0e59\u0ed0-\u0ed9\u0f20-\u0f29\u1040-\u1049\u1090-\u1099\u17e0-\u17e9\u1810-\u1819\u1946-\u194f\u19d0-\u19d9\u1a80-\u1a89\u1a90-\u1a99\u1b50-\u1b59\u1bb0-\u1bb9\u1c40-\u1c49\u1c50-\u1c59\ua620-\ua629\ua8d0-\ua8d9\ua900-\ua909\ua9d0-\ua9d9\ua9f0-\ua9f9\uaa50-\uaa59\uabf0-\uabf9\uff10-\uff19\u{104a0}-\u{104a9}\u{10d30}-\u{10d39}\u{10d40}-\u{10d49}\u{11066}-\u{1106f}\u{110f0}-\u{110f9}\u{11136}-\u{1113f}\u{111d0}-\u{111d9}\u{112f0}-\u{112f9}\u{11450}-\u{11459}\u{114d0}-\u{114d9}\u{11650}-\u{11659}\u{116c0}-\u{116c9}\u{116d0}-\u{116e3}\u{11730}-\u{11739}\u{118e0}-\u{118e9}\u{11950}-\u{11959}\u{11bf0}-\u{11bf9}\u{11c50}-\u{11c59}\u{11d50}-\u{11d59}\u{11da0}-\u{11da9}\u{11f50}-\u{11f59}\u{16130}-\u{16139}\u{16a60}-\u{16a69}\u{16ac0}-\u{16ac9}\u{16b50}-\u{16b59}\u{16d70}-\u{16d79}\u{1ccf0}-\u{1ccf9}\u{1d7ce}-\u{1d7ff}\u{1e140}-\u{1e149}\u{1e2f0}-\u{1e2f9}\u{1e4f0}-\u{1e4f9}\u{1e5f1}-\u{1e5fa}\u{1e950}-\u{1e959}\u{1fbf0}-\u{1fbf9}]+$/u;
+// str.isdigit(): decimal + Numeric_Type=Digit.
+const __RE_DIGIT = /^[\u0030-\u0039\u00b2\u00b3\u00b9\u0660-\u0669\u06f0-\u06f9\u07c0-\u07c9\u0966-\u096f\u09e6-\u09ef\u0a66-\u0a6f\u0ae6-\u0aef\u0b66-\u0b6f\u0be6-\u0bef\u0c66-\u0c6f\u0ce6-\u0cef\u0d66-\u0d6f\u0de6-\u0def\u0e50-\u0e59\u0ed0-\u0ed9\u0f20-\u0f29\u1040-\u1049\u1090-\u1099\u1369-\u1371\u17e0-\u17e9\u1810-\u1819\u1946-\u194f\u19d0-\u19da\u1a80-\u1a89\u1a90-\u1a99\u1b50-\u1b59\u1bb0-\u1bb9\u1c40-\u1c49\u1c50-\u1c59\u2070\u2074-\u2079\u2080-\u2089\u2460-\u2468\u2474-\u247c\u2488-\u2490\u24ea\u24f5-\u24fd\u24ff\u2776-\u277e\u2780-\u2788\u278a-\u2792\ua620-\ua629\ua8d0-\ua8d9\ua900-\ua909\ua9d0-\ua9d9\ua9f0-\ua9f9\uaa50-\uaa59\uabf0-\uabf9\uff10-\uff19\u{104a0}-\u{104a9}\u{10a40}-\u{10a43}\u{10d30}-\u{10d39}\u{10d40}-\u{10d49}\u{10e60}-\u{10e68}\u{11052}-\u{1105a}\u{11066}-\u{1106f}\u{110f0}-\u{110f9}\u{11136}-\u{1113f}\u{111d0}-\u{111d9}\u{112f0}-\u{112f9}\u{11450}-\u{11459}\u{114d0}-\u{114d9}\u{11650}-\u{11659}\u{116c0}-\u{116c9}\u{116d0}-\u{116e3}\u{11730}-\u{11739}\u{118e0}-\u{118e9}\u{11950}-\u{11959}\u{11bf0}-\u{11bf9}\u{11c50}-\u{11c59}\u{11d50}-\u{11d59}\u{11da0}-\u{11da9}\u{11f50}-\u{11f59}\u{16130}-\u{16139}\u{16a60}-\u{16a69}\u{16ac0}-\u{16ac9}\u{16b50}-\u{16b59}\u{16d70}-\u{16d79}\u{1ccf0}-\u{1ccf9}\u{1d7ce}-\u{1d7ff}\u{1e140}-\u{1e149}\u{1e2f0}-\u{1e2f9}\u{1e4f0}-\u{1e4f9}\u{1e5f1}-\u{1e5fa}\u{1e950}-\u{1e959}\u{1f100}-\u{1f10a}\u{1fbf0}-\u{1fbf9}]+$/u;
+// str.isnumeric(): digit + Numeric_Type=Numeric (incl. CJK numerals, fractions).
+const __RE_NUMERIC = /^[\u0030-\u0039\u00b2\u00b3\u00b9\u00bc-\u00be\u0660-\u0669\u06f0-\u06f9\u07c0-\u07c9\u0966-\u096f\u09e6-\u09ef\u09f4-\u09f9\u0a66-\u0a6f\u0ae6-\u0aef\u0b66-\u0b6f\u0b72-\u0b77\u0be6-\u0bf2\u0c66-\u0c6f\u0c78-\u0c7e\u0ce6-\u0cef\u0d58-\u0d5e\u0d66-\u0d78\u0de6-\u0def\u0e50-\u0e59\u0ed0-\u0ed9\u0f20-\u0f33\u1040-\u1049\u1090-\u1099\u1369-\u137c\u16ee-\u16f0\u17e0-\u17e9\u17f0-\u17f9\u1810-\u1819\u1946-\u194f\u19d0-\u19da\u1a80-\u1a89\u1a90-\u1a99\u1b50-\u1b59\u1bb0-\u1bb9\u1c40-\u1c49\u1c50-\u1c59\u2070\u2074-\u2079\u2080-\u2089\u2150-\u2182\u2185-\u2189\u2460-\u249b\u24ea-\u24ff\u2776-\u2793\u2cfd\u3007\u3021-\u3029\u3038-\u303a\u3192-\u3195\u3220-\u3229\u3248-\u324f\u3251-\u325f\u3280-\u3289\u32b1-\u32bf\u3405\u3483\u382a\u3b4d\u4e00\u4e03\u4e07\u4e09\u4e24\u4e5d\u4e8c\u4e94\u4e96\u4eac\u4ebf\u4ec0\u4edf\u4ee8\u4f0d\u4f70\u4fe9\u5006\u5104\u5146\u5169\u516b\u516d\u5341\u5343-\u5345\u534c\u53c1-\u53c4\u56db\u58f1\u58f9\u5e7a\u5efe\u5eff\u5f0c-\u5f0e\u5f10\u62d0\u62fe\u634c\u67d2\u6d1e\u6f06\u7396\u767e\u7695\u79ed\u8086\u842c\u8cae\u8cb3\u8d30\u920e\u94a9\u9621\u9646\u964c\u9678\u96f6\ua620-\ua629\ua6e6-\ua6ef\ua830-\ua835\ua8d0-\ua8d9\ua900-\ua909\ua9d0-\ua9d9\ua9f0-\ua9f9\uaa50-\uaa59\uabf0-\uabf9\uf96b\uf973\uf978\uf9b2\uf9d1\uf9d3\uf9fd\uff10-\uff19\u{10107}-\u{10133}\u{10140}-\u{10178}\u{1018a}\u{1018b}\u{102e1}-\u{102fb}\u{10320}-\u{10323}\u{10341}\u{1034a}\u{103d1}-\u{103d5}\u{104a0}-\u{104a9}\u{10858}-\u{1085f}\u{10879}-\u{1087f}\u{108a7}-\u{108af}\u{108fb}-\u{108ff}\u{10916}-\u{1091b}\u{109bc}\u{109bd}\u{109c0}-\u{109cf}\u{109d2}-\u{109ff}\u{10a40}-\u{10a48}\u{10a7d}\u{10a7e}\u{10a9d}-\u{10a9f}\u{10aeb}-\u{10aef}\u{10b58}-\u{10b5f}\u{10b78}-\u{10b7f}\u{10ba9}-\u{10baf}\u{10cfa}-\u{10cff}\u{10d30}-\u{10d39}\u{10d40}-\u{10d49}\u{10e60}-\u{10e7e}\u{10f1d}-\u{10f26}\u{10f51}-\u{10f54}\u{10fc5}-\u{10fcb}\u{11052}-\u{1106f}\u{110f0}-\u{110f9}\u{11136}-\u{1113f}\u{111d0}-\u{111d9}\u{111e1}-\u{111f4}\u{112f0}-\u{112f9}\u{11450}-\u{11459}\u{114d0}-\u{114d9}\u{11650}-\u{11659}\u{116c0}-\u{116c9}\u{116d0}-\u{116e3}\u{11730}-\u{1173b}\u{118e0}-\u{118f2}\u{11950}-\u{11959}\u{11bf0}-\u{11bf9}\u{11c50}-\u{11c6c}\u{11d50}-\u{11d59}\u{11da0}-\u{11da9}\u{11f50}-\u{11f59}\u{11fc0}-\u{11fd4}\u{12400}-\u{1246e}\u{16130}-\u{16139}\u{16a60}-\u{16a69}\u{16ac0}-\u{16ac9}\u{16b50}-\u{16b59}\u{16b5b}-\u{16b61}\u{16d70}-\u{16d79}\u{16e80}-\u{16e96}\u{1ccf0}-\u{1ccf9}\u{1d2c0}-\u{1d2d3}\u{1d2e0}-\u{1d2f3}\u{1d360}-\u{1d378}\u{1d7ce}-\u{1d7ff}\u{1e140}-\u{1e149}\u{1e2f0}-\u{1e2f9}\u{1e4f0}-\u{1e4f9}\u{1e5f1}-\u{1e5fa}\u{1e8c7}-\u{1e8cf}\u{1e950}-\u{1e959}\u{1ec71}-\u{1ecab}\u{1ecad}-\u{1ecaf}\u{1ecb1}-\u{1ecb4}\u{1ed01}-\u{1ed2d}\u{1ed2f}-\u{1ed3d}\u{1f100}-\u{1f10c}\u{1fbf0}-\u{1fbf9}\u{20001}\u{20064}\u{200e2}\u{20121}\u{2092a}\u{20983}\u{2098c}\u{2099c}\u{20aea}\u{20afd}\u{20b19}\u{22390}\u{22998}\u{23b1b}\u{2626d}\u{2f890}]+$/u;
+// str.casefold(): code points whose full case fold differs from lower() —
+// the residual applied on top of toLowerCase (~ lower()).
+const __CASEFOLD_MAP = new Map([
+    [0xb5, "\u03bc"],
+    [0xdf, "ss"],
+    [0x149, "\u02bcn"],
+    [0x17f, "s"],
+    [0x1f0, "j\u030c"],
+    [0x345, "\u03b9"],
+    [0x390, "\u03b9\u0308\u0301"],
+    [0x3b0, "\u03c5\u0308\u0301"],
+    [0x3c2, "\u03c3"],
+    [0x3d0, "\u03b2"],
+    [0x3d1, "\u03b8"],
+    [0x3d5, "\u03c6"],
+    [0x3d6, "\u03c0"],
+    [0x3f0, "\u03ba"],
+    [0x3f1, "\u03c1"],
+    [0x3f5, "\u03b5"],
+    [0x587, "\u0565\u0582"],
+    [0x13a0, "\u13a0"],
+    [0x13a1, "\u13a1"],
+    [0x13a2, "\u13a2"],
+    [0x13a3, "\u13a3"],
+    [0x13a4, "\u13a4"],
+    [0x13a5, "\u13a5"],
+    [0x13a6, "\u13a6"],
+    [0x13a7, "\u13a7"],
+    [0x13a8, "\u13a8"],
+    [0x13a9, "\u13a9"],
+    [0x13aa, "\u13aa"],
+    [0x13ab, "\u13ab"],
+    [0x13ac, "\u13ac"],
+    [0x13ad, "\u13ad"],
+    [0x13ae, "\u13ae"],
+    [0x13af, "\u13af"],
+    [0x13b0, "\u13b0"],
+    [0x13b1, "\u13b1"],
+    [0x13b2, "\u13b2"],
+    [0x13b3, "\u13b3"],
+    [0x13b4, "\u13b4"],
+    [0x13b5, "\u13b5"],
+    [0x13b6, "\u13b6"],
+    [0x13b7, "\u13b7"],
+    [0x13b8, "\u13b8"],
+    [0x13b9, "\u13b9"],
+    [0x13ba, "\u13ba"],
+    [0x13bb, "\u13bb"],
+    [0x13bc, "\u13bc"],
+    [0x13bd, "\u13bd"],
+    [0x13be, "\u13be"],
+    [0x13bf, "\u13bf"],
+    [0x13c0, "\u13c0"],
+    [0x13c1, "\u13c1"],
+    [0x13c2, "\u13c2"],
+    [0x13c3, "\u13c3"],
+    [0x13c4, "\u13c4"],
+    [0x13c5, "\u13c5"],
+    [0x13c6, "\u13c6"],
+    [0x13c7, "\u13c7"],
+    [0x13c8, "\u13c8"],
+    [0x13c9, "\u13c9"],
+    [0x13ca, "\u13ca"],
+    [0x13cb, "\u13cb"],
+    [0x13cc, "\u13cc"],
+    [0x13cd, "\u13cd"],
+    [0x13ce, "\u13ce"],
+    [0x13cf, "\u13cf"],
+    [0x13d0, "\u13d0"],
+    [0x13d1, "\u13d1"],
+    [0x13d2, "\u13d2"],
+    [0x13d3, "\u13d3"],
+    [0x13d4, "\u13d4"],
+    [0x13d5, "\u13d5"],
+    [0x13d6, "\u13d6"],
+    [0x13d7, "\u13d7"],
+    [0x13d8, "\u13d8"],
+    [0x13d9, "\u13d9"],
+    [0x13da, "\u13da"],
+    [0x13db, "\u13db"],
+    [0x13dc, "\u13dc"],
+    [0x13dd, "\u13dd"],
+    [0x13de, "\u13de"],
+    [0x13df, "\u13df"],
+    [0x13e0, "\u13e0"],
+    [0x13e1, "\u13e1"],
+    [0x13e2, "\u13e2"],
+    [0x13e3, "\u13e3"],
+    [0x13e4, "\u13e4"],
+    [0x13e5, "\u13e5"],
+    [0x13e6, "\u13e6"],
+    [0x13e7, "\u13e7"],
+    [0x13e8, "\u13e8"],
+    [0x13e9, "\u13e9"],
+    [0x13ea, "\u13ea"],
+    [0x13eb, "\u13eb"],
+    [0x13ec, "\u13ec"],
+    [0x13ed, "\u13ed"],
+    [0x13ee, "\u13ee"],
+    [0x13ef, "\u13ef"],
+    [0x13f0, "\u13f0"],
+    [0x13f1, "\u13f1"],
+    [0x13f2, "\u13f2"],
+    [0x13f3, "\u13f3"],
+    [0x13f4, "\u13f4"],
+    [0x13f5, "\u13f5"],
+    [0x13f8, "\u13f0"],
+    [0x13f9, "\u13f1"],
+    [0x13fa, "\u13f2"],
+    [0x13fb, "\u13f3"],
+    [0x13fc, "\u13f4"],
+    [0x13fd, "\u13f5"],
+    [0x1c80, "\u0432"],
+    [0x1c81, "\u0434"],
+    [0x1c82, "\u043e"],
+    [0x1c83, "\u0441"],
+    [0x1c84, "\u0442"],
+    [0x1c85, "\u0442"],
+    [0x1c86, "\u044a"],
+    [0x1c87, "\u0463"],
+    [0x1c88, "\ua64b"],
+    [0x1e96, "h\u0331"],
+    [0x1e97, "t\u0308"],
+    [0x1e98, "w\u030a"],
+    [0x1e99, "y\u030a"],
+    [0x1e9a, "a\u02be"],
+    [0x1e9b, "\u1e61"],
+    [0x1e9e, "ss"],
+    [0x1f50, "\u03c5\u0313"],
+    [0x1f52, "\u03c5\u0313\u0300"],
+    [0x1f54, "\u03c5\u0313\u0301"],
+    [0x1f56, "\u03c5\u0313\u0342"],
+    [0x1f80, "\u1f00\u03b9"],
+    [0x1f81, "\u1f01\u03b9"],
+    [0x1f82, "\u1f02\u03b9"],
+    [0x1f83, "\u1f03\u03b9"],
+    [0x1f84, "\u1f04\u03b9"],
+    [0x1f85, "\u1f05\u03b9"],
+    [0x1f86, "\u1f06\u03b9"],
+    [0x1f87, "\u1f07\u03b9"],
+    [0x1f88, "\u1f00\u03b9"],
+    [0x1f89, "\u1f01\u03b9"],
+    [0x1f8a, "\u1f02\u03b9"],
+    [0x1f8b, "\u1f03\u03b9"],
+    [0x1f8c, "\u1f04\u03b9"],
+    [0x1f8d, "\u1f05\u03b9"],
+    [0x1f8e, "\u1f06\u03b9"],
+    [0x1f8f, "\u1f07\u03b9"],
+    [0x1f90, "\u1f20\u03b9"],
+    [0x1f91, "\u1f21\u03b9"],
+    [0x1f92, "\u1f22\u03b9"],
+    [0x1f93, "\u1f23\u03b9"],
+    [0x1f94, "\u1f24\u03b9"],
+    [0x1f95, "\u1f25\u03b9"],
+    [0x1f96, "\u1f26\u03b9"],
+    [0x1f97, "\u1f27\u03b9"],
+    [0x1f98, "\u1f20\u03b9"],
+    [0x1f99, "\u1f21\u03b9"],
+    [0x1f9a, "\u1f22\u03b9"],
+    [0x1f9b, "\u1f23\u03b9"],
+    [0x1f9c, "\u1f24\u03b9"],
+    [0x1f9d, "\u1f25\u03b9"],
+    [0x1f9e, "\u1f26\u03b9"],
+    [0x1f9f, "\u1f27\u03b9"],
+    [0x1fa0, "\u1f60\u03b9"],
+    [0x1fa1, "\u1f61\u03b9"],
+    [0x1fa2, "\u1f62\u03b9"],
+    [0x1fa3, "\u1f63\u03b9"],
+    [0x1fa4, "\u1f64\u03b9"],
+    [0x1fa5, "\u1f65\u03b9"],
+    [0x1fa6, "\u1f66\u03b9"],
+    [0x1fa7, "\u1f67\u03b9"],
+    [0x1fa8, "\u1f60\u03b9"],
+    [0x1fa9, "\u1f61\u03b9"],
+    [0x1faa, "\u1f62\u03b9"],
+    [0x1fab, "\u1f63\u03b9"],
+    [0x1fac, "\u1f64\u03b9"],
+    [0x1fad, "\u1f65\u03b9"],
+    [0x1fae, "\u1f66\u03b9"],
+    [0x1faf, "\u1f67\u03b9"],
+    [0x1fb2, "\u1f70\u03b9"],
+    [0x1fb3, "\u03b1\u03b9"],
+    [0x1fb4, "\u03ac\u03b9"],
+    [0x1fb6, "\u03b1\u0342"],
+    [0x1fb7, "\u03b1\u0342\u03b9"],
+    [0x1fbc, "\u03b1\u03b9"],
+    [0x1fbe, "\u03b9"],
+    [0x1fc2, "\u1f74\u03b9"],
+    [0x1fc3, "\u03b7\u03b9"],
+    [0x1fc4, "\u03ae\u03b9"],
+    [0x1fc6, "\u03b7\u0342"],
+    [0x1fc7, "\u03b7\u0342\u03b9"],
+    [0x1fcc, "\u03b7\u03b9"],
+    [0x1fd2, "\u03b9\u0308\u0300"],
+    [0x1fd3, "\u03b9\u0308\u0301"],
+    [0x1fd6, "\u03b9\u0342"],
+    [0x1fd7, "\u03b9\u0308\u0342"],
+    [0x1fe2, "\u03c5\u0308\u0300"],
+    [0x1fe3, "\u03c5\u0308\u0301"],
+    [0x1fe4, "\u03c1\u0313"],
+    [0x1fe6, "\u03c5\u0342"],
+    [0x1fe7, "\u03c5\u0308\u0342"],
+    [0x1ff2, "\u1f7c\u03b9"],
+    [0x1ff3, "\u03c9\u03b9"],
+    [0x1ff4, "\u03ce\u03b9"],
+    [0x1ff6, "\u03c9\u0342"],
+    [0x1ff7, "\u03c9\u0342\u03b9"],
+    [0x1ffc, "\u03c9\u03b9"],
+    [0xab70, "\u13a0"],
+    [0xab71, "\u13a1"],
+    [0xab72, "\u13a2"],
+    [0xab73, "\u13a3"],
+    [0xab74, "\u13a4"],
+    [0xab75, "\u13a5"],
+    [0xab76, "\u13a6"],
+    [0xab77, "\u13a7"],
+    [0xab78, "\u13a8"],
+    [0xab79, "\u13a9"],
+    [0xab7a, "\u13aa"],
+    [0xab7b, "\u13ab"],
+    [0xab7c, "\u13ac"],
+    [0xab7d, "\u13ad"],
+    [0xab7e, "\u13ae"],
+    [0xab7f, "\u13af"],
+    [0xab80, "\u13b0"],
+    [0xab81, "\u13b1"],
+    [0xab82, "\u13b2"],
+    [0xab83, "\u13b3"],
+    [0xab84, "\u13b4"],
+    [0xab85, "\u13b5"],
+    [0xab86, "\u13b6"],
+    [0xab87, "\u13b7"],
+    [0xab88, "\u13b8"],
+    [0xab89, "\u13b9"],
+    [0xab8a, "\u13ba"],
+    [0xab8b, "\u13bb"],
+    [0xab8c, "\u13bc"],
+    [0xab8d, "\u13bd"],
+    [0xab8e, "\u13be"],
+    [0xab8f, "\u13bf"],
+    [0xab90, "\u13c0"],
+    [0xab91, "\u13c1"],
+    [0xab92, "\u13c2"],
+    [0xab93, "\u13c3"],
+    [0xab94, "\u13c4"],
+    [0xab95, "\u13c5"],
+    [0xab96, "\u13c6"],
+    [0xab97, "\u13c7"],
+    [0xab98, "\u13c8"],
+    [0xab99, "\u13c9"],
+    [0xab9a, "\u13ca"],
+    [0xab9b, "\u13cb"],
+    [0xab9c, "\u13cc"],
+    [0xab9d, "\u13cd"],
+    [0xab9e, "\u13ce"],
+    [0xab9f, "\u13cf"],
+    [0xaba0, "\u13d0"],
+    [0xaba1, "\u13d1"],
+    [0xaba2, "\u13d2"],
+    [0xaba3, "\u13d3"],
+    [0xaba4, "\u13d4"],
+    [0xaba5, "\u13d5"],
+    [0xaba6, "\u13d6"],
+    [0xaba7, "\u13d7"],
+    [0xaba8, "\u13d8"],
+    [0xaba9, "\u13d9"],
+    [0xabaa, "\u13da"],
+    [0xabab, "\u13db"],
+    [0xabac, "\u13dc"],
+    [0xabad, "\u13dd"],
+    [0xabae, "\u13de"],
+    [0xabaf, "\u13df"],
+    [0xabb0, "\u13e0"],
+    [0xabb1, "\u13e1"],
+    [0xabb2, "\u13e2"],
+    [0xabb3, "\u13e3"],
+    [0xabb4, "\u13e4"],
+    [0xabb5, "\u13e5"],
+    [0xabb6, "\u13e6"],
+    [0xabb7, "\u13e7"],
+    [0xabb8, "\u13e8"],
+    [0xabb9, "\u13e9"],
+    [0xabba, "\u13ea"],
+    [0xabbb, "\u13eb"],
+    [0xabbc, "\u13ec"],
+    [0xabbd, "\u13ed"],
+    [0xabbe, "\u13ee"],
+    [0xabbf, "\u13ef"],
+    [0xfb00, "ff"],
+    [0xfb01, "fi"],
+    [0xfb02, "fl"],
+    [0xfb03, "ffi"],
+    [0xfb04, "ffl"],
+    [0xfb05, "st"],
+    [0xfb06, "st"],
+    [0xfb13, "\u0574\u0576"],
+    [0xfb14, "\u0574\u0565"],
+    [0xfb15, "\u0574\u056b"],
+    [0xfb16, "\u057e\u0576"],
+    [0xfb17, "\u0574\u056d"],
+]);
+// Titlecase-first mapping (capitalize()/title() word starts) where it
+// differs from upper() — digraphs and ligature expansions.
+const __TITLE_MAP = new Map([
+    [0xdf, "Ss"],
+    [0x1c4, "\u01c5"],
+    [0x1c5, "\u01c5"],
+    [0x1c6, "\u01c5"],
+    [0x1c7, "\u01c8"],
+    [0x1c8, "\u01c8"],
+    [0x1c9, "\u01c8"],
+    [0x1ca, "\u01cb"],
+    [0x1cb, "\u01cb"],
+    [0x1cc, "\u01cb"],
+    [0x1f1, "\u01f2"],
+    [0x1f2, "\u01f2"],
+    [0x1f3, "\u01f2"],
+    [0x587, "\u0535\u0582"],
+    [0x10d0, "\u10d0"],
+    [0x10d1, "\u10d1"],
+    [0x10d2, "\u10d2"],
+    [0x10d3, "\u10d3"],
+    [0x10d4, "\u10d4"],
+    [0x10d5, "\u10d5"],
+    [0x10d6, "\u10d6"],
+    [0x10d7, "\u10d7"],
+    [0x10d8, "\u10d8"],
+    [0x10d9, "\u10d9"],
+    [0x10da, "\u10da"],
+    [0x10db, "\u10db"],
+    [0x10dc, "\u10dc"],
+    [0x10dd, "\u10dd"],
+    [0x10de, "\u10de"],
+    [0x10df, "\u10df"],
+    [0x10e0, "\u10e0"],
+    [0x10e1, "\u10e1"],
+    [0x10e2, "\u10e2"],
+    [0x10e3, "\u10e3"],
+    [0x10e4, "\u10e4"],
+    [0x10e5, "\u10e5"],
+    [0x10e6, "\u10e6"],
+    [0x10e7, "\u10e7"],
+    [0x10e8, "\u10e8"],
+    [0x10e9, "\u10e9"],
+    [0x10ea, "\u10ea"],
+    [0x10eb, "\u10eb"],
+    [0x10ec, "\u10ec"],
+    [0x10ed, "\u10ed"],
+    [0x10ee, "\u10ee"],
+    [0x10ef, "\u10ef"],
+    [0x10f0, "\u10f0"],
+    [0x10f1, "\u10f1"],
+    [0x10f2, "\u10f2"],
+    [0x10f3, "\u10f3"],
+    [0x10f4, "\u10f4"],
+    [0x10f5, "\u10f5"],
+    [0x10f6, "\u10f6"],
+    [0x10f7, "\u10f7"],
+    [0x10f8, "\u10f8"],
+    [0x10f9, "\u10f9"],
+    [0x10fa, "\u10fa"],
+    [0x10fd, "\u10fd"],
+    [0x10fe, "\u10fe"],
+    [0x10ff, "\u10ff"],
+    [0x1f80, "\u1f88"],
+    [0x1f81, "\u1f89"],
+    [0x1f82, "\u1f8a"],
+    [0x1f83, "\u1f8b"],
+    [0x1f84, "\u1f8c"],
+    [0x1f85, "\u1f8d"],
+    [0x1f86, "\u1f8e"],
+    [0x1f87, "\u1f8f"],
+    [0x1f88, "\u1f88"],
+    [0x1f89, "\u1f89"],
+    [0x1f8a, "\u1f8a"],
+    [0x1f8b, "\u1f8b"],
+    [0x1f8c, "\u1f8c"],
+    [0x1f8d, "\u1f8d"],
+    [0x1f8e, "\u1f8e"],
+    [0x1f8f, "\u1f8f"],
+    [0x1f90, "\u1f98"],
+    [0x1f91, "\u1f99"],
+    [0x1f92, "\u1f9a"],
+    [0x1f93, "\u1f9b"],
+    [0x1f94, "\u1f9c"],
+    [0x1f95, "\u1f9d"],
+    [0x1f96, "\u1f9e"],
+    [0x1f97, "\u1f9f"],
+    [0x1f98, "\u1f98"],
+    [0x1f99, "\u1f99"],
+    [0x1f9a, "\u1f9a"],
+    [0x1f9b, "\u1f9b"],
+    [0x1f9c, "\u1f9c"],
+    [0x1f9d, "\u1f9d"],
+    [0x1f9e, "\u1f9e"],
+    [0x1f9f, "\u1f9f"],
+    [0x1fa0, "\u1fa8"],
+    [0x1fa1, "\u1fa9"],
+    [0x1fa2, "\u1faa"],
+    [0x1fa3, "\u1fab"],
+    [0x1fa4, "\u1fac"],
+    [0x1fa5, "\u1fad"],
+    [0x1fa6, "\u1fae"],
+    [0x1fa7, "\u1faf"],
+    [0x1fa8, "\u1fa8"],
+    [0x1fa9, "\u1fa9"],
+    [0x1faa, "\u1faa"],
+    [0x1fab, "\u1fab"],
+    [0x1fac, "\u1fac"],
+    [0x1fad, "\u1fad"],
+    [0x1fae, "\u1fae"],
+    [0x1faf, "\u1faf"],
+    [0x1fb2, "\u1fba\u0345"],
+    [0x1fb3, "\u1fbc"],
+    [0x1fb4, "\u0386\u0345"],
+    [0x1fb7, "\u0391\u0342\u0345"],
+    [0x1fbc, "\u1fbc"],
+    [0x1fc2, "\u1fca\u0345"],
+    [0x1fc3, "\u1fcc"],
+    [0x1fc4, "\u0389\u0345"],
+    [0x1fc7, "\u0397\u0342\u0345"],
+    [0x1fcc, "\u1fcc"],
+    [0x1ff2, "\u1ffa\u0345"],
+    [0x1ff3, "\u1ffc"],
+    [0x1ff4, "\u038f\u0345"],
+    [0x1ff7, "\u03a9\u0342\u0345"],
+    [0x1ffc, "\u1ffc"],
+    [0xfb00, "Ff"],
+    [0xfb01, "Fi"],
+    [0xfb02, "Fl"],
+    [0xfb03, "Ffi"],
+    [0xfb04, "Ffl"],
+    [0xfb05, "St"],
+    [0xfb06, "St"],
+    [0xfb13, "\u0544\u0576"],
+    [0xfb14, "\u0544\u0565"],
+    [0xfb15, "\u0544\u056b"],
+    [0xfb16, "\u054e\u0576"],
+    [0xfb17, "\u0544\u056d"],
+]);
+// === END GENERATED UNICODE TABLES ===
+
+// Python str whitespace (str.isspace / split / strip default): differs from
+// JS \s — includes \x1c-\x1f and \x85, EXCLUDES the BOM \ufeff.
+const __PY_WS_CC = " \\t\\n\\r\\v\\f\\u001c-\\u001f\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+const __PY_WS_RE = new RegExp("[" + __PY_WS_CC + "]");
+const __PY_WS_LEAD = new RegExp("^[" + __PY_WS_CC + "]+");
+const __PY_WS_TRAIL = new RegExp("[" + __PY_WS_CC + "]+$");
+const __PY_WS_RUN = new RegExp("[" + __PY_WS_CC + "]+", "g");
+// str.isprintable(): CPython rejects Cc/Cf/Cs/Co/Cn/Zl/Zp/Zs except space.
+const __RE_UNPRINTABLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]/u;
+
+/** Python `s.join(iterable)` — any iterable of str; a non-str item raises
+ * CPython's TypeError with the item's index. */
 export function pyStrJoin(sep, iter) {
     if (typeof sep !== "string" && sep != null && typeof sep.join === "function") {
         return sep.join(iter);
     }
-    return Array.from(iter).join(sep);
+    const parts = [];
+    let idx = 0;
+    for (const item of pyForIter(iter)) {
+        if (typeof item !== "string") {
+            throw new TypeError_(
+                `sequence item ${idx}: expected str instance, ${__pyTypeName(item)} found`,
+            );
+        }
+        parts.push(item);
+        idx++;
+    }
+    return parts.join(sep);
 }
 
-/** Python `s.split()` (whitespace) and `s.split(sep)`. Empty separator
- * raises ValueError like CPython (issue #92). */
+/** Python `s.split()` (whitespace runs) and `s.split(sep[, maxsplit])` —
+ * full CPython spec: keyword forms, maxsplit in both modes, the PYTHON
+ * whitespace set (`\x1c–\x1f`, `\x85`, Zs — NOT JS `\s`, which adds
+ * `﻿`), empty separator ValueError, sep-type TypeError. */
 export function pyStrSplit(s, sep, maxsplit) {
     // #301: non-string receivers with their own .split dispatch natively.
     if (typeof s !== "string" && s != null && typeof s.split === "function") {
@@ -1766,14 +2405,21 @@ export function pyStrSplit(s, sep, maxsplit) {
     // #213: accept the keyword forms `split(sep=..., maxsplit=...)` — which
     // the compiler lowers to a trailing options object — as well as the
     // positional `split(sep, maxsplit)`, and actually honor maxsplit.
+    // E3 r3: the bag must CARRY one of the keyword names — a bare object is
+    // a positional value (an __index__-bearing maxsplit was swallowed as an
+    // empty bag and silently ignored; a dict sep must reach the "must be
+    // str or None, not dict" TypeError).
     const optsFrom = (v) =>
-        v !== null && typeof v === "object" && !Array.isArray(v);
+        v !== null && typeof v === "object" && !Array.isArray(v) && v.__pyfloat__ !== true
+        && typeof v.__index__ !== "function"
+        && ("sep" in v || "maxsplit" in v);
     if (optsFrom(sep)) {
         if ("maxsplit" in sep) maxsplit = sep.maxsplit;
         sep = "sep" in sep ? sep.sep : undefined;
     } else if (optsFrom(maxsplit)) {
         maxsplit = "maxsplit" in maxsplit ? maxsplit.maxsplit : undefined;
     }
+    if (maxsplit !== undefined && maxsplit !== null) maxsplit = __strIndexArg(maxsplit);
     const lim =
         maxsplit === undefined || maxsplit === null || maxsplit < 0
             ? Infinity
@@ -1782,23 +2428,32 @@ export function pyStrSplit(s, sep, maxsplit) {
     if (sep === undefined || sep === null) {
         // Whitespace split: collapse runs of whitespace, drop empties, and
         // (for a finite maxsplit) keep the unsplit remainder as the last part.
-        const trimmed = s.replace(/^\s+/, "");
+        const trimmed = s.replace(__PY_WS_LEAD, "");
         if (trimmed === "") return [];
-        if (lim === Infinity) return trimmed.split(/\s+/).filter(Boolean);
+        if (lim === Infinity) {
+            return trimmed.replace(__PY_WS_TRAIL, "").split(__PY_WS_RUN);
+        }
         const out = [];
         let i = 0;
         while (out.length < lim) {
-            while (i < trimmed.length && /\s/.test(trimmed[i])) i++;
+            while (i < trimmed.length && __PY_WS_RE.test(trimmed[i])) i++;
             if (i >= trimmed.length) break;
             let start = i;
-            while (i < trimmed.length && !/\s/.test(trimmed[i])) i++;
+            while (i < trimmed.length && !__PY_WS_RE.test(trimmed[i])) i++;
             out.push(trimmed.slice(start, i));
         }
-        while (i < trimmed.length && /\s/.test(trimmed[i])) i++;
-        if (i < trimmed.length) out.push(trimmed.slice(i).replace(/\s+$/, ""));
+        while (i < trimmed.length && __PY_WS_RE.test(trimmed[i])) i++;
+        // E3 r3: the unsplit REMAINDER keeps its trailing whitespace —
+        // CPython '  a b  '.split(None, 0) == ['a b  '] (only the leading
+        // run before the remainder is consumed; nothing is trimmed off the
+        // right).
+        if (i < trimmed.length) out.push(trimmed.slice(i));
         return out;
     }
 
+    if (typeof sep !== "string") {
+        throw new TypeError_(`must be str or None, not ${__pyTypeName(sep)}`);
+    }
     if (sep === "") throw new ValueError("empty separator");
     if (lim === Infinity) return s.split(sep);
 
@@ -1815,36 +2470,55 @@ export function pyStrSplit(s, sep, maxsplit) {
     return out;
 }
 
-/** Python `s.title()` — first cased char of each "word" uppercased, the
- * REST of the word lowercased. CPython's word boundary is any non-cased
- * char, so `"it's".title()` is `"It'S"` (apostrophe restarts the word) —
- * issue #87. */
+/** Python `s.title()` — the first cased char of each word TITLECASED
+ * (digraphs like ǆ → ǅ via __TITLE_MAP), the rest of the word lowercased.
+ * CPython's word boundary is any non-cased char (`"it's".title()` is
+ * `"It'S"` — issue #87); "cased" is the Unicode Cased property (covers
+ * Other_Lowercase modifiers, unlike a lower!=upper probe). */
 export function pyStrTitle(s) {
+    if (typeof s !== "string" && s != null && typeof s.title === "function") {
+        return s.title();
+    }
     let out = "";
     let prevCased = false;
     for (const ch of s) {
-        const lo = ch.toLowerCase();
-        const up = ch.toUpperCase();
-        if (lo === up) {
-            // Not a cased character — pass through, reset word state.
+        if (!/\p{Cased}/u.test(ch)) {
             out += ch;
             prevCased = false;
-        } else {
-            out += prevCased ? lo : up;
-            prevCased = true;
+            continue;
         }
+        if (prevCased) {
+            out += ch.toLowerCase();
+        } else {
+            const t = __TITLE_MAP.get(ch.codePointAt(0));
+            out += t !== undefined ? t : ch.toUpperCase();
+        }
+        prevCased = true;
     }
     return out;
 }
 
-/** Python `s.capitalize()` — first letter upper, rest lower. */
+/** Python `s.capitalize()` — first character TITLECASED (3.8+ semantics:
+ * ǆ → ǅ, ß → Ss), the rest lowercased. Code-point-aware. */
 export function pyStrCapitalize(s) {
-    return s ? s[0].toUpperCase() + s.slice(1).toLowerCase() : s;
+    if (typeof s !== "string" && s != null && typeof s.capitalize === "function") {
+        return s.capitalize();
+    }
+    if (!s) return s;
+    const cps = [...s];
+    const t = __TITLE_MAP.get(cps[0].codePointAt(0));
+    return (t !== undefined ? t : cps[0].toUpperCase()) + cps.slice(1).join("").toLowerCase();
 }
 
-/** Python `s.strip(chars)` — strip any chars in the set from both ends. */
+/** Python `s.strip(chars)` — strip any chars in the set from both ends;
+ * default = the PYTHON whitespace set (not JS `\s`). */
 export function pyStrStrip(s, chars) {
-    if (chars === undefined || chars === null) return s.replace(/^\s+|\s+$/g, "");
+    if (chars === undefined || chars === null) {
+        return s.replace(__PY_WS_LEAD, "").replace(__PY_WS_TRAIL, "");
+    }
+    if (typeof chars !== "string") {
+        throw new TypeError_("strip arg must be None or str");
+    }
     return pyStrLstrip(pyStrRstrip(s, chars), chars);
 }
 
@@ -1853,7 +2527,10 @@ export function pyStrStrip(s, chars) {
  * whole astral chars while `s[i]` is one UTF-16 unit, so the old unit-wise
  * walk never matched an astral strip char ('𝔸a𝔸'.strip('𝔸') was a no-op). */
 export function pyStrLstrip(s, chars) {
-    if (chars === undefined || chars === null) return s.replace(/^\s+/, "");
+    if (chars === undefined || chars === null) return s.replace(__PY_WS_LEAD, "");
+    if (typeof chars !== "string") {
+        throw new TypeError_("lstrip arg must be None or str");
+    }
     const set = new Set(chars);
     let i = 0;
     while (i < s.length) {
@@ -1867,7 +2544,10 @@ export function pyStrLstrip(s, chars) {
 /** Python `s.rstrip(chars)` — strip trailing chars in set (code-point-aware,
  * surrogate-pair-safe backward walk — see pyStrLstrip). */
 export function pyStrRstrip(s, chars) {
-    if (chars === undefined || chars === null) return s.replace(/\s+$/, "");
+    if (chars === undefined || chars === null) return s.replace(__PY_WS_TRAIL, "");
+    if (typeof chars !== "string") {
+        throw new TypeError_("rstrip arg must be None or str");
+    }
     const set = new Set(chars);
     let end = s.length;
     while (end > 0) {
@@ -1976,21 +2656,91 @@ export function pyFormatSpec(value, opts, isFloat) {
         isFloat = true;
         value = value.valueOf();
     }
-    const ty = opts.type;
-    // CPython: a numeric presentation type (f/e/g/d/x/b/o/n/c/%/…) applied to
-    // a str raises `ValueError: Unknown format code 'X' for object of type
-    // 'str'`. This matters after an `!r`/`!s` conversion — `f'{x!r:.3f}'`
-    // formats the REPR string, not the underlying number, so the spec must
-    // reject numeric codes instead of silently re-parsing the string.
-    if (typeof value === "string" && ty != null && ty !== "s") {
-        const e = new Error(`Unknown format code '${ty}' for object of type 'str'`);
-        e.name = "ValueError";
-        throw e;
+    const __e = (msg) => { throw new ValueError(msg); };
+    // Is the spec completely empty (no formatting effect)? `raw` is carried
+    // for the __format__ protocol and does not count.
+    const emptySpec = opts.fill == null && opts.align == null && opts.sign == null
+        && !opts.z && !opts.alt && !opts.zero && opts.width == null
+        && opts.grouping == null && opts.precision == null
+        && opts.fracGrouping == null && opts.type == null;
+
+    let ty = opts.type;
+    let v = value;
+    let kind; // "str" | "int" | "float"
+    if (typeof v === "string") kind = "str";
+    else if (typeof v === "bigint") kind = "int";
+    else if (typeof v === "boolean") {
+        // bool.__format__: an EMPTY spec is str(bool) ('True'); any non-empty
+        // spec routes through the int value (format(True, '>6') == '     1').
+        if (emptySpec) return v ? "True" : "False";
+        v = v ? 1 : 0;
+        kind = "int";
+    } else if (typeof v === "number") {
+        kind = isFloat || !Number.isInteger(v) ? "float" : "int";
+    } else {
+        // Not str/int/float/bool: CPython dispatches type(v).__format__.
+        // A user-defined __format__ receives the RAW spec string; otherwise
+        // object.__format__ is str(v) for an EMPTY spec and a TypeError for
+        // any non-empty one (`format([1], '>8')` raises).
+        if (v != null && typeof v.__format__ === "function") {
+            return v.__format__(opts.raw != null ? String(opts.raw) : "");
+        }
+        if (emptySpec) return pyStr(v);
+        throw new TypeError_(
+            `unsupported format string passed to ${__pyTypeName(value)}.__format__`,
+        );
     }
-    let s;
-    let isNumeric = false;
-    let neg = false;
-    let prefixStr = ""; // '#' base prefix — padded AFTER it, like the sign
+    const tyName = kind === "float" ? "float"
+        : typeof value === "boolean" ? "bool"
+        : kind; // "str" / "int"
+
+    // Grouping × TYPE compatibility — a GLOBAL check that fires before the
+    // per-kind code checks, for every value kind (CPython: format('x', ',x')
+    // raises "Cannot specify ',' with 'x'", not the str unknown-code error).
+    // ',' groups d/e/E/f/F/g/G/%/none; '_' additionally b/o/x/X; neither
+    // works with 'c', 'n' or 's'.
+    if (opts.grouping && ty !== undefined) {
+        const g = opts.grouping;
+        if ((g === "," && "bcnosxX".includes(ty)) || (g === "_" && "cns".includes(ty))) {
+            __e(`Cannot specify '${g}' with '${ty}'.`);
+        }
+    }
+
+    // ----- str-typed values: only 's' (or no type); most flags illegal -----
+    if (kind === "str") {
+        if (opts.grouping && (ty === undefined || ty === "s")) {
+            __e(`Cannot specify '${opts.grouping}' with 's'.`);
+        }
+        if (ty !== undefined && ty !== "s") {
+            __e(`Unknown format code '${ty}' for object of type 'str'`);
+        }
+        if (opts.sign === " ") __e("Space not allowed in string format specifier");
+        if (opts.sign) __e("Sign not allowed in string format specifier");
+        if (opts.align === "=") __e("'=' alignment not allowed in string format specifier");
+        if (opts.alt) __e("Alternate form (#) not allowed in string format specifier");
+        if (opts.z) __e("Negative zero coercion (z) not allowed in string format specifier");
+        // Precision truncates by CODE POINTS (astral-safe), like all width math.
+        let body = v;
+        if (opts.precision != null) body = [...v].slice(0, opts.precision).join("");
+        return __specPad("", body, opts, false);
+    }
+
+    const INT_CODES = "bcdnoxX";
+    const FLOAT_CODES = "eEfFgGn%";
+    if (ty !== undefined && !INT_CODES.includes(ty) && !FLOAT_CODES.includes(ty)) {
+        // 's' (or another non-numeric code) applied to a numeric value.
+        __e(`Unknown format code '${ty}' for object of type '${tyName}'`);
+    }
+    if (kind === "float" && ty !== undefined && ty !== "n" && INT_CODES.includes(ty)) {
+        __e(`Unknown format code '${ty}' for object of type '${tyName}'`);
+    }
+    const intPresentation = kind === "int" && (ty === undefined || INT_CODES.includes(ty));
+    if (opts.z && intPresentation) {
+        __e("Negative zero coercion (z) not allowed in integer format specifier");
+    }
+    if (opts.precision != null && intPresentation) {
+        __e("Precision not allowed in integer format specifier");
+    }
 
     // Group a digit string from the right (CPython: `,`/`_` every 3 for
     // decimal, `_` every 4 for b/o/x/X). Digit-agnostic (hex letters).
@@ -2003,26 +2753,37 @@ export function pyFormatSpec(value, opts, isFloat) {
         return out;
     };
 
-    if (ty === "s" || ty === undefined && typeof value === "string") {
-        s = String(value);
-        if (opts.precision != null) s = s.slice(0, opts.precision);
-    } else if (ty === "b" || ty === "o" || ty === "x" || ty === "X" || ty === "d" || ty === "n" || ty === "c"
-        || (ty === undefined && typeof value === "bigint")) {
-        isNumeric = true;
+    let digits = "";     // ungrouped integer-part digits (numeric paths)
+    let tail = "";       // fraction / exponent / '%' suffix
+    let neg = false;
+    let prefixStr = "";  // '#' base prefix — padded AFTER it, like the sign
+    let groupSize = 3;
+    let isNumeric = true;
+
+    if (intPresentation) {
+        // ----- integer presentations ------------------------------------
         if (ty === "c") {
-            s = String.fromCodePoint(Number(value));
+            if (opts.sign) __e("Sign not allowed with integer format specifier 'c'");
+            if (opts.alt) __e("Alternate form (#) not allowed with integer format specifier 'c'");
+            const big = typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v)));
+            if (big > 0x7fffffffffffffffn || big < -0x8000000000000000n) {
+                throw new OverflowError("Python int too large to convert to C long");
+            }
+            const n = Number(big);
+            if (n < 0 || n >= 0x110000) {
+                throw new OverflowError("%c arg not in range(0x110000)");
+            }
+            digits = String.fromCodePoint(n);
         } else {
             // Keep BigInt ints exact (arbitrary precision) — never round
             // through Number.
-            let n = typeof value === "bigint" ? value : Math.trunc(Number(value));
+            let n = typeof v === "bigint" ? v : Math.trunc(Number(v));
             neg = n < 0;
             if (neg) n = -n;
             const radix = ty === "b" ? 2 : ty === "o" ? 8 : (ty === "x" || ty === "X") ? 16 : 10;
-            s = n.toString(radix);
-            if (ty === "X") s = s.toUpperCase();
-            // Grouping applies to the digits only; the #-prefix goes
-            // OUTSIDE the grouped digits (0b1010_1010).
-            if (opts.grouping) s = group(s, radix === 10 ? 3 : 4, opts.grouping);
+            digits = n.toString(radix);
+            if (ty === "X") digits = digits.toUpperCase();
+            groupSize = radix === 10 ? 3 : 4;
             // autotester string_format: the '#' prefix sits BETWEEN the sign
             // and any '='/zero padding ('{:#08b}'.format(-15) → '-0b01111',
             // not '-0000b1111'), so it is carried separately (prefixStr joins
@@ -2033,121 +2794,190 @@ export function pyFormatSpec(value, opts, isFloat) {
                 else if (radix === 16) prefixStr = ty === "X" ? "0X" : "0x";
             }
         }
-    } else if (ty === "e" || ty === "E" || ty === "f" || ty === "F" || ty === "g" || ty === "G" || ty === "%" || ty === undefined) {
-        isNumeric = true;
-        let n = Number(value);
+    } else {
+        // ----- float presentations (int values convert through Number) ---
+        let n = Number(v);
         if (ty === "%") n = n * 100;
         neg = n < 0 || Object.is(n, -0);
         n = Math.abs(n);
         const prec = opts.precision != null ? opts.precision : 6;
+        let s;
         if (!Number.isFinite(n)) {
-            // autotester string_format: non-finite floats format as inf/nan
-            // in every float presentation type ('{:.0f}'.format(float('-inf'))
-            // is '-inf', not DBL_MAX digits); E/F/G uppercase; '%' keeps its
-            // suffix; zero-padding still applies ('{:08f}' → '00000inf').
+            // Non-finite floats format as inf/nan in every float presentation
+            // type; E/F/G uppercase; '%' keeps its suffix.
             s = Number.isNaN(n) ? "nan" : "inf";
             if (ty === "E" || ty === "F" || ty === "G") s = s.toUpperCase();
             if (ty === "%") s += "%";
         } else if (ty === "e" || ty === "E") {
-            s = n.toExponential(prec);
-            // CPython zero-pads the exponent to at least 2 digits
-            // (e+03, e-04). JS toExponential produces e+3 / e-4. Patch
-            // by normalizing the trailing exponent.
-            s = s.replace(/e([+-])(\d)$/, "e$10$2");
+            const r = __sigRound(n, prec + 1);
+            const mant = prec > 0
+                ? r.digits[0] + "." + r.digits.slice(1)
+                : r.digits[0] + (opts.alt ? "." : "");
+            s = mant + "e" + (r.exp10 < 0 ? "-" : "+")
+                + String(Math.abs(r.exp10)).padStart(2, "0");
             if (ty === "E") s = s.toUpperCase();
-        } else if (ty === "g" || ty === "G" || (ty === undefined && opts.precision != null)) {
-            // CPython 'g': with precision p (default 6; 0 → 1), let exp be
-            // the decimal exponent of the value rounded to p significant
-            // digits. If -4 <= exp < p → fixed notation, else scientific;
-            // trailing zeros stripped (unless '#'), exponent >= 2 digits.
+        } else if (ty === undefined && opts.precision == null) {
+            // No type, no precision: str(float) — shortest round-trip repr.
+            s = pyFormatFloat(n);
+        } else if (ty === "g" || ty === "G" || ty === "n" || ty === undefined) {
+            // CPython 'g' (and 'n' = locale-aware 'g'; PythScribe formats
+            // with no locale — documented deviation): with precision p
+            // (default 6; 0 → 1), round to p significant digits (HALF-EVEN,
+            // like CPython — not toExponential's half-away); exp in
+            // [-4, p) → fixed else scientific; trailing zeros stripped
+            // unless '#'; exponent ≥ 2 digits.
             //
-            // autotester string_format: NO type char WITH a precision
-            // (`'{:.4}'.format(1485.1)`) is the None presentation type —
+            // NO type char WITH a precision is the None presentation type —
             // like 'g', except fixed notation keeps at least one digit past
             // the decimal point, and when adding it would exceed the
-            // precision's significant digits, scientific notation wins
-            // ('1.485e+03', not '1485'). The old chain routed this case to
-            // fixed-point ('1485.1000').
+            // precision's significant-digit budget, scientific wins.
             const noneType = ty === undefined;
             let p = prec;
             if (p === 0) p = 1;
-            if (n === 0) {
-                s = noneType ? "0.0" : "0";
-            } else if (!Number.isFinite(n)) {
-                s = n === Infinity ? "inf" : "nan";
-            } else {
-                const m = /^(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(n.toExponential(p - 1));
-                const digits = m[1] + (m[2] || "");
-                const exp10 = parseInt(m[3], 10);
-                const sci = () => {
-                    let mant = opts.alt ? digits : digits.replace(/0+$/, "") || "0";
-                    const mantStr = mant.length > 1 ? mant[0] + "." + mant.slice(1) : mant;
-                    return mantStr + "e" + (exp10 < 0 ? "-" : "+") + String(Math.abs(exp10)).padStart(2, "0");
-                };
-                if (exp10 >= -4 && exp10 < p) {
-                    if (exp10 >= 0) {
-                        s = digits.length <= exp10 + 1
-                            ? digits + "0".repeat(exp10 + 1 - digits.length)
-                            : digits.slice(0, exp10 + 1) + "." + digits.slice(exp10 + 1);
-                    } else {
-                        s = "0." + "0".repeat(-exp10 - 1) + digits;
-                    }
-                    if (!opts.alt && s.includes(".")) s = s.replace(/\.?0+$/, "");
-                    if (noneType && !s.includes(".")) {
-                        // ≥1 digit past the decimal point; if that exceeds
-                        // the significant-digit budget, go scientific.
-                        s = exp10 + 2 > p ? sci() : s + ".0";
-                    }
+            const r = n === 0 ? { digits: "0".repeat(p), exp10: 0 } : __sigRound(n, p);
+            const ds = r.digits;
+            const exp10 = r.exp10;
+            const sci = () => {
+                const mant = opts.alt ? ds : ds.replace(/0+$/, "") || "0";
+                let mantStr = mant.length > 1 ? mant[0] + "." + mant.slice(1) : mant;
+                if (opts.alt && !mantStr.includes(".")) mantStr += ".";
+                return mantStr + "e" + (exp10 < 0 ? "-" : "+")
+                    + String(Math.abs(exp10)).padStart(2, "0");
+            };
+            if (exp10 >= -4 && exp10 < p) {
+                if (exp10 >= 0) {
+                    s = ds.length <= exp10 + 1
+                        ? ds + "0".repeat(exp10 + 1 - ds.length)
+                        : ds.slice(0, exp10 + 1) + "." + ds.slice(exp10 + 1);
                 } else {
-                    s = sci();
+                    s = "0." + "0".repeat(-exp10 - 1) + ds;
                 }
+                if (!opts.alt && s.includes(".")) s = s.replace(/\.?0+$/, "");
+                if (opts.alt && !s.includes(".")) s += ".";
+                if (noneType && !s.includes(".")) {
+                    // ≥1 digit past the decimal point; if that exceeds the
+                    // significant-digit budget, go scientific.
+                    s = exp10 + 2 > p ? sci() : s + ".0";
+                }
+            } else {
+                s = sci();
             }
             if (ty === "G") s = s.toUpperCase();
         } else if (ty === "%") {
             // Round-half-even on the exact double, like CPython (#86).
             s = __fixedHalfEven(n, opts.precision != null ? opts.precision : 6) + "%";
-        } else if (ty === "f" || ty === "F") {
-            s = __fixedHalfEven(n, prec);
-            // autotester string_format: '#' on a float presentation type
-            // forces the decimal point ('{:#.0f}'.format(-1552) → '-1552.').
-            if (opts.alt && !s.includes(".")) s += ".";
-        } else if (isFloat) {
-            // #347: no type char + a statically-float value → str(float): a
-            // whole-valued float keeps its '.0' ('0.0', not the int '0'). n is
-            // the absolute value (sign handled below), so use the positive
-            // float rendering.
-            s = pyFormatFloat(n);
+            if (opts.alt && !s.includes(".")) s = s.replace("%", ".%");
         } else {
-            s = String(n);
+            // 'f' / 'F'
+            s = __fixedHalfEven(n, prec);
+            // '#' on a float presentation type forces the decimal point
+            // ('{:#.0f}'.format(-1552) → '-1552.').
+            if (opts.alt && !s.includes(".")) s += ".";
+            if (ty === "F") s = s.toUpperCase();
         }
-        if ((ty === "f" || ty === "F" || ty === undefined) && opts.grouping) {
-            // Insert separators in the integer part only.
-            const dot = s.indexOf(".");
-            const intPart = dot === -1 ? s : s.slice(0, dot);
-            const fracPart = dot === -1 ? "" : s.slice(dot);
-            s = group(intPart, 3, opts.grouping) + fracPart;
+        // PEP 682 'z': coerce a result that rounds to negative zero.
+        if (opts.z && neg && !/[1-9a-fA-F]/.test(s.replace(/[eE][+-]\d+/, ""))) {
+            neg = false;
         }
-    } else {
-        s = String(value);
+        // 3.14 fractional grouping: group the FRACTION digits in 3s,
+        // left-to-right from the decimal point ('.123456791' →
+        // '.123_456_791'); exponent/'%' suffixes untouched. Ignored for
+        // str values (CPython: format('ab', '.3,s') is 'ab').
+        if (opts.fracGrouping) {
+            const fsep = opts.fracGrouping;
+            s = s.replace(/\.([0-9]+)/, (_m, frac) =>
+                "." + frac.replace(/([0-9]{3})(?=[0-9])/g, "$1" + fsep));
+        }
+        // Split into integer digits + tail so grouping/zero-pad see digits.
+        const dm = /^([0-9]*)([\s\S]*)$/.exec(s);
+        digits = dm[1];
+        tail = dm[2];
     }
 
     // Sign handling for numeric values. The '#' base prefix joins the sign
     // area so '='/zero padding lands between '0b'/'0x' and the digits.
     let signStr = "";
-    if (isNumeric) {
+    if (ty !== "c") {
         if (neg) signStr = "-";
         else if (opts.sign === "+") signStr = "+";
         else if (opts.sign === " ") signStr = " ";
     }
     signStr += prefixStr;
 
-    // Width / fill / align
+    const sep = opts.grouping;
+    let body = sep && digits ? group(digits, groupSize, sep) : digits;
+    body += tail;
+
+    // Zero-padding with grouping: the fill zeros PARTICIPATE in grouping
+    // ('{:011,}'.format(1234) → '000,001,234'; may overshoot the width by
+    // one rather than lead with a separator, like CPython).
+    const width = opts.width || 0;
+    const zeroFill = isNumeric && (opts.fill == null || opts.fill === "0")
+        && (opts.zero || opts.align === "=");
+    if (sep && zeroFill && width > 0 && digits) {
+        let d = digits;
+        while ([...signStr].length + [...(group(d, groupSize, sep) + tail)].length < width) {
+            d = "0" + d;
+        }
+        body = group(d, groupSize, sep) + tail;
+        return signStr + body;
+    }
+
+    return __specPad(signStr, body, opts, isNumeric);
+}
+
+/** |n| rounded to `p` significant digits, HALF-EVEN (CPython's rounding for
+ * e/g/none presentations; JS toExponential rounds half-away-from-zero).
+ * Returns { digits: <p digit chars>, exp10 } for finite n > 0. */
+function __sigRound(n, p) {
+    const m = /^(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(n.toExponential(Math.min(99, Math.max(p + 2, 50))));
+    let ds = m[1] + (m[2] || "");
+    let exp10 = parseInt(m[3], 10);
+    if (ds.length > p) {
+        const cut = ds.slice(0, p);
+        const next = ds[p];
+        const rest = ds.slice(p + 1).replace(/0+$/, "");
+        let up = false;
+        if (next > "5" || (next === "5" && rest !== "")) up = true;
+        else if (next === "5" && rest === "") {
+            up = (cut.charCodeAt(p - 1) - 48) % 2 === 1;
+        }
+        const arr = cut.split("");
+        if (up) {
+            let i = p - 1;
+            for (;;) {
+                if (i < 0) {
+                    arr.unshift("1");
+                    arr.pop();
+                    exp10 += 1;
+                    break;
+                }
+                if (arr[i] === "9") {
+                    arr[i] = "0";
+                    i -= 1;
+                } else {
+                    arr[i] = String.fromCharCode(arr[i].charCodeAt(0) + 1);
+                    break;
+                }
+            }
+        }
+        ds = arr.join("");
+    } else {
+        ds = ds.padEnd(p, "0");
+    }
+    return { digits: ds, exp10 };
+}
+
+/** Width/fill/align application — all lengths in CODE POINTS (astral-safe). */
+function __specPad(signStr, s, opts, isNumeric) {
     const width = opts.width || 0;
     if (width > 0) {
-        const fill = opts.fill || (opts.zero && isNumeric ? "0" : " ");
-        const align = opts.align || (opts.zero && isNumeric ? "=" : (isNumeric ? ">" : "<"));
-        const total = signStr.length + s.length;
+        const total = [...signStr].length + [...s].length;
         if (total < width) {
+            // '0' means fill='0' for strings too (align stays '<'); for
+            // numerics it additionally implies '=' alignment.
+            const fill = opts.fill != null ? opts.fill : (opts.zero ? "0" : " ");
+            const align = opts.align || (opts.zero && isNumeric ? "=" : isNumeric ? ">" : "<");
             const need = width - total;
             if (align === "<") return signStr + s + fill.repeat(need);
             if (align === ">") return fill.repeat(need) + signStr + s;
@@ -2155,7 +2985,7 @@ export function pyFormatSpec(value, opts, isFloat) {
                 const left = Math.floor(need / 2);
                 return fill.repeat(left) + signStr + s + fill.repeat(need - left);
             }
-            if (align === "=") return signStr + fill.repeat(need) + s;
+            return signStr + fill.repeat(need) + s; // '='
         }
     }
     return signStr + s;
@@ -2173,7 +3003,7 @@ export function pyFormatDynamic(value, specStr) {
     if (value !== null && value !== undefined && typeof value.__format__ === "function") {
         return value.__format__(String(specStr));
     }
-    return pyFormatSpec(value, parseFormatSpec(String(specStr)));
+    return pyFormatSpec(value, parseFormatSpec(String(specStr), value));
 }
 
 // public #3: the format(value[, format_spec]) BUILTIN — the same engine as
@@ -2196,8 +3026,35 @@ export function pyFormat(value, spec) {
     return pyFormatDynamic(value, spec);
 }
 
-export function parseFormatSpec(s) {
-    const opts = {};
+/** PEP 3101 format-spec mini-language parser (the RUNTIME twin of
+ * crates/pyths_parser/src/format_spec.rs::parse — both are pinned to
+ * tests/fixtures/format_spec_grammar.json; keep them in lockstep).
+ * Grammar: [[fill]align][sign]["z"]["#"]["0"][width][grouping]["." prec][type]
+ * Invalid input RAISES the CPython error (never a silent no-op — the #108
+ * class): "Unknown format code" for a single unrecognized type char,
+ * "Invalid format specifier" for structural garbage, "Format specifier
+ * missing precision" for a bare '.', "Cannot specify both ',' and '_'." for
+ * double grouping. When `forValue` is a value whose type formats through
+ * object.__format__ (not str/int/float/bool), every one of these is
+ * CPython's TypeError ("unsupported format string passed to ...") instead. */
+export function parseFormatSpec(s, forValue) {
+    const hasValue = arguments.length >= 2;
+    const objFamily = hasValue
+        && !(typeof forValue === "string" || typeof forValue === "number"
+            || typeof forValue === "bigint" || typeof forValue === "boolean"
+            || (forValue != null && forValue.__pyfloat__ === true));
+    const raiseFor = (mkValueError) => {
+        if (objFamily) {
+            throw new TypeError_(
+                `unsupported format string passed to ${__pyTypeName(forValue)}.__format__`,
+            );
+        }
+        throw mkValueError();
+    };
+    const bad = () => raiseFor(() => new ValueError(hasValue
+        ? `Invalid format specifier '${s}' for object of type '${__pyTypeName(forValue)}'`
+        : `Invalid format specifier '${s}'`));
+    const opts = { raw: s };
     const chars = [...s];
     let i = 0;
     if (chars.length >= 2 && "<>=^".includes(chars[1])) {
@@ -2206,49 +3063,131 @@ export function parseFormatSpec(s) {
         opts.align = chars[0]; i = 1;
     }
     if (i < chars.length && "+- ".includes(chars[i])) { opts.sign = chars[i]; i++; }
+    if (i < chars.length && chars[i] === "z") { opts.z = true; i++; }
     if (i < chars.length && chars[i] === "#") { opts.alt = true; i++; }
     if (i < chars.length && chars[i] === "0") { opts.zero = true; i++; }
+    // E3 r3: CPython bounds width/precision digit runs by PY_SSIZE_T_MAX
+    // during the parse — beyond it is "Too many decimal digits in format
+    // string" (ValueError), NOT a silently-lossy number. Mirrored by the
+    // static parser in crates/pyths_parser/src/format_spec.rs, which routes
+    // any >u32 digit run to this runtime parser so BOTH reject identically.
+    const tooManyDigits = (ds) => {
+        if (ds.length >= 19 && BigInt(ds) > 9223372036854775807n) {
+            raiseFor(() => new ValueError("Too many decimal digits in format string"));
+        }
+    };
     let w = "";
-    while (i < chars.length && /[0-9]/.test(chars[i])) { w += chars[i]; i++; }
-    if (w) opts.width = parseInt(w, 10);
-    if (i < chars.length && (chars[i] === "," || chars[i] === "_")) { opts.grouping = chars[i]; i++; }
+    while (i < chars.length && chars[i] >= "0" && chars[i] <= "9") { w += chars[i]; i++; }
+    if (w) { tooManyDigits(w); opts.width = parseInt(w, 10); }
+    if (i < chars.length && (chars[i] === "," || chars[i] === "_")) {
+        opts.grouping = chars[i];
+        i++;
+        if (i < chars.length && (chars[i] === "," || chars[i] === "_")) {
+            if (chars[i] !== opts.grouping) {
+                raiseFor(() => new ValueError("Cannot specify both ',' and '_'."));
+            }
+            bad();
+        }
+    }
     if (i < chars.length && chars[i] === ".") {
         i++;
         let p = "";
-        while (i < chars.length && /[0-9]/.test(chars[i])) { p += chars[i]; i++; }
-        if (p) opts.precision = parseInt(p, 10);
+        while (i < chars.length && chars[i] >= "0" && chars[i] <= "9") { p += chars[i]; i++; }
+        // 3.14: '.' with NO digits is legal when a FRACTIONAL grouping char
+        // follows ('{:.,f}' -> default precision, grouped fraction); bare
+        // '.'/'.q' stays the missing-precision error.
+        if (!p && !(i < chars.length && (chars[i] === "," || chars[i] === "_"))) {
+            raiseFor(() => new ValueError("Format specifier missing precision"));
+        }
+        if (p) { tooManyDigits(p); opts.precision = parseInt(p, 10); }
+        // 3.14: an optional grouping char AFTER the precision groups the
+        // FRACTIONAL digits ('{:,.9_f}' → '123,456,789.123_456_791').
+        if (i < chars.length && (chars[i] === "," || chars[i] === "_")) {
+            opts.fracGrouping = chars[i];
+            i++;
+            if (i < chars.length && (chars[i] === "," || chars[i] === "_")) {
+                // a DIFFERENT second grouping char -> the both-error; the
+                // SAME char repeated is structural garbage (Invalid).
+                if (chars[i] !== opts.fracGrouping) {
+                    raiseFor(() => new ValueError("Cannot specify both ',' and '_'."));
+                }
+                bad();
+            }
+        }
     }
-    if (i < chars.length) { opts.type = chars[i]; i++; }
+    if (i < chars.length) {
+        if (i === chars.length - 1) {
+            // A single trailing char is always TAKEN as the presentation
+            // type; an unrecognized one raises "Unknown format code" (the
+            // per-value renderer re-checks known codes against the value).
+            if (!"bcdeEfFgGnosxX%".includes(chars[i])) {
+                const c = chars[i];
+                raiseFor(() => new ValueError(hasValue
+                    ? `Unknown format code '${c}' for object of type '${__pyTypeName(forValue)}'`
+                    : `Unknown format code '${c}'`));
+            }
+            opts.type = chars[i];
+            i++;
+        } else {
+            bad(); // more than one trailing character
+        }
+    }
     return opts;
 }
 
 /** Python `s.format(...)` — full replacement-field support: `{{`/`}}` escapes,
  * auto/positional/named fields with `.attr`/`[key]` access, `!r`/`!s`/`!a`
- * conversions, and `:format_spec` (delegated to pyFormatSpec, the same engine
- * behind f-strings). Interpolated values render with Python str() semantics. */
+ * conversions, `:format_spec` (delegated to pyFormatSpec, the same engine
+ * behind f-strings), and the CPython auto↔manual numbering errors. */
 export function pyStrFormat(s, ...args) {
     // #301: non-string receivers with their own .format (Intl.NumberFormat,
     // Intl.DateTimeFormat, user classes) dispatch natively.
     if (typeof s !== "string" && s != null && typeof s.format === "function") {
         return s.format(...args);
     }
-    let auto = 0;
     // Named fields look up on a trailing kwargs object (the codegen lowers
     // `.format(name=v)` to a trailing object literal); positional/auto fields
     // index the positional args directly.
     const kwargs = args.length ? args[args.length - 1] : undefined;
+    return __pyStrFormatImpl(s, args, kwargs);
+}
+
+function __pyStrFormatImpl(s, args, kwargs) {
+    let auto = 0;
+    let manual = false;
+    const mapHas = (m, k) => (m instanceof Map ? m.has(k) : m != null && typeof m === "object" && k in m);
+    const mapGet = (m, k) => (m instanceof Map ? m.get(k) : m[k]);
     const resolveField = (fieldName) => {
         let i = 0;
         let base = "";
         while (i < fieldName.length && fieldName[i] !== "." && fieldName[i] !== "[") base += fieldName[i++];
         let val;
-        if (base === "") val = args[auto++];
-        else if (/^\d+$/.test(base)) val = args[Number(base)];
-        else if (kwargs != null && typeof kwargs === "object" && base in kwargs) val = kwargs[base];
-        else {
-            const e = new Error("'" + base + "'");
-            e.name = "KeyError";
-            throw e;
+        if (base === "") {
+            if (manual) {
+                throw new ValueError(
+                    "cannot switch from manual field specification to automatic field numbering",
+                );
+            }
+            if (auto >= args.length) {
+                throw new IndexError(`Replacement index ${auto} out of range for positional args tuple`);
+            }
+            val = args[auto++];
+        } else if (/^\d+$/.test(base)) {
+            if (auto > 0) {
+                throw new ValueError(
+                    "cannot switch from automatic field numbering to manual field specification",
+                );
+            }
+            manual = true;
+            const bi = Number(base);
+            if (bi >= args.length) {
+                throw new IndexError(`Replacement index ${bi} out of range for positional args tuple`);
+            }
+            val = args[bi];
+        } else if (mapHas(kwargs, base)) {
+            val = mapGet(kwargs, base);
+        } else {
+            throw new KeyError(base);
         }
         // Trailing `.attr` / `[key]` accessors (CPython field-name grammar).
         while (i < fieldName.length) {
@@ -2256,7 +3195,15 @@ export function pyStrFormat(s, ...args) {
                 i++;
                 let attr = "";
                 while (i < fieldName.length && fieldName[i] !== "." && fieldName[i] !== "[") attr += fieldName[i++];
+                const parent = val;
                 val = val == null ? undefined : val[attr];
+                // complex .real/.imag are Python FLOATS - re-box so str()
+                // renders 3.0, not 3 (the compiled attr-read path does the
+                // same re-tagging at its own surface).
+                if (typeof val === "number" && parent != null && parent.__pycomplex__ === true
+                    && (attr === "real" || attr === "imag")) {
+                    val = __pyF(val);
+                }
             } else if (fieldName[i] === "[") {
                 i++;
                 let key = "";
@@ -2284,6 +3231,7 @@ export function pyStrFormat(s, ...args) {
                 else if (s[j] === "}") { depth--; if (depth === 0) break; }
                 j++;
             }
+            if (depth !== 0) throw new ValueError("Single '{' encountered in format string");
             const field = s.slice(i + 1, j);
             i = j + 1;
             // Split field into name, `!conversion`, and `:spec` at bracket depth 0.
@@ -2301,8 +3249,11 @@ export function pyStrFormat(s, ...args) {
             let spec = colonIdx >= 0 ? field.slice(colonIdx + 1) : null;
             let conv = null;
             if (bangIdx >= 0 && (colonIdx < 0 || bangIdx < colonIdx)) {
-                conv = namePart[bangIdx + 1];
+                conv = namePart.slice(bangIdx + 1);
                 namePart = namePart.slice(0, bangIdx);
+                if (conv !== "r" && conv !== "s" && conv !== "a") {
+                    throw new ValueError(`Unknown conversion specifier ${conv}`);
+                }
             }
             let val = resolveField(namePart);
             if (conv === "r") val = pyRepr(val);
@@ -2314,7 +3265,7 @@ export function pyStrFormat(s, ...args) {
                 if (val !== null && val !== undefined && typeof val.__format__ === "function") {
                     out += val.__format__(spec); // CPython __format__ protocol
                 } else {
-                    out += pyFormatSpec(val, parseFormatSpec(spec));
+                    out += pyFormatSpec(val, parseFormatSpec(spec, val));
                 }
             } else if (conv != null) {
                 // `!r`/`!s`/`!a` already produced a string; an empty spec is str().
@@ -2324,7 +3275,7 @@ export function pyStrFormat(s, ...args) {
             }
         } else if (ch === "}") {
             if (s[i + 1] === "}") { out += "}"; i += 2; continue; }
-            out += "}"; i++;
+            throw new ValueError("Single '}' encountered in format string");
         } else {
             out += ch; i++;
         }
@@ -2375,7 +3326,7 @@ export function pyInsert(xs, i, v) {
  * ignored `end`). Non-string receivers with their own .find (JS
  * Array.prototype.find(callback)) dispatch natively. */
 export function pyFind(s, sub, start, end) {
-    if (typeof s === "string") return __pyStrFind(s, sub, start, end, false);
+    if (typeof s === "string") return __pyStrFind(s, sub, start, end, false, "find");
     if (s != null && typeof s.find === "function") return s.find(sub, start, end);
     throw new TypeError_(`object of type '${__pyTypeName(s)}' has no find()`); // #467
 }
@@ -2411,7 +3362,7 @@ export function pyIndex(obj, v, start, end) {
     }
     if (typeof obj === "string") {
         // str.index(sub[, start[, end]]) — code-point offsets, ValueError if absent.
-        const i = __pyStrFind(obj, v, start, end, false);
+        const i = __pyStrFind(obj, v, start, end, false, "index");
         if (i < 0) throw new ValueError(`substring not found`);
         return i;
     }
@@ -3653,14 +4604,51 @@ export function pyDictSetdefault(d, k, defaultValue) {
 /** Python `obj.count(v[, start[, end]])` for str/list/tuple/bytes. */
 export function pyCount(obj, v, start, end) {
     if (typeof obj === "string") {
-        if (typeof v !== "string") return 0;
+        // E3 r3: CPython's argument-clinic check — a non-str needle is a
+        // TypeError (the value `None` prints as None, not NoneType), never
+        // a silent 0.
+        if (typeof v !== "string") {
+            const shown = v === null || v === undefined ? "None" : __pyTypeName(v);
+            throw new TypeError_(`count() argument 1 must be str, not ${shown}`);
+        }
+        // E3: full spec — start/end are code-point slice bounds. Clamp like
+        // a slice, take the segment, count within it.
+        let s = obj;
+        start = __strSliceBound(start);
+        end = __strSliceBound(end);
+        if (start !== null || end !== null) {
+            const cps = [...obj];
+            const n0 = cps.length;
+            let st = start === null ? 0 : start;
+            let en = end === null ? n0 : end;
+            if (st < 0) st = Math.max(0, n0 + st);
+            if (en < 0) en = Math.max(0, n0 + en);
+            if (en > n0) en = n0;
+            if (st > en) return 0;
+            s = cps.slice(st, en).join("");
+        }
         // #327: the empty substring matches at every gap (before each char
-        // and at the end) → len(s)+1, counted in code points (astral-safe).
+        // and at the end) → len(segment)+1, counted in code points.
         if (v.length === 0) {
-            return (/[\uD800-\uDBFF]/.test(obj) ? [...obj].length : obj.length) + 1;
+            return (/[\uD800-\uDBFF]/.test(s) ? [...s].length : s.length) + 1;
+        }
+        // E3 r3: when either side carries surrogates the scan runs in
+        // CODE-POINT space (same discipline as __pyStrFind) — a lone
+        // surrogate needle must never match half of an astral pair
+        // ('a😀b'.count('\ud83d') is 0 in CPython, but JS indexOf finds the
+        // pair's high half). Non-overlapping, like the fast path.
+        if (__hasSurrogate(s) || __hasSurrogate(v)) {
+            const hs = [...s], nd = [...v], m = nd.length;
+            let n = 0, i = 0;
+            while (i + m <= hs.length) {
+                let k = 0;
+                while (k < m && hs[i + k] === nd[k]) k++;
+                if (k === m) { n++; i += m; } else { i++; }
+            }
+            return n;
         }
         let n = 0, i = 0;
-        while ((i = obj.indexOf(v, i)) !== -1) { n++; i += v.length; }
+        while ((i = s.indexOf(v, i)) !== -1) { n++; i += v.length; }
         return n;
     }
     if (Array.isArray(obj)) return pyListCount(obj, v);
@@ -3842,37 +4830,52 @@ export function pyRemove(obj, v) {
 // String helpers (additional)
 // ============================================================
 
-/** Python `s.center(width, fillchar=" ")` — pad both sides to reach width. */
+/** Python `s.center(width, fillchar=" ")` — code-point width; CPython puts
+ * the odd extra pad on the LEFT when both the margin and width are odd
+ * (#328: `left = marg//2 + (marg & width & 1)`). */
 export function pyStrCenter(s, width, fillchar = " ") {
-    const need = width - s.length;
+    width = __strIndexArg(width);
+    __strFillcharCheck(fillchar);
+    const len = [...s].length;
+    const need = width - len;
     if (need <= 0) return s;
-    // #328: CPython puts the odd extra pad on the LEFT when BOTH the margin
-    // and the width are odd (`left = marg//2 + (marg & width & 1)`), not
-    // always on the right.
     const left = Math.floor(need / 2) + (need & width & 1);
     const right = need - left;
     return fillchar.repeat(left) + s + fillchar.repeat(right);
 }
 
-/** Python `s.ljust(width, fillchar=" ")` — pad right to width. */
+/** Python `s.ljust(width, fillchar=" ")` — pad right to width (code points). */
 export function pyStrLjust(s, width, fillchar = " ") {
-    return s.length >= width ? s : s + fillchar.repeat(width - s.length);
+    width = __strIndexArg(width);
+    __strFillcharCheck(fillchar);
+    const len = [...s].length;
+    return len >= width ? s : s + fillchar.repeat(width - len);
 }
 
-/** Python `s.rjust(width, fillchar=" ")` — pad left to width. */
+/** Python `s.rjust(width, fillchar=" ")` — pad left to width (code points). */
 export function pyStrRjust(s, width, fillchar = " ") {
-    return s.length >= width ? s : fillchar.repeat(width - s.length) + s;
+    width = __strIndexArg(width);
+    __strFillcharCheck(fillchar);
+    const len = [...s].length;
+    return len >= width ? s : fillchar.repeat(width - len) + s;
 }
 
-/** Python `s.expandtabs(tabsize=8)` — replace tabs with spaces. */
+/** Python `s.expandtabs(tabsize=8)` — full spec: keyword form, tabsize 0
+ * (removes tabs), column reset on \n and \r. */
 export function pyStrExpandtabs(s, tabsize = 8) {
+    if (tabsize !== null && typeof tabsize === "object" && tabsize.__pyfloat__ !== true) {
+        tabsize = tabsize.tabsize !== undefined ? tabsize.tabsize : 8;
+    }
+    tabsize = __strIndexArg(tabsize);
     let out = "";
     let col = 0;
     for (const ch of s) {
         if (ch === "\t") {
-            const fill = tabsize - (col % tabsize);
-            out += " ".repeat(fill);
-            col += fill;
+            if (tabsize > 0) {
+                const fill = tabsize - (col % tabsize);
+                out += " ".repeat(fill);
+                col += fill;
+            }
         } else if (ch === "\n" || ch === "\r") {
             out += ch;
             col = 0;
@@ -3902,29 +4905,81 @@ export function pyStrRpartition(s, sep) {
     return pyTuple(s.slice(0, i), sep, s.slice(i + sep.length));
 }
 
-/** Python `s.rsplit(sep, maxsplit=-1)`. Empty separator raises
- * ValueError like CPython (issue #92). */
-export function pyStrRsplit(s, sep, maxsplit = -1) {
-    if (sep === undefined) {
-        return s.trim().split(/\s+/).filter(Boolean);
+/** Python `s.rsplit([sep[, maxsplit]])` — full CPython spec: keyword forms,
+ * whitespace mode honors maxsplit FROM THE RIGHT, empty separator raises
+ * ValueError (issue #92). */
+export function pyStrRsplit(s, sep, maxsplit) {
+    if (typeof s !== "string" && s != null && typeof s.rsplit === "function") {
+        return s.rsplit(sep, maxsplit);
+    }
+    // E3 r3: same bag discrimination as pyStrSplit (a bag must carry a
+    // keyword name; __index__-bearing objects are positional maxsplits).
+    const optsFrom = (v) =>
+        v !== null && typeof v === "object" && !Array.isArray(v) && v.__pyfloat__ !== true
+        && typeof v.__index__ !== "function"
+        && ("sep" in v || "maxsplit" in v);
+    if (optsFrom(sep)) {
+        if ("maxsplit" in sep) maxsplit = sep.maxsplit;
+        sep = "sep" in sep ? sep.sep : undefined;
+    } else if (optsFrom(maxsplit)) {
+        maxsplit = "maxsplit" in maxsplit ? maxsplit.maxsplit : undefined;
+    }
+    if (maxsplit !== undefined && maxsplit !== null) maxsplit = __strIndexArg(maxsplit);
+    const lim =
+        maxsplit === undefined || maxsplit === null || maxsplit < 0
+            ? Infinity
+            : maxsplit;
+
+    if (sep === undefined || sep === null) {
+        const trimmed = s.replace(__PY_WS_TRAIL, "");
+        if (trimmed.replace(__PY_WS_LEAD, "") === "") return [];
+        if (lim === Infinity) {
+            return trimmed.replace(__PY_WS_LEAD, "").split(__PY_WS_RUN);
+        }
+        // maxsplit applies from the RIGHT: collect words right-to-left.
+        const out = [];
+        let i = trimmed.length;
+        while (out.length < lim) {
+            while (i > 0 && __PY_WS_RE.test(trimmed[i - 1])) i--;
+            if (i <= 0) break;
+            let end = i;
+            while (i > 0 && !__PY_WS_RE.test(trimmed[i - 1])) i--;
+            out.unshift(trimmed.slice(i, end));
+        }
+        while (i > 0 && __PY_WS_RE.test(trimmed[i - 1])) i--;
+        // E3 r3: mirror of split — the unsplit remainder keeps its LEADING
+        // whitespace ('  a b  '.rsplit(None, 0) == ['  a b'] in CPython).
+        if (i > 0) out.unshift(trimmed.slice(0, i));
+        return out;
+    }
+    if (typeof sep !== "string") {
+        throw new TypeError_(`must be str or None, not ${__pyTypeName(sep)}`);
     }
     if (sep === "") throw new ValueError("empty separator");
-    if (maxsplit < 0) return s.split(sep);
+    if (lim === Infinity) return s.split(sep);
     const parts = s.split(sep);
-    if (parts.length <= maxsplit + 1) return parts;
-    const head = parts.slice(0, parts.length - maxsplit).join(sep);
-    return [head, ...parts.slice(parts.length - maxsplit)];
+    if (parts.length <= lim) return parts;
+    const head = parts.slice(0, parts.length - lim).join(sep);
+    return [head, ...parts.slice(parts.length - lim)];
 }
 
-/** Python `s.splitlines(keepends=false)` — split on universal newlines. */
+/** Python `s.splitlines(keepends=False)` — the FULL CPython line-boundary
+ * set: \n \r \r\n \v \f \x1c \x1d \x1e \x85 U+2028 U+2029. */
 export function pyStrSplitlines(s, keepends = false) {
+    if (keepends !== null && typeof keepends === "object" && keepends.__pyfloat__ !== true) {
+        keepends = keepends.keepends !== undefined ? keepends.keepends : false;
+    }
     if (s.length === 0) return [];
+    const isBound = (ch) =>
+        ch === "\n" || ch === "\r" || ch === "\v" || ch === "\f"
+        || ch === "\x1c" || ch === "\x1d" || ch === "\x1e" || ch === "\x85"
+        || ch === "\u2028" || ch === "\u2029";
     const out = [];
     let start = 0;
     let i = 0;
     while (i < s.length) {
         const ch = s[i];
-        if (ch === "\n" || ch === "\r") {
+        if (isBound(ch)) {
             const end = i;
             let next = i + 1;
             if (ch === "\r" && s[i + 1] === "\n") next = i + 2;
@@ -3941,42 +4996,109 @@ export function pyStrSplitlines(s, keepends = false) {
 
 /** Python `s.swapcase()` — invert case of each ASCII letter. */
 export function pyStrSwapcase(s) {
+    if (typeof s !== "string" && s != null && typeof s.swapcase === "function") {
+        return s.swapcase();
+    }
+    // E3 r2 (oracle-swept 0x0..0x10FFFF): CPython swaps ONLY Lowercase→
+    // upper() and Uppercase→lower(); titlecase digraphs (ǅ ǈ ǋ ǲ,
+    // ᾈ-ῼ) and uncased chars pass through UNCHANGED — the old
+    // lower/upper toggle mangled all 31 Lt code points.
     let out = "";
     for (const ch of s) {
-        const lo = ch.toLowerCase();
-        const up = ch.toUpperCase();
-        out += ch === lo ? up : lo;
+        if (/\p{Lowercase}/u.test(ch)) out += ch.toUpperCase();
+        else if (/\p{Uppercase}/u.test(ch)) out += ch.toLowerCase();
+        else out += ch;
     }
     return out;
 }
 
-/** Python `s.translate(table)` — table is {codepoint: replacement|null}. */
+/** Python `s.translate(table)` — table maps CODE POINTS to str, code point
+ * int, or None (delete). E3 r2: mapping RESULTS are validated like CPython —
+ * a non-int/str/None entry raises TypeError ("character mapping must return
+ * integer, None or str"), an out-of-range int ValueError; BigInt keys are
+ * looked up EXACTLY (no lossy Number round-trip). */
 export function pyStrTranslate(s, table) {
-    if (!table) return s;
+    if (typeof s !== "string" && s != null && typeof s.translate === "function") {
+        return s.translate(table);
+    }
+    // E3 r3: the table is ANY subscriptable — CPython does `table[ord(ch)]`
+    // per char and keeps the char on LookupError. dict/Map, str, list/tuple,
+    // and custom-__getitem__ mappings all work; a NON-subscriptable table
+    // (None, int, float, …) raises "'NoneType' object is not subscriptable"
+    // LAZILY at the first lookup — ''.translate(None) is '' because no
+    // lookup ever happens. (The old `if (!table) return s` short-circuit
+    // silently passed None/0 through.)
+    let lookup;
+    if (table instanceof Map) {
+        lookup = (cp) => {
+            if (table.has(cp)) return table.get(cp);
+            const bk = BigInt(cp);
+            if (table.has(bk)) return table.get(bk);
+            return undefined;
+        };
+    } else if (typeof table === "string") {
+        // str table: indexed by CODE POINT; out-of-range is CPython's
+        // IndexError → keep the char.
+        const tcp = __hasSurrogate(table) ? [...table] : table;
+        lookup = (cp) => (cp < tcp.length ? tcp[cp] : undefined);
+    } else if (Array.isArray(table)) {
+        // list/tuple table: positional; out-of-range IndexError → keep.
+        lookup = (cp) => (cp < table.length ? table[cp] : undefined);
+    } else if (table != null && typeof table.__getitem__ === "function") {
+        // Custom mapping: LookupError (KeyError/IndexError) → keep the
+        // char; any OTHER exception propagates, as in CPython.
+        lookup = (cp) => {
+            try {
+                return table.__getitem__(cp);
+            } catch (e) {
+                if (e instanceof LookupError) return undefined;
+                throw e;
+            }
+        };
+    } else if (table !== null && typeof table === "object" && table.__pyfloat__ !== true) {
+        lookup = (cp) => table[cp];
+    } else {
+        lookup = () => {
+            throw new TypeError_(`'${__pyTypeName(table)}' object is not subscriptable`);
+        };
+    }
     let out = "";
     for (const ch of s) {
-        const cp = ch.codePointAt(0);
-        const entry = table.get ? table.get(cp) : table[cp];
-        if (entry === undefined) out += ch;
-        else if (entry === null) { /* delete */ }
-        else if (typeof entry === "number") out += String.fromCodePoint(entry);
-        else out += String(entry);
+        let entry = lookup(ch.codePointAt(0));
+        if (entry === undefined) { out += ch; continue; }
+        if (entry === null) continue; // delete
+        if (typeof entry === "string") { out += entry; continue; }
+        // bool ⊂ int: {97: True} maps to '\x01' in CPython, not a TypeError.
+        if (typeof entry === "boolean") entry = entry ? 1 : 0;
+        if (typeof entry === "number" || typeof entry === "bigint") {
+            if (typeof entry === "number" && !Number.isInteger(entry)) {
+                throw new TypeError_("character mapping must return integer, None or str");
+            }
+            const cp2 = typeof entry === "bigint" ? entry : BigInt(entry);
+            if (cp2 < 0n || cp2 >= 0x110000n) {
+                throw new ValueError("character mapping must be in range(0x110000)");
+            }
+            out += String.fromCodePoint(Number(cp2));
+            continue;
+        }
+        throw new TypeError_("character mapping must return integer, None or str");
     }
     return out;
 }
 
-/** Python `s.isidentifier()` — valid Python identifier (ASCII subset). */
+/** Python `s.isidentifier()` — Unicode identifier per ID_Start/ID_Continue
+ * (CPython uses XID_*; the ID_* JS properties differ on ~40 exotic points). */
 export function pyStrIsidentifier(s) {
-    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+    return /^[\p{XID_Start}_][\p{XID_Continue}]*$/u.test(s);
 }
 
-/** Python `s.isprintable()` — only printable + space. */
+/** Python `s.isprintable()` — false iff any char is Cc/Cf/Cs/Co/Cn/Zl/Zp/Zs
+ * other than ASCII space. */
 export function pyStrIsprintable(s) {
-    if (s.length === 0) return true;
-    return [...s].every(ch => {
-        const cp = ch.charCodeAt(0);
-        return cp === 0x20 || (cp > 0x20 && cp !== 0x7F);
-    });
+    for (const ch of s) {
+        if (ch !== " " && __RE_UNPRINTABLE.test(ch)) return false;
+    }
+    return true;
 }
 
 /** Python `s.istitle()` — every word starts upper, rest lower. */
@@ -3993,10 +5115,15 @@ export function pyStrReplace(s, oldv, newv, count) {
     if (typeof s !== "string" && s != null && typeof s.replace === "function") {
         return s.replace(oldv, newv);
     }
-    // Wave-15 F7: bool ⊂ int — a bool count is its int value (CPython:
-    // 'ab'.replace('', '-', False) == 'ab'). Normalize BEFORE the limit
-    // checks; strict `count === 0` below would miss JS `false`.
-    if (typeof count === "boolean") count = count ? 1 : 0;
+    // E3 r2: full arg validation — CPython messages, and count through the
+    // interpreted-as-integer protocol (bool ⊂ int; float → TypeError).
+    if (typeof oldv !== "string") {
+        throw new TypeError_(`replace() argument 1 must be str, not ${__pyTypeName(oldv)}`);
+    }
+    if (typeof newv !== "string") {
+        throw new TypeError_(`replace() argument 2 must be str, not ${__pyTypeName(newv)}`);
+    }
+    if (count !== undefined && count !== null) count = __strIndexArg(count);
     const unlimited = count === undefined || count === null || count < 0;
     if (oldv === "" ) {
         // Empty pattern: Python inserts `new` between every CODE POINT and
@@ -4051,31 +5178,45 @@ export function pyStrReplaceSmart(s, a, b, count) {
 }
 
 export function pyStrIsupper(s) {
-    return s === s.toUpperCase() && s !== s.toLowerCase();
+    if (typeof s !== "string" && s != null && typeof s.isupper === "function") {
+        return s.isupper();
+    }
+    // CPython: at least one cased char, no lowercase, no titlecase.
+    // \p{Uppercase}/\p{Lowercase} are the binary properties (cover
+    // Other_Uppercase Roman numerals / Other_Lowercase modifiers).
+    return /\p{Uppercase}/u.test(s) && !/[\p{Lowercase}\p{Lt}]/u.test(s);
 }
 export function pyStrIslower(s) {
-    return s === s.toLowerCase() && s !== s.toUpperCase();
+    if (typeof s !== "string" && s != null && typeof s.islower === "function") {
+        return s.islower();
+    }
+    return /\p{Lowercase}/u.test(s) && !/[\p{Uppercase}\p{Lt}]/u.test(s);
 }
 
+/** Python `s.istitle()` — upper/titlecase may not follow a cased char,
+ * lowercase must follow one; needs at least one cased char. */
 export function pyStrIstitle(s) {
-    if (s.length === 0) return false;
+    if (typeof s !== "string" && s != null && typeof s.istitle === "function") {
+        return s.istitle();
+    }
     let prevCased = false;
-    let hasUpper = false;
+    let hasCased = false;
     for (const ch of s) {
-        const isUpper = ch >= "A" && ch <= "Z";
-        const isLower = ch >= "a" && ch <= "z";
+        const isUpper = /[\p{Uppercase}\p{Lt}]/u.test(ch);
+        const isLower = !isUpper && /\p{Lowercase}/u.test(ch);
         if (isUpper) {
             if (prevCased) return false;
-            hasUpper = true;
+            hasCased = true;
             prevCased = true;
         } else if (isLower) {
             if (!prevCased) return false;
+            hasCased = true;
             prevCased = true;
         } else {
             prevCased = false;
         }
     }
-    return hasUpper;
+    return hasCased;
 }
 
 /** Python `s.startswith(prefix[, start[, end]])` — full CPython spec:
@@ -4083,17 +5224,42 @@ export function pyStrIstitle(s) {
  * indices with negative-index clamping (slice rules). The old lowering was
  * a bare JS .startsWith rename that ignored all of that. */
 function __pyStrStartsEnds(s, fix, start, end, atEnd) {
+    const name = atEnd ? "endswith" : "startswith";
+    // E3 r3: slice bounds convert FIRST (CPython parses start/end before it
+    // types the affix — 'abc'.startswith(1, 2.5) is the slice-indices error).
+    start = __strSliceBound(start);
+    end = __strSliceBound(end);
+    // Then CPython's affix taxonomy — str or a TUPLE of str only. A list
+    // (or any other type) is "first arg must be str or a tuple of str, not
+    // list"; a non-str INSIDE a tuple is "tuple for startswith must only
+    // contain str, not int", checked lazily item-by-item so an earlier
+    // matching element still short-circuits to True
+    // ('abc'.startswith(('a', 1)) is True in CPython).
+    let cands;
+    if (typeof fix === "string") {
+        cands = [fix];
+    } else if (Array.isArray(fix) && fix.__pytuple__) {
+        cands = fix;
+    } else {
+        throw new TypeError_(
+            `${name} first arg must be str or a tuple of str, not ${__pyTypeName(fix)}`,
+        );
+    }
     const cps = Array.from(s);
     const n = cps.length;
-    let st = start === undefined || start === null ? 0 : Number(start);
-    let en = end === undefined || end === null ? n : Number(end);
+    let st = start === null ? 0 : start;
+    let en = end === null ? n : end;
     if (st < 0) st = Math.max(0, n + st);
     if (en < 0) en = Math.max(0, n + en);
     if (en > n) en = n;
     if (st > en) return false;
     const seg = cps.slice(st, en).join("");
-    const cands = Array.isArray(fix) ? fix : [fix];
     for (const p of cands) {
+        if (typeof p !== "string") {
+            throw new TypeError_(
+                `tuple for ${name} must only contain str, not ${__pyTypeName(p)}`,
+            );
+        }
         if (atEnd ? seg.endsWith(p) : seg.startsWith(p)) return true;
     }
     return false;
@@ -4118,7 +5284,7 @@ export function pyStrRfind(s, sub, start, end) {
     if (typeof s !== "string" && s != null && typeof s.rfind === "function") {
         return s.rfind(sub, start, end);
     }
-    return __pyStrFind(s, sub, start, end, true);
+    return __pyStrFind(s, sub, start, end, true, "rfind");
 }
 
 /** Python `s.rindex(sub[, start[, end]])` — like rfind but raises ValueError if absent. */
@@ -4128,9 +5294,628 @@ export function pyStrRindex(s, sub, start, end) {
     if (typeof s !== "string" && s != null && typeof s.rindex === "function") {
         return s.rindex(sub, start, end);
     }
-    const i = pyStrRfind(s, sub, start, end);
+    const i = __pyStrFind(s, sub, start, end, true, "rindex");
     if (i === -1) throw new ValueError(`substring not found`);
     return i;
+}
+
+// ============================================================
+// E3 — the CPython text authority: full-spec str-method helpers
+// ============================================================
+
+/** Python `s.casefold()` — FULL Unicode case folding: toLowerCase (≈ lower())
+ * plus the generated residual where the full fold differs (ß→ss, ﬁ→fi, µ→μ). */
+export function pyStrCasefold(s) {
+    if (typeof s !== "string" && s != null && typeof s.casefold === "function") {
+        return s.casefold();
+    }
+    let out = "";
+    for (const ch of s) {
+        const f = __CASEFOLD_MAP.get(ch.codePointAt(0));
+        out += f !== undefined ? f : ch.toLowerCase();
+    }
+    return out;
+}
+
+/** Python `s.isdecimal()` — Nd only (generated from the oracle CPython). */
+export function pyStrIsdecimal(s) {
+    if (typeof s !== "string" && s != null && typeof s.isdecimal === "function") {
+        return s.isdecimal();
+    }
+    return __RE_DECIMAL.test(s);
+}
+
+/** Python `s.isdigit()` — decimal + Numeric_Type=Digit ('²'.isdigit()). */
+export function pyStrIsdigit(s) {
+    if (typeof s !== "string" && s != null && typeof s.isdigit === "function") {
+        return s.isdigit();
+    }
+    return __RE_DIGIT.test(s);
+}
+
+/** Python `s.isnumeric()` — digit + Numeric_Type=Numeric ('½', '十'). */
+export function pyStrIsnumeric(s) {
+    if (typeof s !== "string" && s != null && typeof s.isnumeric === "function") {
+        return s.isnumeric();
+    }
+    return __RE_NUMERIC.test(s);
+}
+
+/** Python `s.isascii()` — runtime twin of the inline spec (complex
+ * receivers + bytes dispatch). */
+export function pyStrIsascii(s) {
+    if (typeof s !== "string" && s != null && typeof s.isascii === "function") {
+        return s.isascii();
+    }
+    return [...s].every((c) => c.charCodeAt(0) < 128);
+}
+
+/** Python `s.isalpha()` — Unicode category L (runtime twin). */
+export function pyStrIsalpha(s) {
+    if (typeof s !== "string" && s != null && typeof s.isalpha === "function") {
+        return s.isalpha();
+    }
+    return /^\p{L}+$/u.test(s);
+}
+
+/** Python `s.isspace()` — the PYTHON whitespace set (runtime twin). */
+export function pyStrIsspace(s) {
+    if (typeof s !== "string" && s != null && typeof s.isspace === "function") {
+        return s.isspace();
+    }
+    return s.length > 0 && new RegExp("^[" + __PY_WS_CC + "]+$").test(s);
+}
+
+/** Python `s.removeprefix(p)` — THE lowering for every receiver shape
+ * (E3 r2: the inline arm was deleted — it double-evaluated the argument
+ * and silently coerced non-str prefixes). */
+export function pyStrRemoveprefix(s, p) {
+    if (typeof s !== "string" && s != null && typeof s.removeprefix === "function") {
+        return s.removeprefix(p);
+    }
+    if (typeof p !== "string") {
+        throw new TypeError_(`removeprefix() argument must be str, not ${__pyTypeName(p)}`);
+    }
+    return s.startsWith(p) ? s.slice(p.length) : s;
+}
+
+/** Python `s.removesuffix(p)` — THE lowering for every receiver shape. */
+export function pyStrRemovesuffix(s, p) {
+    if (typeof s !== "string" && s != null && typeof s.removesuffix === "function") {
+        return s.removesuffix(p);
+    }
+    if (typeof p !== "string") {
+        throw new TypeError_(`removesuffix() argument must be str, not ${__pyTypeName(p)}`);
+    }
+    return p.length > 0 && s.endsWith(p) ? s.slice(0, s.length - p.length) : s;
+}
+
+/** Python `s.isalnum()` — every char alphabetic OR decimal/digit/numeric. */
+export function pyStrIsalnum(s) {
+    if (typeof s !== "string" && s != null && typeof s.isalnum === "function") {
+        return s.isalnum();
+    }
+    if (s.length === 0) return false;
+    for (const ch of s) {
+        if (!/\p{L}/u.test(ch) && !__RE_NUMERIC.test(ch) && !__RE_DIGIT.test(ch)
+            && !__RE_DECIMAL.test(ch)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Python `s.zfill(width)` — sign-aware zero fill ('-5'.zfill(4) → '-005'),
+ * code-point width. */
+export function pyStrZfill(s, width) {
+    if (typeof s !== "string" && s != null && typeof s.zfill === "function") {
+        return s.zfill(width);
+    }
+    width = __strIndexArg(width);
+    const len = [...s].length;
+    if (len >= width) return s;
+    const sign = s[0] === "+" || s[0] === "-" ? s[0] : "";
+    return sign + "0".repeat(width - len) + s.slice(sign.length);
+}
+
+/** `width`/`maxsplit`/`count`/`tabsize`-style int argument. E3 r3: DELEGATES
+ * to __pyAsIndexInt — THE "interpreted as an integer" authority (CPython's
+ * __index__ protocol) — so an object exposing a valid __index__ is ACCEPTED
+ * (CPython takes it for maxsplit/count/width via the Py_ssize_t converter)
+ * and a bad __index__ result raises "__index__ returned non-int (type X)".
+ * bool ⊂ int, floats raise CPython's TypeError, BigInt narrows to Number
+ * (these args feed Number arithmetic). */
+function __strIndexArg(x) {
+    const v = __pyAsIndexInt(x);
+    return typeof v === "bigint" ? Number(v) : v;
+}
+
+function __strFillcharCheck(fillchar) {
+    if (typeof fillchar !== "string" || [...fillchar].length !== 1) {
+        throw new TypeError_("The fill character must be exactly one character long");
+    }
+}
+
+/** UnicodeEncodeError — a ValueError subclass, as in CPython. */
+class UnicodeEncodeError extends ValueError {
+    static __name__ = "UnicodeEncodeError";
+}
+export { UnicodeEncodeError };
+
+/** Python `s.encode(encoding='utf-8', errors='strict')` — the common codecs
+ * (utf-8 / ascii / latin-1 + standard aliases) with the FULL CPython error
+ * taxonomy (E3 r2):
+ *   - encoding/errors must be str → TypeError ("encode() argument
+ *     'encoding' must be str, not None");
+ *   - unknown codec → LookupError("unknown encoding: X");
+ *   - unknown ERROR HANDLER → LookupError("unknown error handler name 'X'"),
+ *     raised LAZILY at the first failing char (CPython validates on use);
+ *   - strict failures report the CONSECUTIVE RUN: one char is
+ *     "character '\xe9' in position 1", a run is
+ *     "characters in position 0-1". UnicodeEncodeError ⊂ ValueError. */
+export function pyStrEncode(s, encoding = "utf-8", errors = "strict") {
+    // E3 r3: the kwargs bag must CARRY a keyword name (same class as the
+    // split/rsplit bag fix) — a bare object positional encoding must reach
+    // the "must be str, not dict" TypeError below, not default to utf-8.
+    if (encoding !== null && typeof encoding === "object" && encoding.__pyfloat__ !== true
+        && ("encoding" in encoding || "errors" in encoding)) {
+        const kw = encoding;
+        encoding = kw.encoding !== undefined ? kw.encoding : "utf-8";
+        errors = kw.errors !== undefined ? kw.errors : "strict";
+    } else if (errors !== null && typeof errors === "object" && errors.__pyfloat__ !== true
+        && "errors" in errors) {
+        errors = errors.errors !== undefined ? errors.errors : "strict";
+    }
+    // CPython's argument-clinic message prints the VALUE `None`, not the
+    // type name NoneType.
+    const argName = (v) => (v === null || v === undefined ? "None" : __pyTypeName(v));
+    if (typeof encoding !== "string") {
+        throw new TypeError_(`encode() argument 'encoding' must be str, not ${argName(encoding)}`);
+    }
+    if (typeof errors !== "string") {
+        throw new TypeError_(`encode() argument 'errors' must be str, not ${argName(errors)}`);
+    }
+    const enc = encoding.toLowerCase().replace(/[\s_]/g, "-");
+    let codec;
+    if (["utf-8", "utf8", "u8", "utf"].includes(enc)) codec = "utf-8";
+    else if (["ascii", "us-ascii", "646"].includes(enc)) codec = "ascii";
+    else if (["latin-1", "latin1", "latin", "l1", "iso-8859-1", "iso8859-1", "8859", "cp819"].includes(enc)) codec = "latin-1";
+    else throw new LookupError(`unknown encoding: ${encoding}`);
+
+    const escCh = (cp) =>
+        cp < 0x100 ? "\\x" + cp.toString(16).padStart(2, "0")
+            : cp < 0x10000 ? "\\u" + cp.toString(16).padStart(4, "0")
+            : "\\U" + cp.toString(16).padStart(8, "0");
+    const cps = [...s];
+    const bad = (cp) => {
+        const lone = cp >= 0xd800 && cp <= 0xdfff;
+        if (codec === "utf-8") return lone;
+        if (codec === "ascii") return cp >= 0x80 || lone;
+        return cp >= 0x100; // latin-1
+    };
+    // E3 r3: "surrogates not allowed" is the UTF-8 reason ONLY. For the
+    // range codecs CPython reports the RANGE even for a lone surrogate:
+    // chr(0xD800).encode('ascii') → "ordinal not in range(128)" and
+    // .encode('latin-1') → "ordinal not in range(256)" (verified on the
+    // pinned 3.14.7 oracle).
+    const reason = () => {
+        if (codec === "utf-8") return "surrogates not allowed";
+        return codec === "ascii" ? "ordinal not in range(128)" : "ordinal not in range(256)";
+    };
+    const bytes = [];
+    for (let pos = 0; pos < cps.length; pos++) {
+        const cp = cps[pos].codePointAt(0);
+        if (bad(cp)) {
+            if (errors === "ignore") continue;
+            if (errors === "replace") { bytes.push(0x3f); continue; }
+            if (errors !== "strict") {
+                // CPython validates the handler name lazily, on first use.
+                throw new LookupError(`unknown error handler name '${errors}'`);
+            }
+            // strict: report the whole CONSECUTIVE failing run.
+            let runEnd = pos;
+            while (runEnd + 1 < cps.length && bad(cps[runEnd + 1].codePointAt(0))) runEnd++;
+            const where = runEnd === pos
+                ? `character '${escCh(cp)}' in position ${pos}`
+                : `characters in position ${pos}-${runEnd}`;
+            throw new UnicodeEncodeError(
+                `'${codec}' codec can't encode ${where}: ${reason(cp)}`,
+            );
+        }
+        if (codec === "utf-8" && cp >= 0x80) {
+            if (cp < 0x800) {
+                bytes.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
+            } else if (cp < 0x10000) {
+                bytes.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+            } else {
+                bytes.push(
+                    0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f),
+                    0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f),
+                );
+            }
+        } else {
+            bytes.push(cp);
+        }
+    }
+    return pyBytesOf(bytes);
+}
+
+/** Python `str.maketrans(x[, y[, z]])` — builds the translate table.
+ * `recv` is the receiver the method-call lowering passes (the str type
+ * object or a str instance) and is ignored. */
+export function pyStrMaketrans(recv, x, y, z) {
+    const table = new Map();
+    if (y === undefined) {
+        const isMapLike = x instanceof Map
+            || (x !== null && typeof x === "object" && !Array.isArray(x) && x.__pyfloat__ !== true);
+        if (!isMapLike) {
+            throw new TypeError_("if you give only one argument to maketrans it must be a dict");
+        }
+        const entries = x instanceof Map ? x.entries() : Object.entries(x);
+        for (const [k, v] of entries) {
+            let key;
+            if (typeof k === "string") {
+                const kc = [...k];
+                if (kc.length !== 1) {
+                    throw new ValueError("string keys in translate table must be of length 1");
+                }
+                key = k.codePointAt(0);
+            } else if (typeof k === "bigint" || typeof k === "number") {
+                key = Number(k);
+            } else {
+                throw new TypeError_("keys in translate table must be strings or integers");
+            }
+            table.set(key, typeof v === "bigint" ? Number(v) : v);
+        }
+        return table;
+    }
+    if (typeof x !== "string" || typeof y !== "string") {
+        throw new TypeError_("maketrans arguments must be strings");
+    }
+    const xa = [...x];
+    const ya = [...y];
+    if (xa.length !== ya.length) {
+        throw new ValueError("the first two maketrans arguments must have equal length");
+    }
+    for (let i = 0; i < xa.length; i++) table.set(xa[i].codePointAt(0), ya[i]);
+    if (z !== undefined && z !== null) {
+        if (typeof z !== "string") {
+            throw new TypeError_("maketrans arguments must be strings");
+        }
+        for (const ch of z) table.set(ch.codePointAt(0), null);
+    }
+    return table;
+}
+
+/** Python `s.format_map(mapping)` — like `s.format(**mapping)` but uses the
+ * mapping object directly (no copy); missing keys raise KeyError. */
+export function pyStrFormatMap(s, mapping) {
+    return __pyStrFormatImpl(s, [], mapping);
+}
+
+/** Python printf-style `%` formatting (`fmt % args`) — the full mini-language:
+ * %s %r %a %d %i %u %o %x %X %e %E %f %F %g %G %c %%, flags `-+ #0`,
+ * width/precision incl. `*`, tuple / single-value / `%(name)s` mapping forms.
+ * Numeric rendering routes through pyFormatSpec (ONE render engine). */
+export function pyStrMod(fmt, args) {
+    const isTuple = Array.isArray(args) && args.__pytuple__;
+    const isMap = !isTuple
+        && (args instanceof Map
+            || (args !== null && typeof args === "object" && !Array.isArray(args)
+                && args.__pyfloat__ !== true
+                && Object.getPrototypeOf(args) === Object.prototype));
+    const values = isTuple ? [...args] : [args];
+    let vi = 0;
+    const nextVal = () => {
+        // A mapping also serves as the single positional value (CPython:
+        // '%s' % {'a': 1} prints the dict).
+        if (vi >= values.length) {
+            throw new TypeError_("not enough arguments for format string");
+        }
+        return values[vi++];
+    };
+    const mapGet = (k) => {
+        if (args instanceof Map) {
+            if (!args.has(k)) throw new KeyError(k);
+            return args.get(k);
+        }
+        if (!(k in args)) throw new KeyError(k);
+        return args[k];
+    };
+    let out = "";
+    let i = 0;
+    const n = fmt.length;
+    while (i < n) {
+        const c = fmt[i];
+        if (c !== "%") { out += c; i++; continue; }
+        i++;
+        if (fmt[i] === "%") { out += "%"; i++; continue; }
+        // %(name)…
+        let mapKey = null;
+        if (fmt[i] === "(") {
+            let depth = 1;
+            let j = i + 1;
+            let key = "";
+            while (j < n) {
+                if (fmt[j] === "(") depth++;
+                else if (fmt[j] === ")") { depth--; if (depth === 0) break; }
+                key += fmt[j];
+                j++;
+            }
+            if (depth !== 0) throw new ValueError("incomplete format key");
+            if (!isMap) throw new TypeError_("format requires a mapping");
+            mapKey = key;
+            i = j + 1;
+        }
+        const flags = { minus: false, plus: false, space: false, alt: false, zero: false };
+        for (;;) {
+            const f = fmt[i];
+            if (f === "-") flags.minus = true;
+            else if (f === "+") flags.plus = true;
+            else if (f === " ") flags.space = true;
+            else if (f === "#") flags.alt = true;
+            else if (f === "0") flags.zero = true;
+            else break;
+            i++;
+        }
+        let width = null;
+        if (fmt[i] === "*") {
+            width = __strIndexArg(nextVal());
+            if (width < 0) { flags.minus = true; width = -width; }
+            i++;
+        } else {
+            let w = "";
+            while (fmt[i] >= "0" && fmt[i] <= "9") { w += fmt[i]; i++; }
+            // E3 r3: CPython bounds printf width/precision by PY_SSIZE_T_MAX
+            // at parse time ("width too big" / "precision too big"), never a
+            // silently-lossy JS number.
+            if (w.length >= 19 && BigInt(w) > 9223372036854775807n) {
+                throw new ValueError("width too big");
+            }
+            if (w) width = parseInt(w, 10);
+        }
+        let prec = null;
+        if (fmt[i] === ".") {
+            i++;
+            if (fmt[i] === "*") {
+                prec = __strIndexArg(nextVal());
+                if (prec < 0) prec = 0;
+                i++;
+            } else {
+                let p = "";
+                while (fmt[i] >= "0" && fmt[i] <= "9") { p += fmt[i]; i++; }
+                if (p.length >= 19 && BigInt(p) > 9223372036854775807n) {
+                    throw new ValueError("precision too big");
+                }
+                prec = p ? parseInt(p, 10) : 0;
+            }
+        }
+        while (fmt[i] === "h" || fmt[i] === "l" || fmt[i] === "L") i++;
+        const conv = fmt[i];
+        if (conv === undefined) throw new ValueError("incomplete format");
+        i++;
+        const val = mapKey !== null ? mapGet(mapKey) : nextVal();
+        out += __printfOne(conv, val, flags, width, prec, i - 1);
+    }
+    if (!isMap && vi < values.length) {
+        throw new TypeError_("not all arguments converted during string formatting");
+    }
+    return out;
+}
+
+function __printfOne(conv, val, flags, width, prec, atIndex) {
+    const padStr = (body) => {
+        const len = [...body].length;
+        if (width == null || len >= width) return body;
+        const pad = " ".repeat(width - len);
+        return flags.minus ? body + pad : pad + body;
+    };
+    if (conv === "s" || conv === "r" || conv === "a") {
+        let body = conv === "s" ? pyStr(val) : conv === "r" ? pyRepr(val) : pyAscii(val);
+        if (prec != null) body = [...body].slice(0, prec).join("");
+        return padStr(body);
+    }
+    if (conv === "c") {
+        // E3 r3: %c does its OWN range check — CPython's %c reports
+        // "%c arg not in range(0x110000)" for ANY out-of-range int (2**100
+        // included; verified on the pinned 3.14.7 oracle), unlike
+        // format(x, 'c') whose C-long conversion trips first. bool counts
+        // as its int value ('%c' % True → '\x01'); an __index__-bearing
+        // object is accepted ('%c' % I(65) → 'A').
+        let cv = val;
+        if (typeof cv === "boolean") cv = cv ? 1 : 0;
+        if (typeof cv === "string") {
+            if ([...cv].length !== 1) {
+                throw new TypeError_("%c requires an int or a unicode character, not str");
+            }
+            return padStr(cv);
+        }
+        let isIntVal = typeof cv === "bigint"
+            || (typeof cv === "number" && Number.isInteger(cv)
+                && !(val != null && val.__pyfloat__ === true));
+        if (!isIntVal && val != null && val.__pyfloat__ !== true
+            && typeof val.__index__ === "function") {
+            try {
+                cv = __pyAsIndexInt(val);
+                isIntVal = true;
+            } catch (e) {
+                isIntVal = false;
+            }
+        }
+        if (!isIntVal) {
+            throw new TypeError_(`%c requires an int or a unicode character, not ${__pyTypeName(val)}`);
+        }
+        const cnum = typeof cv === "bigint" ? cv : BigInt(cv);
+        if (cnum < 0n || cnum >= 0x110000n) {
+            throw new OverflowError("%c arg not in range(0x110000)");
+        }
+        const opts = { type: "c" };
+        if (width != null) {
+            opts.width = width;
+            opts.align = flags.minus ? "<" : ">";
+        }
+        return pyFormatSpec(Number(cnum), opts);
+    }
+    if ("diu".includes(conv) || "oxX".includes(conv)) {
+        // E3 r2: integer conversions render through pyFormatSpec (ONE digit/
+        // sign/prefix/zero-pad engine — exactly like the float conversions
+        // below); only printf's min-digit precision is assembled here.
+        let iv = val;
+        if (typeof iv === "boolean") iv = iv ? 1 : 0;
+        if (iv != null && iv.__pyfloat__ === true) iv = iv.valueOf();
+        if ("oxX".includes(conv)) {
+            // E3 r3: %o/%x/%X take int OR an __index__-bearing object
+            // (PyNumber_Index); ANY protocol failure — no __index__, or a
+            // bad __index__ result — is replaced by CPython's
+            // "%x format: an integer is required, not X".
+            let isIntVal = typeof iv === "bigint"
+                || (typeof iv === "number" && Number.isInteger(iv)
+                    && !(val != null && val.__pyfloat__ === true));
+            if (!isIntVal && val != null && val.__pyfloat__ !== true
+                && typeof val.__index__ === "function") {
+                try {
+                    iv = __pyAsIndexInt(val);
+                    isIntVal = true;
+                } catch (e) {
+                    isIntVal = false;
+                }
+            }
+            if (!isIntVal) {
+                throw new TypeError_(`%${conv} format: an integer is required, not ${__pyTypeName(val)}`);
+            }
+        } else {
+            // E3 r3: %d/%i/%u take real numbers AND objects converting via
+            // __index__ or __int__ (PyNumber_Long); any conversion failure
+            // is CPython's "%d format: a real number is required, not X".
+            if (typeof iv !== "bigint" && typeof iv !== "number") {
+                let converted = false;
+                if (val != null && val.__pyfloat__ !== true) {
+                    for (const proto of ["__int__", "__index__"]) {
+                        if (typeof val[proto] === "function") {
+                            let r;
+                            try {
+                                r = val[proto]();
+                            } catch (e) {
+                                break; // conversion failed → the %d TypeError
+                            }
+                            if (typeof r === "boolean") { iv = r ? 1 : 0; converted = true; }
+                            else if (typeof r === "bigint") { iv = r; converted = true; }
+                            else if (typeof r === "number" && Number.isInteger(r)) { iv = r; converted = true; }
+                            break;
+                        }
+                    }
+                }
+                if (!converted) {
+                    throw new TypeError_(`%${conv} format: a real number is required, not ${__pyTypeName(val)}`);
+                }
+            }
+            if (typeof iv === "number" && !Number.isInteger(iv)) {
+                if (Number.isNaN(iv)) {
+                    throw new ValueError("cannot convert float NaN to integer");
+                }
+                if (!Number.isFinite(iv)) {
+                    throw new OverflowError("cannot convert float infinity to integer");
+                }
+                iv = Math.trunc(iv);
+            }
+            // E3 r3: a float beyond 2**53 must convert to its EXACT integer
+            // value ('%d' % 1e100 prints all 101 digits in CPython) —
+            // BigInt(double) is exact for integer-valued doubles; going
+            // through the Number render path would print "1e+100".
+            if (typeof iv === "number" && !Number.isSafeInteger(iv)) {
+                iv = BigInt(iv);
+            }
+        }
+        const ty = conv === "o" || conv === "x" || conv === "X" ? conv : "d";
+        if (prec == null) {
+            const opts = { type: ty };
+            if (flags.plus) opts.sign = "+";
+            else if (flags.space) opts.sign = " ";
+            if (flags.alt && ty !== "d") opts.alt = true;
+            if (width != null) {
+                opts.width = width;
+                if (flags.minus) opts.align = "<";
+                else if (flags.zero) opts.zero = true;
+            }
+            return pyFormatSpec(iv, opts);
+        }
+        // printf precision = MINIMUM digit count (no engine equivalent —
+        // the mini-language forbids precision on ints): bare engine digits,
+        // zero-extended, then sign/prefix/width assembled.
+        const neg = iv < 0;
+        let digits = pyFormatSpec(neg ? -iv : iv, { type: ty });
+        if (digits.length < prec) digits = "0".repeat(prec - digits.length) + digits;
+        let prefix = "";
+        if (flags.alt) {
+            if (ty === "o") prefix = "0o";
+            else if (ty === "x") prefix = "0x";
+            else if (ty === "X") prefix = "0X";
+        }
+        const sign = neg ? "-" : flags.plus ? "+" : flags.space ? " " : "";
+        // E3 r3: the 0-flag still zero-fills to WIDTH when a precision is
+        // present — '%08.3d' % 7 is '00000007' in CPython (the r2 code
+        // dropped the flag and space-padded), with the zeros between the
+        // sign/prefix and the digits ('%08.3d' % -7 → '-0000007',
+        // '%#08.3x' % 255 → '0x0000ff'). '-' (left-justify) beats '0'.
+        if (flags.zero && !flags.minus && width != null) {
+            const assembled = sign.length + prefix.length + digits.length;
+            if (assembled < width) {
+                digits = "0".repeat(width - assembled) + digits;
+            }
+        }
+        return padStr(sign + prefix + digits);
+    }
+    if ("eEfFgG".includes(conv)) {
+        let fv = val;
+        if (typeof fv === "boolean") fv = fv ? 1 : 0;
+        if (fv != null && fv.__pyfloat__ === true) fv = fv.valueOf();
+        if (typeof fv === "bigint") fv = Number(fv);
+        if (typeof fv !== "number") {
+            throw new TypeError_(`%${conv} format: a real number is required, not ${__pyTypeName(val)}`);
+        }
+        const opts = { type: conv, precision: prec == null ? 6 : prec };
+        if (flags.plus) opts.sign = "+";
+        else if (flags.space) opts.sign = " ";
+        if (flags.alt) opts.alt = true;
+        if (width != null) {
+            opts.width = width;
+            if (flags.minus) opts.align = "<";
+            else if (flags.zero) opts.zero = true;
+        }
+        return pyFormatSpec(fv, opts, true);
+    }
+    throw new ValueError(
+        `unsupported format character '${conv}' (0x${conv.codePointAt(0).toString(16)}) at index ${atIndex}`,
+    );
+}
+
+/** Python `print(*args, sep=..., end=..., flush=...)` — the kwargs form.
+ * The codegen lowers `print` WITH keyword arguments to this helper with the
+ * kwargs object FIRST (unambiguous — a dict positional arg can never be
+ * mistaken for kwargs). `file` is not supported (no sys.stdout object);
+ * `flush` is accepted and ignored (console I/O is unbuffered). */
+export function pyPrintKw(kw, ...args) {
+    let sep = kw.sep === undefined || kw.sep === null ? " " : kw.sep;
+    let end = kw.end === undefined || kw.end === null ? "\n" : kw.end;
+    if (typeof sep !== "string") {
+        throw new TypeError_(`sep must be None or a string, not ${__pyTypeName(sep)}`);
+    }
+    if (typeof end !== "string") {
+        throw new TypeError_(`end must be None or a string, not ${__pyTypeName(end)}`);
+    }
+    const body = args.map(pyStr).join(sep);
+    if (end === "\n") {
+        console.log(body);
+        return;
+    }
+    if (typeof process !== "undefined" && process.stdout
+        && typeof process.stdout.write === "function") {
+        process.stdout.write(body + end);
+    } else {
+        // Browser/worker hosts have no raw stdout; console.log appends a
+        // newline — best-effort.
+        console.log(body + end);
+    }
 }
 
 // ============================================================
@@ -4142,19 +5927,9 @@ export function pyListSort(xs, opts = {}) {
     const { key, reverse = false } = opts;
     // #247: match pySorted — seq-aware lexicographic keys + stable reverse
     // (negate the comparator, never sort-then-reverse, so ties keep order).
-    const lt = (a, b) => {
-        if (a !== null && typeof a?.__lt__ === "function") return !!a.__lt__(b);
-        if (Array.isArray(a) && Array.isArray(b)) {
-            const n = Math.min(a.length, b.length);
-            for (let i = 0; i < n; i++) {
-                if (lt(a[i], b[i])) return true;
-                if (lt(b[i], a[i])) return false;
-            }
-            return a.length < b.length;
-        }
-        return a < b;
-    };
-    const cmp = (a, b) => (lt(a, b) ? -1 : lt(b, a) ? 1 : 0);
+    // F1 (v0.2.4): comparison routes through pyLt (see pySorted) — the
+    // local raw-`<` copy bypassed the cross-type TypeError guard.
+    const cmp = (a, b) => (pyLt(a, b) ? -1 : pyLt(b, a) ? 1 : 0);
     const dir = reverse ? -1 : 1;
     if (key) xs.sort((a, b) => dir * cmp(key(a), key(b)));
     else xs.sort((a, b) => dir * cmp(a, b));

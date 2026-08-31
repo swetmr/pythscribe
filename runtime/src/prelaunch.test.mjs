@@ -92,16 +92,18 @@ test("pyFloat maps inf/-inf/nan case-insensitively", () => {
     assert.equal(Number(pyFloat(2)), 2);
     assert.throws(() => pyFloat("abc"), /could not convert string to float/);
 });
-test("pyDiv distinguishes float vs int division by zero", () => {
+test("pyDiv zero-division message is unified 'division by zero' (CPython 3.14)", () => {
+    // CPython 3.14 removed the float/int distinction (was "float division by
+    // zero" vs "division by zero"); every variant now says "division by zero".
+    // (The old floatDiv third parameter was removed with the message hint.)
     assert.throws(() => pyDiv(1, 0), /^ZeroDivisionError|division by zero/);
     try { pyDiv(1, 0); } catch (e) { assert.equal(e.message, "division by zero"); }
-    try { pyDiv(1, 0, true); } catch (e) { assert.equal(e.message, "float division by zero"); }
-    try { pyDiv(1.5, 0); } catch (e) { assert.equal(e.message, "float division by zero"); }
+    try { pyDiv(1.5, 0); } catch (e) { assert.equal(e.message, "division by zero"); }
 });
 test("exceptions stringify to message, not a dict dump", () => {
-    const e = new ZeroDivisionError("float division by zero");
-    assert.equal(pyStr(e), "float division by zero");
-    assert.equal(pyRepr(e), "ZeroDivisionError('float division by zero')");
+    const e = new ZeroDivisionError("division by zero");
+    assert.equal(pyStr(e), "division by zero");
+    assert.equal(pyRepr(e), "ZeroDivisionError('division by zero')");
 });
 
 // ---- F5: next() over generators ----
@@ -342,8 +344,8 @@ test("#206 pyBin/pyHex/pyOct match CPython incl. sign + zero", () => {
 test("#90 pyDivmod floor semantics + errors", () => {
     assert.deepEqual([...pyDivmod(-7, 3)], [-3, 2]);
     assert.deepEqual([...pyDivmod(7, -3)], [-3, -2]);
-    assert.throws(() => pyDivmod(7, 0), /integer division or modulo by zero/);
-    assert.throws(() => pyDivmod(7.5, 0), /float divmod\(\)/);
+    assert.throws(() => pyDivmod(7, 0), /division by zero/); // CPython 3.14: unified
+    assert.throws(() => pyDivmod(7.5, 0), /division by zero/); // CPython 3.14: unified (was "float divmod()")
 });
 
 test("#94 pySum honors positional and keyword start", () => {
@@ -469,14 +471,14 @@ test("pyContains: class object raises TypeError (not attr membership)", () => {
     T.__name__ = "T";
     T.a = 3; // static attr — Transcrypt would report 'a' in T as True
     assert.throws(() => pyContains(T, "a"), (e) =>
-        e.name === "TypeError" && e.message === "argument of type 'type' is not iterable");
+        e.name === "TypeError" && e.message === "argument of type 'type' is not a container or iterable");
 });
 
 test("pyContains: instance without __contains__/__iter__ raises TypeError", () => {
     class Foo { }
     Foo.__name__ = "Foo";
     assert.throws(() => pyContains(new Foo(), "x"), (e) =>
-        e.name === "TypeError" && e.message === "argument of type 'Foo' is not iterable");
+        e.name === "TypeError" && e.message === "argument of type 'Foo' is not a container or iterable");
 });
 
 test("pyContains: instance protocols still honored", () => {

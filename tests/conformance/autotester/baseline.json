@@ -1,0 +1,332 @@
+{
+  "subject": "pyths 0.2.3",
+  "oracle": "Python 3.14.7",
+  "headline": {
+    "pass": 43,
+    "testlets": 47,
+    "checks_matched": 2303,
+    "checks_total": 2363
+  },
+  "testlets": {
+    "arguments": {
+      "verdict": "pass",
+      "matched": 10,
+      "total": 10
+    },
+    "attribs_by_name": {
+      "verdict": "pass",
+      "matched": 4,
+      "total": 4
+    },
+    "builtin_super": {
+      "verdict": "pass",
+      "matched": 24,
+      "total": 24
+    },
+    "byte_arrays": {
+      "verdict": "pass",
+      "matched": 11,
+      "total": 11
+    },
+    "callable_test": {
+      "verdict": "pass",
+      "matched": 25,
+      "total": 25
+    },
+    "classes": {
+      "verdict": "pass",
+      "matched": 535,
+      "total": 535
+    },
+    "complex_numbers": {
+      "verdict": "pass",
+      "matched": 6,
+      "total": 6
+    },
+    "conditional_expressions": {
+      "verdict": "pass",
+      "matched": 21,
+      "total": 21
+    },
+    "control_structures": {
+      "verdict": "pass",
+      "matched": 175,
+      "total": 175
+    },
+    "dashed_numbers": {
+      "verdict": "pass",
+      "matched": 3,
+      "total": 3
+    },
+    "data_classes": {
+      "verdict": "pass",
+      "matched": 23,
+      "total": 23
+    },
+    "data_structures": {
+      "verdict": "pass",
+      "matched": 29,
+      "total": 29
+    },
+    "decorators": {
+      "verdict": "pass",
+      "matched": 78,
+      "total": 78
+    },
+    "dict_comprehensions": {
+      "verdict": "pass",
+      "matched": 2,
+      "total": 2
+    },
+    "dictionaries": {
+      "verdict": "pass",
+      "matched": 77,
+      "total": 77
+    },
+    "docstrings": {
+      "verdict": "diverge",
+      "matched": 7,
+      "total": 10
+    },
+    "exceptions": {
+      "verdict": "pass",
+      "matched": 33,
+      "total": 33
+    },
+    "executable_comments": {
+      "verdict": "pass",
+      "matched": 22,
+      "total": 22
+    },
+    "extended_slices": {
+      "verdict": "pass",
+      "matched": 12,
+      "total": 12
+    },
+    "fstrings": {
+      "verdict": "pass",
+      "matched": 9,
+      "total": 9
+    },
+    "general_functions": {
+      "verdict": "pass",
+      "matched": 52,
+      "total": 52
+    },
+    "indices_and_slices": {
+      "verdict": "pass",
+      "matched": 216,
+      "total": 216
+    },
+    "iterators_and_generators": {
+      "verdict": "pass",
+      "matched": 112,
+      "total": 112
+    },
+    "lambda_functions": {
+      "verdict": "pass",
+      "matched": 4,
+      "total": 4
+    },
+    "list_comprehensions": {
+      "verdict": "pass",
+      "matched": 6,
+      "total": 6
+    },
+    "local_classes": {
+      "verdict": "pass",
+      "matched": 16,
+      "total": 16
+    },
+    "metaclasses": {
+      "verdict": "compile_fail",
+      "matched": 0,
+      "total": 3
+    },
+    "method_and_class_decorators": {
+      "verdict": "pass",
+      "matched": 30,
+      "total": 30
+    },
+    "module_builtin": {
+      "verdict": "pass",
+      "matched": 44,
+      "total": 44
+    },
+    "module_cmath": {
+      "verdict": "diverge",
+      "matched": 2,
+      "total": 24
+    },
+    "module_collections": {
+      "verdict": "pass",
+      "matched": 33,
+      "total": 33
+    },
+    "module_copy": {
+      "verdict": "pass",
+      "matched": 11,
+      "total": 11
+    },
+    "module_datetime": {
+      "verdict": "pass",
+      "matched": 53,
+      "total": 53
+    },
+    "module_itertools": {
+      "verdict": "pass",
+      "matched": 27,
+      "total": 27
+    },
+    "module_math": {
+      "verdict": "pass",
+      "matched": 43,
+      "total": 43
+    },
+    "module_unicodedata": {
+      "verdict": "pass",
+      "matched": 22,
+      "total": 22
+    },
+    "nonlocals": {
+      "verdict": "pass",
+      "matched": 2,
+      "total": 2
+    },
+    "operator_overloading": {
+      "verdict": "pass",
+      "matched": 51,
+      "total": 51
+    },
+    "properties": {
+      "verdict": "pass",
+      "matched": 6,
+      "total": 6
+    },
+    "proxies": {
+      "verdict": "diverge",
+      "matched": 0,
+      "total": 32
+    },
+    "reprtest": {
+      "verdict": "pass",
+      "matched": 99,
+      "total": 99
+    },
+    "set_comprehensions": {
+      "verdict": "pass",
+      "matched": 17,
+      "total": 17
+    },
+    "simple_and_augmented_assignment": {
+      "verdict": "pass",
+      "matched": 16,
+      "total": 16
+    },
+    "string_format": {
+      "verdict": "pass",
+      "matched": 53,
+      "total": 53
+    },
+    "transducers": {
+      "verdict": "pass",
+      "matched": 2,
+      "total": 2
+    },
+    "truthyness": {
+      "verdict": "pass",
+      "matched": 273,
+      "total": 273
+    },
+    "tuple_assignment": {
+      "verdict": "pass",
+      "matched": 7,
+      "total": 7
+    }
+  },
+  "boundaries": [
+    {
+      "name": "metaclasses",
+      "runner": "this-gate",
+      "verdict": "compile_fail",
+      "matched": 0,
+      "total": 3,
+      "reason": "`class X(metaclass=Meta)` keyword base rejected at parse; metaclasses out-of-fragment. Expansion lane: parser/E4."
+    },
+    {
+      "name": "proxies",
+      "runner": "this-gate",
+      "verdict": "diverge",
+      "matched": 0,
+      "total": 32,
+      "reason": "__getattr__/__setattr__/__dict__ attribute interception unsupported. Expansion lane: E4 receiver-dispatch model."
+    },
+    {
+      "name": "async_await_UNDER_CONSTRUCTION",
+      "runner": "external",
+      "metric": "11/11 pass (minimal async adaptation)",
+      "reason": "async/await SUPPORTED (asyncio.gather interleave byte-identical); upstream testlet uses deprecated pre-3.10 asyncio API. Measured by percheck.py::score_async (reference-app experiments/autotester-ps)."
+    },
+    {
+      "name": "modules",
+      "runner": "external",
+      "metric": "0/19",
+      "reason": "multi-file package imports; dotted `import a.b.c` (no `as`) emits invalid JS \u2014 REAL BUG, tracked as its own issue (E7 sub-part 5; FULL_SURFACE NEW BUGS #1). Runner: packages_ps.py."
+    },
+    {
+      "name": "div_issues",
+      "runner": "external",
+      "metric": "0/246",
+      "reason": "multi-file + globals() unsupported (+ generators/re/opov). Runner: packages_ps.py."
+    },
+    {
+      "name": "div_pulls",
+      "runner": "external",
+      "metric": "0/10",
+      "reason": "multi-file submodule-as-name re-export unsupported. Runner: packages_ps.py."
+    },
+    {
+      "name": "globals_function",
+      "runner": "external",
+      "metric": "0/7",
+      "reason": "globals() dynamic-globals assignment unsupported. Runner: packages_ps.py."
+    },
+    {
+      "name": "module_random",
+      "runner": "external",
+      "metric": "property MATCH",
+      "reason": "PRNG values match by property (range/permutation); seeded byte-equality impossible by design (different PRNG). random.seed() unsupported (gap). Runner: manual_ps.py."
+    },
+    {
+      "name": "static_types",
+      "runner": "external",
+      "metric": "property MATCH",
+      "reason": "upstream test is a mypy static-check (out of runtime scope); runtime annotations accepted+ignored, matching CPython. Runner: manual_ps.py."
+    },
+    {
+      "name": "incidental_tests",
+      "runner": "external",
+      "metric": "DIFFER",
+      "reason": "default object str() prints '{}' vs CPython '<...object at 0x...>' (FULL_SURFACE NEW BUGS #3); other cases multi-file/build boundaries. Runner: manual_ps.py."
+    },
+    {
+      "name": "transcrypt_and_python_results_differ",
+      "runner": "external",
+      "metric": "WIN (matches CPython)",
+      "reason": "differentiation showcase: Transcrypt writes DOM branch; PythScribe prints the CPython branch. CPython-faithful."
+    },
+    {
+      "name": "transcrypt_only",
+      "runner": "external",
+      "metric": "WIN 2/2 (jsmod, in-on-class)",
+      "reason": "differentiation showcase: -3 % 8 -> 5 (Python modulo) and `x in <non-container>` -> TypeError, both CPython-faithful where Transcrypt diverges."
+    },
+    {
+      "name": "async_await_manual",
+      "runner": "external",
+      "metric": "measured-elsewhere",
+      "reason": "same async surface as the automated testlet; measured once by percheck.py::score_async, not re-run."
+    }
+  ],
+  "_comment": "TWO-SIDED ratchet baseline for run_autotester.py: any per-testlet change (regression OR improvement) fails CI until this file is updated in the same PR. `boundaries` = the 13 full-surface dispositions (E7 sub-part 5): 2 measured live by this gate, 11 pinned from the dedicated harnesses (reference-app experiments/autotester-ps FULL_SURFACE.md). Oracle: CPython only (PYTHS_ORACLE_PYTHON) \u2014 never Transcrypt's expected outputs."
+}

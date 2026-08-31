@@ -12,6 +12,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ORACLE_BIN, oracleArgs } from "./oracle_python.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,14 +26,16 @@ const RUNTIME_STDLIB_DIR = path.resolve(REPO_ROOT, "runtime", "src", "stdlib");
 
 mkdirSync(SCRATCH, { recursive: true });
 
+// Oracle CPython resolved through the shared module (oracle_python.mjs) so
+// the PYTHS_ORACLE_PYTHON pin governs this lane too.
 export function checkPythonAvailable() {
-    try { execFileSync("python", ["-c", "print(1)"], { stdio: "pipe" }); return true; }
+    try { execFileSync(ORACLE_BIN, oracleArgs(["-c", "print(1)"]), { stdio: "pipe" }); return true; }
     catch { return false; }
 }
 
 export function runPython(setup, expr) {
     const code = `${setup ? setup + "\n" : ""}import sys\nsys.stdout.write(repr(${expr}))`;
-    const r = spawnSync("python", ["-c", code], { encoding: "utf8" });
+    const r = spawnSync(ORACLE_BIN, oracleArgs(["-c", code]), { encoding: "utf8" });
     if (r.status !== 0) throw new Error(`python failed: ${r.stderr}`);
     return r.stdout;
 }

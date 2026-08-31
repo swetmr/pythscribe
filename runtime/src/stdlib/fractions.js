@@ -15,6 +15,10 @@
 // falling back to float arithmetic when the other operand is a float.
 
 import { ZeroDivisionError, ValueError, __pyTypeName } from "../runtime.js";
+// F3-r2 (v0.2.4): int()/float() dispatch the Python numeric protocol
+// (__int__/__float__) instead of the valueOf heuristic — Fraction implements
+// both. __pyF boxes the integer-valued __float__ result (Option B model).
+import { __pyF } from "../operators.js";
 
 function _bigGcd(a, b) {
     if (a < 0n) a = -a;
@@ -288,6 +292,18 @@ export class Fraction {
      *  which invokes `valueOf()` per the standard JS coercion protocol. */
     valueOf() {
         return Number(this.#n) / Number(this.#d);
+    }
+
+    /** `int(Fraction(...))` — truncation toward zero, EXACT at any magnitude
+     *  (BigInt division truncates toward zero like CPython's int()). F3-r2. */
+    __int__() {
+        const v = this.#n / this.#d;
+        return v >= -9007199254740991n && v <= 9007199254740991n ? Number(v) : v;
+    }
+
+    /** `float(Fraction(...))` via the numeric protocol — boxed when whole. */
+    __float__() {
+        return __pyF(this.valueOf());
     }
 
     toString() {

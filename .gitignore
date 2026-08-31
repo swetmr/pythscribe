@@ -57,3 +57,4 @@ tests/differential/.xengine_scratch/
 # Generated skill bundles (prepack copies repo-root SKILL*.md here; source stays at root)
 npm/pythscribe/skills/
 packages/create-pyths-app/skills/
+

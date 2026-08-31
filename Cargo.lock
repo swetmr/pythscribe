@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "pyths_cli"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "clap",
  "libc",
@@ -642,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "pyths_codegen_js"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "criterion",
  "insta",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "pyths_codegen_wasm"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pyths_hir",
  "pyths_parser",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "pyths_config"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "serde",
  "toml",
@@ -677,7 +677,7 @@ dependencies = [
 
 [[package]]
 name = "pyths_diagnostic"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "ariadne",
  "pyths_syntax",
@@ -685,14 +685,14 @@ dependencies = [
 
 [[package]]
 name = "pyths_expand"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pyths_lexer",
 ]
 
 [[package]]
 name = "pyths_hir"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pyths_parser",
  "pyths_syntax",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "pyths_lexer"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "insta",
  "logos",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "pyths_lsp"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pyths_diagnostic",
  "pyths_parser",
@@ -720,16 +720,17 @@ dependencies = [
 
 [[package]]
 name = "pyths_parser"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "insta",
  "pyths_lexer",
  "pyths_syntax",
+ "serde_json",
 ]
 
 [[package]]
 name = "pyths_print"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pyths_parser",
  "pyths_syntax",
@@ -737,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "pyths_resolve"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pyths_parser",
  "pyths_syntax",
@@ -745,15 +746,15 @@ dependencies = [
 
 [[package]]
 name = "pyths_runtime"
-version = "0.2.3"
+version = "0.2.4"
 
 [[package]]
 name = "pyths_syntax"
-version = "0.2.3"
+version = "0.2.4"
 
 [[package]]
 name = "pyths_types"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pyths_parser",
  "pyths_syntax",

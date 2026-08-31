@@ -14,10 +14,16 @@ when it raises. So `C1 ∧ C3 ∧ C4` hold **jointly**, and by the crown lemma
 outcome equality* `evalTgt shippedW = evalRef` on the fragment
 (`joint_faces_iff_outcome_eq`).
 
-**What shipped (the target model's referent).** MERGED MAIN `b28a36da`
-("Merge fix/error-kind-fidelity: Python error-KIND fidelity at inlined op
-sites (C4 class)"), which includes minimal Option B (`6e990502`). The
-transliterated sites (all in `pythscribe` @ `b28a36da`):
+**What shipped (the target model's referent).** The CPython-3.14.7
+oracle-bump runtime: branch `chore/oracle-bump-3.14.7` @ `555f739c`
+("fix(runtime): track CPython 3.14 error-message rewords"), on top of
+MERGED MAIN `b28a36da` ("Merge fix/error-kind-fidelity: Python error-KIND
+fidelity at inlined op sites (C4 class)", incl. minimal Option B
+`6e990502`). `555f739c` changes ONLY the message layer (the 3.14
+zero-division unification — see `docs/python-oracle-policy.md`); every
+non-message site below is unchanged from `b28a36da`. This pin is now FINALIZED
+to the oracle-bump merge commit `f9d4d54c` (branch merged to main 2026-08-26). The
+transliterated sites (all in `pythscribe` @ `555f739c`):
   * `runtime/src/runtime.js` — `pyCall`'s not-callable throw (:3102),
     `pyIter`'s null-first/float-brand/generic iterate throws (:184/:189/:192),
     `pyAttr`'s numeric-protocol block (real/imag at :2948–:2949, the
@@ -28,10 +34,14 @@ transliterated sites (all in `pythscribe` @ `b28a36da`):
   * `runtime/src/operators.js` — `__mulRepCount`'s #471 index-size bound
     (:71–:90, `> 9223372036854775807n || < -9223372036854775808n` →
     `OverflowError("cannot fit 'int' into an index-sized integer")`),
-    `pyFloorDiv`'s float path (`__isFloat(a)||__isFloat(b)`, :796–:797,
-    `"float floor division by zero"`) and int path (:807, `"integer division
-    or modulo by zero"`), and `__binOpTypeError`'s unsupported-operand
-    template rendered through the #469-unified `__pyTypeName` (:62).
+    `pyFloorDiv`'s float path (`__isFloat(a)||__isFloat(b)`, :1066–:1068)
+    and int path (:1078) — BOTH throw sites raise the single CPython-3.14
+    text `"division by zero"` since `555f739c` (3.12 split them as
+    `"float floor division by zero"` / `"integer division or modulo by
+    zero"`; the 3.12-era wording is now a REFUTED false world, see
+    `legacy312_arith_stub_fails`), and `__binOpTypeError`'s
+    unsupported-operand template rendered through the #469-unified
+    `__pyTypeName` (:62).
   * Type names everywhere come from `__pyTypeName`'s CARRIER dispatch
     (null → NoneType, `__pyfloat__` brand → float, boolean → bool,
     bigint → int, number → isInteger ? int : float, string → str,
@@ -66,23 +76,38 @@ the reused crown, not reproved).
     receiver-dispatch on replication) where the reference dispatches on the
     Python type directly; type names route through the carrier-dispatch
     `tgtTypeName` vs the reference's `refTypeName`; the arith messages route
-    through `tgtArithMsg` (either-operand-float path test, per
-    `pyFloorDiv`) vs `refArithMsg` (which-dunder-ran shape, per CPython).
+    through `tgtArithMsg` vs `refArithMsg` — since the 3.14 unification
+    both zero-division arms are the same constant `"division by zero"`
+    (forced by reality on both sides, and still discriminating: see
+    `legacy312_arith_stub_fails`), while the operand-TypeError templates
+    keep their distinct `tgtPName` / `refPName` dispatch structures.
     On the container Ok-arms (subscript/replication lookup arithmetic) both
     sides share the index-normalization helpers — the added content of THIS
     file on those arms is the outcome/kind/message layer; their value layer
     is empirically bound below and model-bound by the earlier waves.
-  * EMPIRICALLY bound to the merged-main binary
-    (`pythscribe/target/release/pyths.exe` @ `b28a36da`), re-run
-    2026-08-22 against live CPython 3.12.7:
-      - `experiments/errorkind-ps/errorkind_corpus_ps.py`: **99/102 exact,
+  * EMPIRICALLY bound in two layers:
+      - The NON-MESSAGE surface (values, occurrence, kinds, and every
+        message `555f739c` did not touch) was bound to the merged-main
+        binary (`pythscribe/target/release/pyths.exe` @ `b28a36da`),
+        re-run 2026-08-22 against live CPython 3.12.7:
+        `experiments/errorkind-ps/errorkind_corpus_ps.py` **99/102 exact,
         0 REAL mismatches** (3 documented NYI `bit_length` exclusions —
         formally excluded from this fragment too, see the guard) — binds
-        C3/C4 (kind+msg) on call/iterate/attr/subscript/replication/arith.
-      - fragment pin probe (68 rows: every Err (kind,msg) and Ok value
+        C3/C4 (kind+msg) on call/iterate/attr/subscript/replication/arith;
+        fragment pin probe (68 rows: every Err (kind,msg) and Ok value
         modeled below, incl. the whole-float arith rows `2.0-1 → 1.0`,
-        `-7.0//2 → -4.0`, `2.0//0 → ZeroDivisionError "float floor division
-        by zero"`, and the attr present/absent matrix): **68/68 exact**.
+        `-7.0//2 → -4.0`, and the attr present/absent matrix): **68/68
+        exact** (its 3.12-era zero-division message rows are superseded by
+        the next layer).
+      - The 3.14 MESSAGE layer (the zero-division rows this file models)
+        was re-bound 2026-08-26 to the oracle-bump binary (`pyths.exe` @
+        `555f739c`) against live CPython 3.14.7: `pyths run` on `1/0`,
+        `1.0/0`, `1%0`, `1.0%0`, `1//0`, `1.0//0`, `divmod(1,0)`,
+        `divmod(1.5,0)`, `0**-1`, `0.0**-1`, `x/=0`, `x//=0`, `1 in 5` —
+        **13/13 byte-exact** (`2.0//0` and `1//0` BOTH →
+        `ZeroDivisionError: division by zero`), plus the full 1,376-case
+        `tests/differential/run.mjs` corpus green under
+        `PYTHS_ORACLE_PYTHON="py -3.14"`.
       - `experiments/pbt-ps/slice_shipped_binding.py`: 15,612 cases, 0
         mismatches — binds C1 on subscript/slice values.
       - `experiments/pbt-ps/pyeq_shipped_binding.py`: 2,063 cases, 0
@@ -107,6 +132,14 @@ fix comment (operators.js:74–76 documents the pre-fix JS `RangeError
     `attr_missing_c4_blind` prove C1 and C4 are VACUOUSLY satisfied at this
     witness — only C3 catches it. This is the machine-checked value of the
     JOIN: no single face subsumes the others.
+  * `witFdivZero` = `1 // 0` (the 3.14 oracle bump's own false world): a
+    runtime still emitting the CPython-3.12 split zero-division wording
+    (`"integer division or modulo by zero"` / `"float floor division by
+    zero"`) — i.e. the PRE-`555f739c` shipped behavior — raises the SAME
+    kind, wrong MESSAGE → refuted by the message conjunct
+    (`legacy312_arith_stub_fails`); `legacy312_arith_kind_blind` proves the
+    kind-only face is blind here, so the post-collapse constant message is
+    still DISCRIMINATING content, not a vacuous simplification.
 
 **Fragment scope (honest domain — the decidable guard `fragOK`).**
   * Non-recursive: operands are VALUES (each op produces a value or raises
@@ -139,6 +172,18 @@ carries one compiled-target function PER OP (the `Union7.World` discipline);
 exactly one field and is refuted at its witness. A wrong shipped lowering of
 ANY covered op falsifies `outcome_eq` through its field. -/
 import Union7
+import MessageData
+
+/- E7 message-layer binding: every LIVE message literal below is built from
+   `MessageData` (GENERATED from verification/message-table.json by
+   gen-message-data.py; CI drift-gates the generation, and
+   verification/message_shipped_binding.py pins the same table rows against
+   the REAL `pyths` binary and the CPython oracle). A runtime message change
+   therefore turns the differential red, and the table update it forces
+   re-evaluates this file's #guard pins — the transcribed-literal drift the
+   3.14 oracle bump exposed cannot recur. The FALSE-WORLD wordings
+   (`legacy312ArithMsg`, `preFixCall`, `preFixRepl`) deliberately stay
+   inline: they encode refuted worlds, not the live model. -/
 
 namespace C1C3C4Outcome
 
@@ -248,34 +293,33 @@ def tgtPName : PVal → String
   | .pfloat _ => "float"       -- __pyfloat__ brand
   | .pint _ => "int" | .pstr _ => "str"
 
-/-- CPython's messages at the arith error sites, in CPython's shape: the
-    ZeroDivisionError text depends on WHICH `__floordiv__` ran — both-int →
-    `int.__floordiv__`'s text, otherwise the float coercion path's; a failed
-    operand dispatch renders the unsupported-operand template. (Junk inputs —
-    e.g. zeroDiv with a str operand — never arise: type-check precedes
-    zero-check in `evalA`, upstream-pinned.) -/
+/-- CPython 3.14.7's messages at the arith error sites, in CPython's shape:
+    since 3.14 EVERY division/modulo ZeroDivisionError carries the single
+    text `"division by zero"` — the 3.12-era dependence on WHICH
+    `__floordiv__` ran (both-int → `int.__floordiv__`'s text, otherwise the
+    float coercion path's) was removed upstream (witness: `py -3.14 -c
+    "1//0"` and `"2.0//0"` both print `division by zero`; the old split is
+    the refuted `legacy312ArithMsg` below). A failed operand dispatch still
+    renders the unsupported-operand template. (Junk inputs — e.g. zeroDiv
+    with a str operand — never arise: type-check precedes zero-check in
+    `evalA`, upstream-pinned.) -/
 def refArithMsg (op : AOp) (a b : PVal) : Exc → String
-  | .zeroDiv =>
-    match a, b with
-    | .pint _, .pint _ => "integer division or modulo by zero"
-    | _, _ => "float floor division by zero"
-  | .typeError =>
-    "unsupported operand type(s) for " ++ op.sym ++ ": '"
-      ++ refPName a ++ "' and '" ++ refPName b ++ "'"
+  | .zeroDiv => MessageData.zeroDiv
+  | .typeError => MessageData.unsupportedOperand op.sym (refPName a) (refPName b)
   | _ => ""
 
-/-- `operators.js` transliteration: `pyFloorDiv`'s float path is entered when
-    EITHER operand is float (`__isFloat(a) || __isFloat(b)`, :796) and raises
-    `"float floor division by zero"` (:797); the int path raises `"integer
-    division or modulo by zero"` (:807); `__binOpTypeError` (:62) renders the
+/-- `operators.js` @ `555f739c` transliteration: `pyFloorDiv` still has TWO
+    throw sites — the float path, entered when EITHER operand is float
+    (`__isFloat(a) || __isFloat(b)`, :1066, throw :1068), and the int path
+    (:1078) — but since the 3.14 oracle bump BOTH raise the same
+    `"division by zero"`, so the transliterated message is the constant
+    (the branch structure survives only in the runtime's control flow, not
+    in the emitted text; the pre-bump two-text version is
+    `legacy312ArithMsg`). `__binOpTypeError` (:62) renders the
     unsupported-operand template through `__pyTypeName`. -/
 def tgtArithMsg (op : AOp) (a b : PVal) : Exc → String
-  | .zeroDiv =>
-    if isFloatP a || isFloatP b then "float floor division by zero"
-    else "integer division or modulo by zero"
-  | .typeError =>
-    "unsupported operand type(s) for " ++ op.sym ++ ": '"
-      ++ tgtPName a ++ "' and '" ++ tgtPName b ++ "'"
+  | .zeroDiv => MessageData.zeroDiv
+  | .typeError => MessageData.unsupportedOperand op.sym (tgtPName a) (tgtPName b)
   | _ => ""
 
 /-! ## The reference evaluator (CPython semantics) -/
@@ -288,17 +332,16 @@ def refArith (op : AOp) (a b : PVal) : POut :=
 
 def refCall : OVal → POut
   | .vfun r => okV (.vint r)
-  | x => errV .typeError ("'" ++ refTypeName x ++ "' object is not callable")
+  | x => errV .typeError (MessageData.notCallable (refTypeName x))
 
 def refIter : OVal → POut
   | .vstr s => okV (.vstr s)
   | .vlist xs => okV (.vlist xs)
   | .vdict kvs => okV (.vdict kvs)
-  | x => errV .typeError ("'" ++ refTypeName x ++ "' object is not iterable")
+  | x => errV .typeError (MessageData.notIterable (refTypeName x))
 
 def refAttrMiss (x : OVal) (name : String) : POut :=
-  errV .attributeError
-    ("'" ++ refTypeName x ++ "' object has no attribute '" ++ name ++ "'")
+  errV .attributeError (MessageData.noAttribute (refTypeName x) name)
 
 /-- CPython attribute semantics on the fragment (probed 2026-08-22, CPython
     3.12.7): int/bool carry the Rational protocol (`numerator` = self as int,
@@ -340,16 +383,16 @@ def refSub : OVal → OVal → POut
   | .vlist xs, .vint i =>
     match listNth xs i with
     | some v => okV (.vint v)
-    | none => errV .indexError "list index out of range"
+    | none => errV .indexError MessageData.listIndexOor
   | .vstr s, .vint i =>
     match strNth s i with
     | some c => okV (.vstr c.toString)
-    | none => errV .indexError "string index out of range"
+    | none => errV .indexError MessageData.strIndexOor
   | .vdict kvs, .vstr k =>
     match dictGet kvs k with
     | some v => okV (.vint v)
-    | none => errV .keyError ("'" ++ k ++ "'")
-  | x, _ => errV .typeError ("'" ++ refTypeName x ++ "' object is not subscriptable")
+    | none => errV .keyError (MessageData.keyError k)
+  | x, _ => errV .typeError (MessageData.notSubscriptable (refTypeName x))
 
 /-- `Py_ssize_t` bounds — CPython's index-size range (`__index__` conversion
     raises OverflowError outside it). -/
@@ -368,11 +411,11 @@ def strRep (s : String) (n : Int) : String :=
 def refRepl : OVal → Int → POut
   | .vlist xs, n =>
     if n > ssizeMax ∨ n < ssizeMin then
-      errV .overflow "cannot fit 'int' into an index-sized integer"
+      errV .overflow MessageData.overflowIndex
     else okV (.vlist (listRep xs n))
   | .vstr s, n =>
     if n > ssizeMax ∨ n < ssizeMin then
-      errV .overflow "cannot fit 'int' into an index-sized integer"
+      errV .overflow MessageData.overflowIndex
     else okV (.vstr (strRep s n))
   | _, _ => errV .typeError ""     -- out of guard (receiver ∉ {list, str})
 
@@ -471,22 +514,21 @@ def shippedArith (op : AOp) (a b : PVal) : POut :=
     the Python-style message (that it once did not is the pre-fix world). -/
 def shippedCall (_srcName : String) : OVal → POut
   | .vfun r => okV (.vint r)
-  | x => errV .typeError ("'" ++ tgtTypeName x ++ "' object is not callable")
+  | x => errV .typeError (MessageData.notCallable (tgtTypeName x))
 
 /-- `pyIter` (runtime.js:184/:189/:192): null guard FIRST (hardcoded
     NoneType text), then the `__pyfloat__` brand (hardcoded float text), then
     the iterables, then the generic `__pyTypeName` template. -/
 def shippedIter : OVal → POut
-  | .vnone => errV .typeError "'NoneType' object is not iterable"
-  | .vfloat _ => errV .typeError "'float' object is not iterable"
+  | .vnone => errV .typeError (MessageData.notIterable "NoneType")
+  | .vfloat _ => errV .typeError (MessageData.notIterable "float")
   | .vstr s => okV (.vstr s)
   | .vlist xs => okV (.vlist xs)
   | .vdict kvs => okV (.vdict kvs)
-  | x => errV .typeError ("'" ++ tgtTypeName x ++ "' object is not iterable")
+  | x => errV .typeError (MessageData.notIterable (tgtTypeName x))
 
 def tgtAttrMiss (x : OVal) (name : String) : POut :=
-  errV .attributeError
-    ("'" ++ tgtTypeName x ++ "' object has no attribute '" ++ name ++ "'")
+  errV .attributeError (MessageData.noAttribute (tgtTypeName x) name)
 
 /-- The numeric-protocol receiver class (runtime.js:2941): JS number, bigint,
     boolean, or the `__pyfloat__` brand. -/
@@ -506,7 +548,7 @@ def isFRecv : OVal → Bool
 def shippedAttr (x : OVal) (name : String) : POut :=
   match x with
   | .vnone =>
-    errV .attributeError ("'NoneType' object has no attribute '" ++ name ++ "'")
+    errV .attributeError (MessageData.noAttribute "NoneType" name)
   | x =>
     if numericRecv x then
       match name with
@@ -527,31 +569,31 @@ def shippedAttr (x : OVal) (name : String) : POut :=
     paths with CPython's index normalization. -/
 def shippedSub (x i : OVal) : POut :=
   match x with
-  | .vnone => errV .typeError "'NoneType' object is not subscriptable"
+  | .vnone => errV .typeError (MessageData.notSubscriptable "NoneType")
   | .vint _ | .vbool _ | .vfloat _ =>
-    errV .typeError ("'" ++ tgtTypeName x ++ "' object is not subscriptable")
+    errV .typeError (MessageData.notSubscriptable (tgtTypeName x))
   | .vlist xs =>
     match i with
     | .vint j =>
       match listNth xs j with
       | some v => okV (.vint v)
-      | none => errV .indexError "list index out of range"
+      | none => errV .indexError MessageData.listIndexOor
     | _ => errV .typeError ""    -- out of guard (cross-type key diagnostics)
   | .vstr s =>
     match i with
     | .vint j =>
       match strNth s j with
       | some c => okV (.vstr c.toString)
-      | none => errV .indexError "string index out of range"
+      | none => errV .indexError MessageData.strIndexOor
     | _ => errV .typeError ""
   | .vdict kvs =>
     match i with
     | .vstr k =>
       match dictGet kvs k with
       | some v => okV (.vint v)
-      | none => errV .keyError ("'" ++ k ++ "'")
+      | none => errV .keyError (MessageData.keyError k)
     | _ => errV .typeError ""
-  | x => errV .typeError ("'" ++ tgtTypeName x ++ "' object is not subscriptable")
+  | x => errV .typeError (MessageData.notSubscriptable (tgtTypeName x))
 
 /-- `__mulRepCount` #471 transliteration (operators.js:71–:90): the count is
     bounds-checked FIRST (before receiver dispatch — the runtime's order,
@@ -559,7 +601,7 @@ def shippedSub (x i : OVal) : POut :=
     CPython's text; then the sequence repeats (negative → empty). -/
 def shippedRepl (x : OVal) (n : Int) : POut :=
   if n > ssizeMax ∨ n < ssizeMin then
-    errV .overflow "cannot fit 'int' into an index-sized integer"
+    errV .overflow MessageData.overflowIndex
   else
     match x with
     | .vlist xs => okV (.vlist (listRep xs n))
@@ -584,7 +626,7 @@ theorem shippedArith_eq (op : AOp) (a b : PVal) :
     preservationA (embed op a b) []
   rw [hp]
   cases op <;> cases a <;> cases b <;>
-    simp only [embed, evalA, tgtArithMsg, refArithMsg, isFloatP, tgtPName,
+    simp only [embed, evalA, tgtArithMsg, refArithMsg, tgtPName,
       refPName, AOp.sym] <;>
     first
       | rfl
@@ -809,9 +851,87 @@ theorem preservation_preFix_fails : ¬ (C1 preFixW ∧ C3 preFixW ∧ C4 preFixW
   simp only [errAgree] at hocc
   exact absurd hocc (by decide)
 
-/-! ## Reference-faithfulness pins (F9) — live CPython 3.12.7, 2026-08-22
-    (each row is a probed `(kind, msg)` or value; the same rows were run on
-    the merged-main binary — 68/68 exact, see the header) -/
+/-! ## The 3.14 oracle-bump discriminator — the 3.12-era zero-division
+    wording as a refuted false world (anti-vacuity for the unified
+    constant: the collapse of `refArithMsg`/`tgtArithMsg` to one text is
+    what CPython 3.14 DID, not a weakening of the statement — and the
+    message conjunct still separates worlds the kind face cannot) -/
+
+/-- The PRE-`555f739c` (CPython-3.12-era) arith message layer — exactly the
+    split wording `pyFloorDiv` shipped before the 3.14 oracle bump: float
+    path `"float floor division by zero"`, int path `"integer division or
+    modulo by zero"`. Kept ONLY as a false world: against the 3.14
+    reference it raises the SAME kind with the WRONG message. -/
+def legacy312ArithMsg (op : AOp) (a b : PVal) : Exc → String
+  | .zeroDiv =>
+    if isFloatP a || isFloatP b then "float floor division by zero"
+    else "integer division or modulo by zero"
+  | .typeError =>
+    "unsupported operand type(s) for " ++ op.sym ++ ": '"
+      ++ tgtPName a ++ "' and '" ++ tgtPName b ++ "'"
+  | _ => ""
+
+/-- The legacy-wording arith target: the SAME shipped independent recursion
+    (`evalAtgt jsAL`), only the message layer rolled back — isolating the
+    message channel as the sole difference. -/
+def legacy312Arith (op : AOp) (a b : PVal) : POut :=
+  match evalAtgt jsAL (embed op a b) [] with
+  | .ok v => okV (ofPVal v)
+  | .err k => errV k (legacy312ArithMsg op a b k)
+
+def legacy312ArithW : OWorld := { shippedW with tArith := legacy312Arith }
+
+/-- `1 // 0` — the C4-MESSAGE witness on the arith arm (int path). -/
+def witFdivZero : OExp := .arith .ofdiv (.pint 1) (.pint 0)
+/-- `2.0 // 0` — the float-path twin: BOTH 3.12 texts are dead, not one. -/
+def witFdivZeroF : OExp := .arith .ofdiv (.pfloat 2) (.pint 0)
+
+-- The witnesses are in-fragment; each side's outcome is pinned (the
+-- legacy world's messages differ from BOTH the 3.14 reference and the
+-- shipped world, on BOTH paths of the old split):
+#guard fragOK witFdivZero = true
+#guard fragOK witFdivZeroF = true
+#guard evalRef witFdivZero = errV .zeroDiv "division by zero"
+#guard evalTgt shippedW witFdivZero = errV .zeroDiv "division by zero"
+#guard evalRef witFdivZeroF = errV .zeroDiv "division by zero"
+#guard evalTgt shippedW witFdivZeroF = errV .zeroDiv "division by zero"
+#guard evalTgt legacy312ArithW witFdivZero
+    = errV .zeroDiv "integer division or modulo by zero"
+#guard evalTgt legacy312ArithW witFdivZeroF
+    = errV .zeroDiv "float floor division by zero"
+
+/-- **Stub litmus, C4 MESSAGE axis on ARITH (the 3.14 bump).** A runtime
+    still emitting the 3.12-era wording — the pre-bump shipped behavior —
+    is refuted by the message conjunct at `1 // 0`: the unified
+    `"division by zero"` is load-bearing statement content (the theorem
+    MOVED when the runtime moved; the 3.12 wording can no longer leak). -/
+theorem legacy312_arith_stub_fails : ¬ C4 legacy312ArithW := by
+  intro h
+  have hm := (h witFdivZero (by decide)).2
+  exact absurd hm (by decide)
+
+/-- **The kind face is BLIND at the `1 // 0` witness** — both worlds raise
+    `ZeroDivisionError`, so kind-only C4 holds where message-carrying C4
+    fails: after the 3.14 collapse the message conjunct still separates
+    worlds the kind cannot (the arith analogue of
+    `call_dict_kind_blind`). -/
+theorem legacy312_arith_kind_blind :
+    bothErrKind (evalTgt legacy312ArithW witFdivZero).res
+      (evalRef witFdivZero).res := by
+  intro e f he hf
+  have h1 : (evalTgt legacy312ArithW witFdivZero).res = .err .zeroDiv := by
+    decide
+  have h2 : (evalRef witFdivZero).res = .err .zeroDiv := by decide
+  rw [h1] at he; rw [h2] at hf
+  injection he with he'; injection hf with hf'
+  rw [← he', ← hf']
+
+/-! ## Reference-faithfulness pins (F9) — live CPython 3.12.7, 2026-08-22,
+    EXCEPT the zero-division message rows, re-probed on live CPython
+    3.14.7, 2026-08-26 (the 3.14 unification — see the header's message
+    layer). Each row is a probed `(kind, msg)` or value; the same rows
+    were run on the shipped binary (68/68 exact @ `b28a36da`; the
+    zero-division rows re-run 13/13 exact @ `555f739c`, see header). -/
 
 -- call
 #guard evalRef (.call "f" (.vint 5)) = errV .typeError "'int' object is not callable"
@@ -892,11 +1012,11 @@ theorem preservation_preFix_fails : ¬ (C1 preFixW ∧ C3 preFixW ∧ C4 preFixW
 #guard evalRef (.arith .osub (.pfloat 2) (.pint 1)) = okV (.vfloat 1)     -- 2.0-1 = 1.0
 #guard evalRef (.arith .osub (.pint 5) (.pfloat 2)) = okV (.vfloat 3)     -- 5-2.0 = 3.0
 #guard evalRef (.arith .ofdiv (.pint 1) (.pint 0))
-    = errV .zeroDiv "integer division or modulo by zero"
+    = errV .zeroDiv "division by zero"        -- 3.14 unified (was "integer division or modulo by zero")
 #guard evalRef (.arith .ofdiv (.pfloat 2) (.pint 0))
-    = errV .zeroDiv "float floor division by zero"
+    = errV .zeroDiv "division by zero"        -- 3.14 unified (was "float floor division by zero")
 #guard evalRef (.arith .ofdiv (.pint 2) (.pfloat 0))
-    = errV .zeroDiv "float floor division by zero"
+    = errV .zeroDiv "division by zero"        -- 3.14 unified (float divisor path)
 #guard evalRef (.arith .osub (.pstr "a") (.pint 1))
     = errV .typeError "unsupported operand type(s) for -: 'str' and 'int'"
 #guard evalRef (.arith .osub (.pint 1) (.pstr "a"))
@@ -921,10 +1041,12 @@ example : evalTgt shippedW (.attr (.vint 5) "numerator") = okV (.vint 5) := by
   rw [outcome_eq _ (by decide)]; rfl
 
 /-- SPOT (C4 through the corollary): the compiled `2.0 // 0` raises
-    `ZeroDivisionError` with the FLOAT-path message — extracted from
-    `preservationC1C3C4`'s C4 conjunct, not by evaluating the target. -/
+    `ZeroDivisionError` with CPython 3.14's unified `"division by zero"`
+    (the float path shares the int path's text since the bump) — extracted
+    from `preservationC1C3C4`'s C4 conjunct, not by evaluating the
+    target. -/
 example : (evalTgt shippedW (.arith .ofdiv (.pfloat 2) (.pint 0))).msg
-    = "float floor division by zero" := by
+    = "division by zero" := by
   rw [(preservationC1C3C4.2.2 (.arith .ofdiv (.pfloat 2) (.pint 0)) (by decide)).2]
   rfl
 
@@ -974,5 +1096,13 @@ example : (evalTgt shippedW (.arith .ofdiv (.pfloat 2) (.pint 0))).msg
 /-- info: 'C1C3C4Outcome.preservation_preFix_fails' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms preservation_preFix_fails
+
+/-- info: 'C1C3C4Outcome.legacy312_arith_stub_fails' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms legacy312_arith_stub_fails
+
+/-- info: 'C1C3C4Outcome.legacy312_arith_kind_blind' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms legacy312_arith_kind_blind
 
 end C1C3C4Outcome

@@ -3156,9 +3156,33 @@ fn apply_fstring_format_spec(expr: Expr, spec_str: &str, span: Span) -> Result<E
 
     let spec = match parse(spec_str) {
         Some(s) if !is_noop(&s) => s,
-        // Empty or unparseable spec — fall through (preserves prior
-        // behavior of silently ignoring unrecognized specs).
-        _ => return Ok(expr),
+        // Empty spec: genuinely a no-op.
+        Some(_) => return Ok(expr),
+        // E3 (#108 class): an UNPARSEABLE spec is NOT a silent no-op — CPython
+        // raises ValueError ("Invalid format specifier ..."). Lower to
+        // pyFormatDynamic with the literal spec string so the runtime parser
+        // (the same grammar) raises the exact CPython error at the exact
+        // moment CPython would.
+        None => {
+            return Ok(Expr {
+                kind: EK::Call {
+                    func: Box::new(Expr {
+                        kind: EK::Name("pyFormatDynamic".to_string()),
+                        span,
+                    }),
+                    args: vec![
+                        expr,
+                        Expr {
+                            kind: EK::StringLiteral(spec_str.to_string()),
+                            span,
+                        },
+                    ],
+                    kwargs: vec![],
+                    optional: false,
+                },
+                span,
+            });
+        }
     };
 
     // Direct-emission fast paths for the most common shapes — keep the
@@ -3170,7 +3194,7 @@ fn apply_fstring_format_spec(expr: Expr, spec_str: &str, span: Span) -> Result<E
     // Anything else goes through the runtime helper.
     let _ = (FormatSpec::default, FormatType::FixedLower);
     let _ = EK::IntLiteral as fn(i128) -> EK;
-    Ok(lower(&spec, expr, span))
+    Ok(lower(&spec, spec_str, expr, span))
 }
 
 /// #108: lower a dynamic format spec (`{w}`, `.{p}f`, `{a}{w}`) to
@@ -3267,7 +3291,9 @@ fn try_direct_emission(
     let mixed_flags = spec.fill.is_some()
         || spec.align.is_some()
         || matches!(spec.sign, Some(Sign::Plus | Sign::Space))
-        || spec.alt_form;
+        || spec.alt_form
+        // E3: PEP 682 'z' needs the full engine's negative-zero coercion.
+        || spec.coerce_zero;
     if mixed_flags {
         return None;
     }
@@ -3283,6 +3309,7 @@ fn try_direct_emission(
     ) && !spec.zero_pad
         && spec.width.is_none()
         && spec.grouping.is_none()
+        && spec.frac_grouping.is_none()
     {
         if let Some(n) = spec.precision {
             return Some(Expr {

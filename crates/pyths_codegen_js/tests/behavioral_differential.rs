@@ -408,8 +408,21 @@ fn comprehension_matrix_matches_cpython() {
 /// enclosing-scope target at def time. The matrix covers {annotation,
 /// default, return-annotation} x {module-level, nested def}, plus the
 /// defaults-before-annotations ordering probe. Same eval-timing fidelity
-/// family as the genexp creation-time iter() rows above (#463). All
-/// goldens from live CPython 3.12.
+/// family as the genexp creation-time iter() rows above (#463).
+///
+/// ORACLE NOTE (CPython 3.14 bump): the goldens here were captured on CPython
+/// 3.12. Under the new 3.14 oracle, a named expression (walrus `:=`) inside an
+/// ANNOTATION is a SyntaxError ("named expression cannot be used within an
+/// annotation") — so the five ANNOTATION rows (`ann_walrus_nested`,
+/// `ann_walrus_module`, `ret_ann_walrus`, `deftime_all_fire`,
+/// `deftime_defaults_before_annotations`) no longer run under CPython 3.14.
+/// PythScribe still ACCEPTS walrus-in-annotation and evaluates it at def time
+/// (the 3.12 behavior), so this differential (PythScribe vs the embedded 3.12
+/// golden) still passes. This is a GENUINE 3.14 behavior divergence recorded
+/// for human decision (should PythScribe reject walrus-in-annotation to match
+/// 3.14?) — NOT silently changed here. The DEFAULT-walrus row
+/// (`default_walrus_nested`) is unaffected: walrus in a default is still legal
+/// in 3.14.
 #[test]
 fn def_time_eval_matches_cpython() {
     let rows: Vec<(String, String, String)> = [
@@ -470,4 +483,483 @@ fn def_time_eval_matches_cpython() {
 "
         )
     );
+}
+
+/// F2 (v0.2.4) recurrence guard — SHADOWED-BUILTIN × FLOAT-ARG matrix.
+///
+/// The A4 float fast paths (`str`/`repr` + definitely-float arg, `print` +
+/// any definitely-float arg) early-returned into pyFormatFloat/pyPrint
+/// WITHOUT the `is_declared_in_any_scope` gate every other builtin lowering
+/// carries, so a user rebinding of the name was silently bypassed —
+/// `print = lambda *a: None; print(8.0)` still printed `8.0`. The same
+/// omission lived one level deeper in `is_definitely_float`'s builtin-call
+/// arms (`float(...)`, `round(x, n)`, `abs(complex)`): a shadowed `float`
+/// returning a string was pre-formatted as a float. Same naming-collision
+/// class as NB-1/NB-2/#420/DX-B1.
+///
+/// Matrix: {print, str, repr, float, round, abs} × {module-scope shadow,
+/// function-scope shadow, parameter shadow} × float-typed args, each with an
+/// unshadowed sibling call in the same program proving the fast path itself
+/// is preserved. Goldens: live CPython 3.12.
+#[test]
+fn test_builtin_shadow_float_matrix_matches_cpython() {
+    let rows: Vec<(String, String, String)> = [
+        // module-scope rebinding: shadow swallows ALL prints (float or not)
+        (
+            "shadow_print_module",
+            "print = lambda *a: None\nprint(8.0)\nprint(1.5, \"x\")",
+            "",
+        ),
+        // function-scope shadow + unshadowed float print in the same program
+        (
+            "shadow_print_func",
+            "def f():\n    print = lambda *a: \"shadow\"\n    return print(8.0)\nr = f()\nprint(r, 8.0)",
+            "shadow 8.0\n",
+        ),
+        // parameter shadow (the Zustand-`set` shape, float-typed)
+        (
+            "shadow_print_param",
+            "def q(print):\n    return print(4.5)\nprint(q(lambda v: v * 2), 4.5)",
+            "9.0 4.5\n",
+        ),
+        (
+            "shadow_str_func",
+            "def g():\n    str = lambda x: \"X\"\n    return str(1.5)\nprint(g(), str(1.5))",
+            "X 1.5\n",
+        ),
+        (
+            "shadow_repr_func",
+            "def h():\n    repr = lambda x: \"R\"\n    return repr(2.0)\nprint(h(), repr(2.0))",
+            "R 2.0\n",
+        ),
+        // is_definitely_float classification arms: a shadowed float/round/abs
+        // call must NOT be pre-formatted through pyFormatFloat
+        (
+            "shadow_float_func",
+            "def k():\n    float = lambda x: \"F\"\n    return float(3)\nprint(k(), float(3))",
+            "F 3.0\n",
+        ),
+        (
+            "shadow_round_func",
+            "def m():\n    round = lambda x, n: \"RD\"\n    return round(1.5, 1)\nprint(m(), round(1.5, 1))",
+            "RD 1.5\n",
+        ),
+        (
+            "shadow_abs_func",
+            "def n():\n    abs = lambda z: \"A\"\n    return abs(3+4j)\nprint(n(), abs(3+4j))",
+            "A 5.0\n",
+        ),
+        // unshadowed control — the float fast paths still fire correctly
+        (
+            "unshadowed_control",
+            "print(8.0)\nprint(str(1.5), repr(2.0), str(7))",
+            "8.0\n1.5 2.0 7\n",
+        ),
+        // F2-r2 (float-inference local shadow): an unannotated param or an
+        // Unknown-RHS re-assignment must DEMOTE, not inherit an outer/earlier
+        // Float and pre-format a non-float through pyFormatFloat
+        (
+            "shadow_float_inference_param",
+            "x = 1.0\ndef f(x):\n    return str(x)\nprint(f(3), f(1.5), str(x))",
+            "3 1.5 1.0\n",
+        ),
+        (
+            "shadow_float_inference_reassign",
+            "y = 2.5\ndef mk():\n    return \"s\"\ny = mk()\nprint(y, str(y))\nz = 0.5\ndef g():\n    z = 7\n    return str(z)\nprint(g(), str(z))",
+            "s s\n7 0.5\n",
+        ),
+    ]
+    .iter()
+    .map(|(n, s, e)| (n.to_string(), s.to_string(), e.to_string()))
+    .collect();
+
+    let failures = run_rows("shadowflt", &rows);
+    assert!(
+        failures.is_empty(),
+        "{} builtin-shadow/float difference(s) vs CPython:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// F5 (v0.2.4) recurrence guard — SLICE COMPONENT TYPE matrix (end-to-end).
+///
+/// CPython (_PyEval_SliceIndex) rejects any slice start/stop/step that is not
+/// int/None/__index__ with `TypeError: slice indices must be integers or None
+/// or have an __index__ method`. The index arm was guarded (crit-8/F7) but the
+/// slice arm silently accepted floats. One runtime validator (__pySliceIndex)
+/// now fronts get/set/del-slice. THEOREM-BLIND: pure runtime guard; the Lean
+/// slice theorems (integer-quantified) are untouched. The unit-level matrix is
+/// runtime/src/slice_index_guard.test.mjs; these rows bind the guard to the
+/// COMPILED lowering (literal AND runtime-typed floats). CPython 3.12 goldens.
+#[test]
+fn test_slice_index_guard_matrix_matches_cpython() {
+    const T: &str = "def t(f):\n    try:\n        print(f())\n    except Exception as e:\n        print(type(e).__name__ + \": \" + str(e))\n";
+    const MSG: &str =
+        "TypeError: slice indices must be integers or None or have an __index__ method\n";
+    let rows: Vec<(String, String, String)> = vec![
+        (
+            "slice_float_literal_get".to_string(),
+            format!("{T}t(lambda: [1, 2, 3][0:2.0])\nt(lambda: [1, 2, 3][1.0:])\nt(lambda: [1, 2, 3, 4][::2.0])\nt(lambda: \"abcd\"[0:2.0])\nt(lambda: (1, 2, 3)[0:2.5])"),
+            MSG.repeat(5),
+        ),
+        (
+            "slice_float_runtime_typed".to_string(),
+            format!("x = 2.0\n{T}t(lambda: [1, 2, 3][0:x])\nt(lambda: [1, 2, 3][x:])\nt(lambda: \"abcd\"[::x])"),
+            MSG.repeat(3),
+        ),
+        (
+            "slice_float_set_del".to_string(),
+            "def t(f):\n    try:\n        f()\n        print(\"NOERR\")\n    except Exception as e:\n        print(type(e).__name__ + \": \" + str(e))\ndef w1():\n    xs = [1, 2, 3]\n    xs[0:2.0] = [9]\nt(w1)\ndef w2():\n    xs = [1, 2, 3, 4]\n    xs[::2.0] = [9, 9]\nt(w2)\ndef w3():\n    xs = [1, 2, 3]\n    del xs[0:2.0]\nt(w3)\ndef w4():\n    xs = [1, 2, 3, 4]\n    del xs[::2.0]\nt(w4)".to_string(),
+            MSG.repeat(4),
+        ),
+        // valid components preserved: int/bool bounds, extended step, huge-int
+        // clamp, write/delete arms — the fixed guard must not over-reject
+        (
+            "slice_valid_preserved".to_string(),
+            "print([1, 2, 3][0:2], [1, 2, 3][True:], [1, 2, 3, 4][::2], \"abcd\"[1:3], (1, 2, 3)[:2])\nxs = [1, 2, 3, 4]\nxs[0:2] = [9]\nprint(xs)\ndel xs[0:1]\nprint(xs)\nprint([1, 2, 3][10 ** 100:], [1, 2][:: 10 ** 100])".to_string(),
+            "[1, 2] [2, 3] [1, 3] bc (1, 2)\n[9, 3, 4]\n[3, 4]\n[] [1]\n".to_string(),
+        ),
+    ];
+
+    let failures = run_rows("slicetype", &rows);
+    assert!(
+        failures.is_empty(),
+        "{} slice-component-type difference(s) vs CPython:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// F6 (v0.2.4) recurrence guard — round(x, ndigits) EXACT DECIMAL matrix
+/// (end-to-end). The old scale-multiply (`x * 10^nd` then half-even on the
+/// re-rounded binary product) silently mis-rounded: round(0.05, 1) → 0.0
+/// (CPython 0.1), round(2.675, 2) → 2.68 (CPython 2.67), round(0.35, 1) →
+/// 0.4 (CPython 0.3). pyRound now rounds the exact decimal expansion of the
+/// original double (__pyRoundDecimal — the _Py_dg_dtoa-mode-3 equivalent).
+/// The 146,966-case sweep + unit matrix live in
+/// runtime/src/round_ndigits.test.mjs; these rows bind the COMPILED lowering,
+/// including the inline `pyths run` #170 extraction (the hand-written inline
+/// pyRound copy was deleted in this fix). CPython 3.12 goldens.
+#[test]
+fn test_round_ndigits_matrix_matches_cpython() {
+    let rows: Vec<(String, String, String)> = [
+        (
+            "round_halfcross_class",
+            "print(round(0.05, 1), round(0.15, 1), round(0.25, 1), round(0.35, 1), round(0.45, 1))\nprint(round(0.005, 2), round(0.015, 2), round(0.025, 2), round(0.065, 2), round(0.075, 2))\nprint(round(2.675, 2), round(-2.675, 2), round(2.665, 2), round(0.145, 2), round(9.999, 2))",
+            "0.1 0.1 0.2 0.3 0.5\n0.01 0.01 0.03 0.07 0.07\n2.67 -2.67 2.67 0.14 10.0\n",
+        ),
+        // ties + 1-arg PRESERVED (were already correct pre-fix)
+        (
+            "round_ties_preserved",
+            "print(round(2.5), round(1.5), round(0.5), round(-2.5), round(0.125, 2), round(0.375, 2))",
+            "2 2 0 -2 0.12 0.38\n",
+        ),
+        (
+            "round_neg_ndigits",
+            "print(round(1234.5678, -2), round(150.0, -2), round(250.0, -2), round(-150.0, -2), round(12345.0, -2), round(150, -2))",
+            "1200.0 200.0 200.0 -200.0 12300.0 200\n",
+        ),
+        (
+            "round_extremes",
+            "print(round(0.1, 30), round(1.0, 5), round(5e-324, 324), round(2.675, 100), round(99.99999999999999, 13), round(-0.001, 1))\ntry:\n    print(round(1.7e308, -308))\nexcept OverflowError as e:\n    print(\"OverflowError: \" + str(e))",
+            "0.1 1.0 5e-324 2.675 100.0 -0.0\nOverflowError: rounded value too large to represent\n",
+        ),
+    ]
+    .iter()
+    .map(|(n, s, e)| (n.to_string(), s.to_string(), e.to_string()))
+    .collect();
+
+    let failures = run_rows("roundnd", &rows);
+    assert!(
+        failures.is_empty(),
+        "{} round-ndigits difference(s) vs CPython:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// F1-r2/F4-r2 (v0.2.4) recurrence guard — TYPED-VARIABLE / CALL-SHAPED
+/// compare + unary matrix (end-to-end).
+///
+/// The r1 CmpOperandKind gate was syntactic: it closed the LITERAL arms
+/// (`1 < 'a'`, `-'a'`) but kept bare JS ops for Num–Other / Other–Other /
+/// Str–Str, so a str-typed VARIABLE (`s = "a"; s < 5` → False), a None-typed
+/// variable (`x = None; x < 5` → True), call-shaped operands
+/// (`5 < str(6)` → coerced), and unary over typed variables (`-s` → NaN,
+/// `-x` → -0) all still leaked silent-wrong values — the exact
+/// impact-enumeration gap of the r2 review. The r2 gate keeps bare ONLY for
+/// provably-numeric operand pairs (recorded Num kinds / Float inference);
+/// everything else routes through pyLt/pyLe/pyGt/pyGe/pyNeg, whose guards
+/// raise CPython's exact TypeError. list-vs-tuple rows bind the runtime
+/// half (blocker 2) to the compiled lowering. CPython 3.12.7 goldens.
+#[test]
+fn test_cmp_unary_typed_variable_matrix_matches_cpython() {
+    const T: &str = "def t(f):\n    try:\n        print(f())\n    except Exception as e:\n        print(type(e).__name__ + \": \" + str(e))\n";
+    let rows: Vec<(String, String, String)> = vec![
+        (
+            "cmp_str_typed_variable".to_string(),
+            format!("s = \"a\"\n{T}t(lambda: s < 5)\nt(lambda: s <= 5)\nt(lambda: s > 5)\nt(lambda: s >= 5)\nt(lambda: 5 < s)"),
+            "TypeError: '<' not supported between instances of 'str' and 'int'\n\
+             TypeError: '<=' not supported between instances of 'str' and 'int'\n\
+             TypeError: '>' not supported between instances of 'str' and 'int'\n\
+             TypeError: '>=' not supported between instances of 'str' and 'int'\n\
+             TypeError: '<' not supported between instances of 'int' and 'str'\n"
+                .to_string(),
+        ),
+        (
+            "cmp_none_typed_variable".to_string(),
+            format!("x = None\n{T}t(lambda: x < 5)\nt(lambda: x >= 5)\nt(lambda: 5 > x)"),
+            "TypeError: '<' not supported between instances of 'NoneType' and 'int'\n\
+             TypeError: '>=' not supported between instances of 'NoneType' and 'int'\n\
+             TypeError: '>' not supported between instances of 'int' and 'NoneType'\n"
+                .to_string(),
+        ),
+        (
+            "cmp_call_shaped".to_string(),
+            format!("{T}t(lambda: 5 < str(6))\nt(lambda: str(6) <= 5)\ndef f():\n    return \"a\"\nt(lambda: f() > 1)"),
+            "TypeError: '<' not supported between instances of 'int' and 'str'\n\
+             TypeError: '<=' not supported between instances of 'str' and 'int'\n\
+             TypeError: '>' not supported between instances of 'str' and 'int'\n"
+                .to_string(),
+        ),
+        (
+            "cmp_param_and_reassign".to_string(),
+            format!("{T}def cmp(a, b):\n    return a < b\nt(lambda: cmp(1, 2))\nt(lambda: cmp(\"a\", 1))\nn = 5\nn = \"five\"\nt(lambda: n < 3)"),
+            "True\n\
+             TypeError: '<' not supported between instances of 'str' and 'int'\n\
+             TypeError: '<' not supported between instances of 'str' and 'int'\n"
+                .to_string(),
+        ),
+        (
+            "cmp_list_vs_tuple_compiled".to_string(),
+            format!("{T}t(lambda: [1] < (2,))\nt(lambda: (1,) <= [1])\nxs = [1]\nys = (2,)\nt(lambda: xs < ys)\nt(lambda: [1] < [2])\nt(lambda: (1,) < (2,))"),
+            "TypeError: '<' not supported between instances of 'list' and 'tuple'\n\
+             TypeError: '<=' not supported between instances of 'tuple' and 'list'\n\
+             TypeError: '<' not supported between instances of 'list' and 'tuple'\n\
+             True\nTrue\n"
+                .to_string(),
+        ),
+        (
+            "unary_typed_variable".to_string(),
+            format!("s = \"a\"\nx = None\n{T}t(lambda: -s)\nt(lambda: -x)\nt(lambda: +s)\nm = 3\nt(lambda: -m)\nz = 2.5\nt(lambda: -z)"),
+            "TypeError: bad operand type for unary -: 'str'\n\
+             TypeError: bad operand type for unary -: 'NoneType'\n\
+             TypeError: bad operand type for unary +: 'str'\n\
+             -3\n-2.5\n"
+                .to_string(),
+        ),
+        // preserved: numeric-typed variables, range loop vars, len(), str-str
+        // ordering, float mixing — the hot paths must still compute correctly
+        (
+            "cmp_numeric_preserved".to_string(),
+            "x = 0\nn = 10\nwhile x < n:\n    x = x + 1\nprint(x)\ntotal = 0\nfor i in range(6):\n    if i > 2:\n        total = total + i\nprint(total)\nxs = [3, 1, 2]\nprint(len(xs) > 2, x - 1 < n, 2.5 < 3, \"a\" < \"b\", \"b\" < \"a\")"
+                .to_string(),
+            "10\n12\nTrue True True True False\n".to_string(),
+        ),
+    ];
+
+    let failures = run_rows("cmpvar", &rows);
+    assert!(
+        failures.is_empty(),
+        "{} typed-variable compare/unary difference(s) vs CPython:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// F1-r2 shape guard: the bare-op HOT PATH is preserved for provably-numeric
+/// operands (no helper-call tax on numeric loops), and routed through the
+/// helper for typed/unknown operands. Asserts emitted-JS shape directly.
+#[test]
+fn test_cmp_bare_fast_path_shape_preserved() {
+    let src = "def hot(n: int):\n    x = 0\n    for i in range(n):\n        if i > 1000000:\n            x = x + 1\n    while x < n:\n        x = x + 1\n    return x\ns = \"a\"\ndef bad():\n    return s < 5\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen_inline(&module);
+    assert!(
+        js.contains("(i > 1000000)"),
+        "range loop var must keep the bare compare, got:\n{js}"
+    );
+    assert!(
+        js.contains("(x < n)"),
+        "Num-recorded variable vs int-annotated param must keep the bare compare"
+    );
+    assert!(
+        js.contains("pyLt(s, 5)"),
+        "str-typed variable compare must route through pyLt"
+    );
+}
+
+/// E7 sub-part 3 — SPECIALLY-LOWERED-BUILTIN shadow matrix, GENERATED from
+/// the checked manifest `pyths_codegen_js::SPECIALLY_LOWERED_BUILTINS`.
+///
+/// The F2 float matrix above pins the {print,str,repr,float,round,abs} float
+/// fast paths; THIS test closes the whole CLASS structurally, two ways:
+///
+///   1. STRUCTURAL manifest completeness (r2, scope narrowed in r3): the
+///      10 known fast-path sites route through
+///      `fast_path_builtin_unshadowed`, whose manifest assertion
+///      debug-panics on an unlisted name across the whole test suite (the
+///      `#[should_panic]` injection test below proves the panic fires); the
+///      source scan here additionally rejects the one known bypass shape —
+///      a SAME-LINE `is_declared_in_any_scope("<literal>")` gate — and any
+///      `fast_path_builtin_unshadowed("<literal>")` naming an unlisted
+///      builtin. HONEST SCOPE: the scan is lexical and same-line; a site
+///      hand-rolling a dynamic-name or multiline shadow check without the
+///      gate evades both guards — that residual belongs to emit.rs code
+///      review (the same accepted residual as delta4's `need_runtime`).
+///   2. MATRIX FROM THE MANIFEST: one shadowed-call differential row is
+///      generated PER manifest entry (function-scope rebinding + an
+///      unshadowed sibling where CPython permits one). A manifest entry
+///      without a row template panics — a name cannot be listed without
+///      being exercised. Goldens: live CPython 3.14 (probed 2026-08-27).
+#[test]
+fn test_specially_lowered_builtins_shadow_matrix() {
+    let manifest = pyths_codegen_js::SPECIALLY_LOWERED_BUILTINS;
+    let names: std::collections::HashSet<&str> = manifest.iter().map(|(n, _)| *n).collect();
+
+    // (1) source-level completeness. Two scans over emit.rs:
+    //   (a) NO raw `is_declared_in_any_scope("<literal>")` gate may remain —
+    //       a per-name fast path must route through the manifest-asserting
+    //       helper, never hand-pair the scope check with a name literal.
+    //       (Dynamic-name uses `is_declared_in_any_scope(name)` — generic
+    //       name resolution, star-imports, builtins-as-values — are not
+    //       per-name fast paths and are unaffected.)
+    //   (b) every `fast_path_builtin_unshadowed("<literal>")` must name a
+    //       manifest entry (the runtime debug_assert catches DYNAMIC names;
+    //       this catches literals without even running codegen).
+    let src = include_str!("../src/emit.rs");
+    let mut bypasses: Vec<String> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
+    for line in src.lines() {
+        let code = line.trim_start();
+        if code.starts_with("//") {
+            continue; // doc/comment mentions are not gates
+        }
+        for (pat, sink) in [
+            ("is_declared_in_any_scope(\"", &mut bypasses),
+            ("fast_path_builtin_unshadowed(\"", &mut missing),
+        ] {
+            let mut rest = code;
+            while let Some(i) = rest.find(pat) {
+                rest = &rest[i + pat.len()..];
+                if let Some(j) = rest.find('"') {
+                    let name = &rest[..j];
+                    if !name.is_empty() && (pat.starts_with("is_declared") || !names.contains(name))
+                    {
+                        sink.push(name.to_string());
+                    }
+                    rest = &rest[j..];
+                }
+            }
+        }
+    }
+    bypasses.sort();
+    bypasses.dedup();
+    assert!(
+        bypasses.is_empty(),
+        "hand-rolled `is_declared_in_any_scope(\"<name>\")` fast-path gate(s) \
+         in emit.rs bypass the manifest helper — route them through \
+         `fast_path_builtin_unshadowed` (E7 sub-part 3 r2): {bypasses:?}"
+    );
+    missing.sort();
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "fast_path_builtin_unshadowed gate(s) on name(s) missing from \
+         SPECIALLY_LOWERED_BUILTINS (add them + a matrix row): {missing:?}"
+    );
+
+    // (2) one differential row per manifest entry.
+    let mut rows: Vec<(String, String, String)> = Vec::new();
+    for (name, _trigger) in manifest {
+        let (prog, expected): (&str, &str) = match *name {
+            "print" => (
+                "def f():\n    print = lambda *a: \"shadow\"\n    return print(8.0)\nprint(f(), 8.0)",
+                "shadow 8.0\n",
+            ),
+            "str" => (
+                "def g():\n    str = lambda x: \"X\"\n    return str(1.5)\nprint(g(), str(1.5))",
+                "X 1.5\n",
+            ),
+            "repr" => (
+                "def h():\n    repr = lambda x: \"R\"\n    return repr(2.0)\nprint(h(), repr(2.0))",
+                "R 2.0\n",
+            ),
+            "float" => (
+                "def k():\n    float = lambda x: \"F\"\n    return float(3)\nprint(k(), float(3))",
+                "F 3.0\n",
+            ),
+            "round" => (
+                "def m():\n    round = lambda x, n: \"RD\"\n    return round(1.5, 1)\nprint(m(), round(1.5, 1))",
+                "RD 1.5\n",
+            ),
+            "abs" => (
+                "def n():\n    abs = lambda z: \"A\"\n    return abs(-2.5)\nprint(n(), abs(-2.5))",
+                "A 2.5\n",
+            ),
+            "len" => (
+                "def f():\n    len = lambda x: 1\n    return \"yes\" if len(\"abc\") < 2 else \"no\"\nprint(f(), \"yes\" if len(\"abc\") < 2 else \"no\")",
+                "yes no\n",
+            ),
+            "ord" => (
+                "def f():\n    ord = lambda c: 0\n    return \"lo\" if ord(\"a\") < 50 else \"hi\"\nprint(f(), \"lo\" if ord(\"a\") < 50 else \"hi\")",
+                "lo hi\n",
+            ),
+            "int" => (
+                "def f():\n    int = lambda s: 0\n    return \"lo\" if int(\"99\") < 50 else \"hi\"\nprint(f(), \"lo\" if int(\"99\") < 50 else \"hi\")",
+                "lo hi\n",
+            ),
+            "range" => (
+                "def f():\n    range = lambda n: [9]\n    return [i for i in range(3)]\nprint(f(), [i for i in range(3)])",
+                "[9] [0, 1, 2]\n",
+            ),
+            "breakpoint" => (
+                // no unshadowed sibling: a real breakpoint() would open pdb.
+                "def f():\n    breakpoint = lambda: \"bp\"\n    return breakpoint()\nprint(f())",
+                "bp\n",
+            ),
+            "__doc__" => (
+                "\"\"\"mod doc\"\"\"\ndef f():\n    __doc__ = \"local\"\n    return __doc__\nprint(f(), __doc__)",
+                "local mod doc\n",
+            ),
+            other => panic!(
+                "SPECIALLY_LOWERED_BUILTINS entry {other:?} has no shadow-matrix \
+                 row template — add one here (E7 sub-part 3: a special lowering \
+                 must ship with its shadow differential)"
+            ),
+        };
+        rows.push((
+            format!("slb_{name}"),
+            prog.to_string(),
+            expected.to_string(),
+        ));
+    }
+    assert_eq!(rows.len(), manifest.len(), "one row per manifest entry");
+
+    let failures = run_rows("slbshadow", &rows);
+    assert!(
+        failures.is_empty(),
+        "{} specially-lowered-builtin shadow difference(s) vs CPython:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// E7 sub-part 3 r2 — the INJECTION PROOF for the structural manifest gate:
+/// a fast-path site gating on a name that is not in
+/// `SPECIALLY_LOWERED_BUILTINS` must PANIC across the (debug-assertion)
+/// test suite. This is the reviewer-demanded evidence that "adding a new
+/// fast path without a manifest entry FAILS" is a property of the build,
+/// not a hope: `fast_path_builtin_unshadowed` calls exactly this assertion
+/// before consulting scopes.
+/// (debug-assertions only: CI's `cargo test --workspace` runs debug, where
+/// the assertion is live; a `--release` local run compiles the gate to a
+/// no-op, so the proof test is compiled out rather than reporting a false
+/// "panic did not occur".)
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "NOT in SPECIALLY_LOWERED_BUILTINS")]
+fn test_unlisted_fast_path_name_panics() {
+    pyths_codegen_js::assert_specially_lowered_manifest("new_fast");
 }

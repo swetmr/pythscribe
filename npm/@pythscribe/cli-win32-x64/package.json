@@ -1,6 +1,6 @@
 {
   "name": "@pythscribe/cli-win32-x64",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "The win32-x64 native binary for the pyths (PythScribe) compiler. Installed automatically as an optional dependency of `pyths`.",
   "repository": {
     "type": "git",

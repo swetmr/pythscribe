@@ -618,7 +618,7 @@ PythScribe routes the common silent-failure cases of raw JavaScript through Pyth
 | `d["missing"]` on a dict | `KeyError: 'missing'` | `Error [KeyError]: 'missing'` |
 | `t[5]` on a 3-tuple | `IndexError` | `Error [IndexError]: list index out of range` |
 | `s[100]` on a short string | `IndexError: string index out of range` | `Error [IndexError]: string index out of range` |
-| `a // 0`, `a % 0` | `ZeroDivisionError` | `Error [ZeroDivisionError]: integer division or modulo by zero` |
+| `a // 0`, `a % 0` | `ZeroDivisionError` | `Error [ZeroDivisionError]: division by zero` |
 | `assert False, "msg"` | `AssertionError: msg` | `Error [AssertionError]: msg` |
 
 Implementation: subscript reads (`a[i]`) on typed list/dict/tuple values AND untyped values route through the `pyGetItem` runtime helper, which does the bounds/key check and throws the Python-named error class (#83 extended this to untyped receivers so Map-backed dicts survive unannotated channels; non-plain-prototype objects — DOM wrappers, class instances — pass through natively, preserving interop). Subscript writes (`a[i] = x`) on dict-typed and untyped receivers route through `pySetItem` the same way; list-typed writes stay bare (hot path). Optional chaining (`a?.[i]`) stays bare regardless of type — wrapping would break the short-circuit semantics.

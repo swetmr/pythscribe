@@ -47,30 +47,16 @@ pub enum InlineSpec {
     CountList,
     PopList,
     // ---- string ----
-    Strip,
-    Lstrip,
-    Rstrip,
-    Zfill,
-    Capitalize,
-    /// `s.casefold()` → `s.toLowerCase()` (ASCII-equivalent; full Unicode
-    /// casefold is a separate spec; we approximate).
-    Casefold,
-    Isdigit,
+    // E3: Strip/Lstrip/Rstrip/Zfill/Capitalize/Casefold/Isdigit/Isalnum/
+    // Islower/Isupper inline specs were DELETED — their JS mirrors had
+    // drifted from the full CPython spec (ASCII-only classes, JS \s
+    // whitespace, no titlecase/casefold tables). Those methods now lower
+    // to the canonical runtime helpers (ONE copy; see method_table.rs).
     Isalpha,
-    Isalnum,
     /// `s.isascii()` → `[...s].every(c => c.charCodeAt(0) < 128)` —
     /// receiver once, but uses iterator. Simple receiver only.
     Isascii,
     Isspace,
-    Islower,
-    Isupper,
-    /// `s.removeprefix(p)` → `(s.startsWith(p) ? s.slice(p.length) : s)`
-    /// — receiver and arg referenced multiple times; simple receiver only,
-    /// arg must also be simple. We accept simple receiver and trust the
-    /// arg is cheap (it's almost always a string literal in practice).
-    Removeprefix,
-    /// `s.removesuffix(p)` → `(s.endsWith(p) ? s.slice(0, -p.length) : s)`.
-    Removesuffix,
     // ---- dict ----
     // DictKeys/DictValues/DictItems removed in #83: dict keys()/values()/
     // items() lower to shape-dispatching runtime helpers (Map-backed dicts
@@ -83,16 +69,7 @@ pub enum InlineSpec {
 
 impl InlineSpec {
     pub fn needs_simple_receiver(self) -> bool {
-        matches!(
-            self,
-            InlineSpec::ClearList
-                | InlineSpec::Capitalize
-                | InlineSpec::Islower
-                | InlineSpec::Isupper
-                | InlineSpec::Isascii
-                | InlineSpec::Removeprefix
-                | InlineSpec::Removesuffix
-        )
+        matches!(self, InlineSpec::ClearList | InlineSpec::Isascii)
     }
 }
 

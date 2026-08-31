@@ -1,0 +1,764 @@
+[
+ {
+  "id": "e3_capitalize_titlecase",
+  "expr": "'\u01c6ab'.capitalize()"
+ },
+ {
+  "id": "e3_capitalize_sharp_s",
+  "expr": "'\u00dfa'.capitalize()"
+ },
+ {
+  "id": "e3_casefold_full",
+  "expr": "'Stra\u00dfe FI\ufb01'.casefold()"
+ },
+ {
+  "id": "e3_casefold_micro",
+  "expr": "'\u00b5\u0130'.casefold()"
+ },
+ {
+  "id": "e3_center_odd",
+  "expr": "['ab'.center(5), 'ab'.center(7), 'abc'.center(6, '*')]"
+ },
+ {
+  "id": "e3_center_fillchar_err",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'ab'.center(5, 'xy'))"
+ },
+ {
+  "id": "e3_center_float_width",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'ab'.center(5.5))"
+ },
+ {
+  "id": "e3_count_full",
+  "expr": "['banana'.count('an'), 'banana'.count('an', 1), 'banana'.count('a', 1, 5), 'banana'.count(''), 'banana'.count('', 2, 4)]"
+ },
+ {
+  "id": "e3_encode_utf8",
+  "expr": "'h\u00e9\u00df\u4e2d'.encode()"
+ },
+ {
+  "id": "e3_encode_latin1",
+  "expr": "'h\u00e9'.encode('latin-1')"
+ },
+ {
+  "id": "e3_encode_ascii_ignore",
+  "expr": "'h\u00e9x'.encode('ascii', 'ignore')"
+ },
+ {
+  "id": "e3_encode_ascii_replace",
+  "expr": "'h\u00e9x'.encode('ascii', errors='replace')"
+ },
+ {
+  "id": "e3_encode_ascii_strict",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'h\u00e9'.encode('ascii'))"
+ },
+ {
+  "id": "e3_encode_unknown_codec",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'x'.encode('nope'))"
+ },
+ {
+  "id": "e3_endswith_tuple_bounds",
+  "expr": "['hello'.endswith(('x', 'lo')), 'hello'.endswith('ll', 1, 4), 'hello'.endswith('he', -5, -3)]"
+ },
+ {
+  "id": "e3_expandtabs_full",
+  "expr": "['a\\tb'.expandtabs(), 'a\\tb'.expandtabs(4), 'a\\tb'.expandtabs(tabsize=1), 'a\\tb\\nc\\td'.expandtabs(4), 'a\\tb'.expandtabs(0)]"
+ },
+ {
+  "id": "e3_find_bounds",
+  "expr": "['banana'.find('na'), 'banana'.find('na', 3), 'banana'.find('na', -3), 'banana'.find('z'), 'banana'.find('a', 2, 4)]"
+ },
+ {
+  "id": "e3_index_missing",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'abc'.index('z'))"
+ },
+ {
+  "id": "e3_isalnum_unicode",
+  "expr": "['ab12'.isalnum(), '\u5341a'.isalnum(), 'ab '.isalnum(), ''.isalnum()]"
+ },
+ {
+  "id": "e3_isalpha_unicode",
+  "expr": "['a\u00f1'.isalpha(), 'ab1'.isalpha(), '\u5341'.isalpha(), ''.isalpha()]"
+ },
+ {
+  "id": "e3_isascii_cases",
+  "expr": "[''.isascii(), 'abc'.isascii(), '\u00e9'.isascii()]"
+ },
+ {
+  "id": "e3_isdecimal_trio",
+  "expr": "['123'.isdecimal(), '\u00b2'.isdecimal(), '\u0663'.isdecimal(), ''.isdecimal()]"
+ },
+ {
+  "id": "e3_isdigit_trio",
+  "expr": "['123'.isdigit(), '\u00b2'.isdigit(), '\u00bd'.isdigit(), ''.isdigit()]"
+ },
+ {
+  "id": "e3_isnumeric_trio",
+  "expr": "['123'.isnumeric(), '\u00b2'.isnumeric(), '\u00bd'.isnumeric(), '\u5341'.isnumeric(), 'x'.isnumeric()]"
+ },
+ {
+  "id": "e3_isidentifier",
+  "expr": "['a_b1'.isidentifier(), '1ab'.isidentifier(), 'if'.isidentifier(), '\u00f1x'.isidentifier(), ''.isidentifier()]"
+ },
+ {
+  "id": "e3_islower_unicode",
+  "expr": "['ab1'.islower(), 'aB'.islower(), '\u02b0a'.islower(), '123'.islower(), '\u01c5'.islower()]"
+ },
+ {
+  "id": "e3_isupper_unicode",
+  "expr": "['AB1'.isupper(), 'Ab'.isupper(), '\u2160'.isupper(), '123'.isupper(), '\u01c5'.isupper()]"
+ },
+ {
+  "id": "e3_isprintable",
+  "expr": "['ab c'.isprintable(), 'a\\nb'.isprintable(), 'a\u00a0b'.isprintable(), 'a\u200bb'.isprintable(), ''.isprintable()]"
+ },
+ {
+  "id": "e3_isspace_full",
+  "expr": "[' \\t\\n'.isspace(), '\u00a0'.isspace(), '\\x1c\\x1d'.isspace(), '\u200b'.isspace(), ''.isspace(), '\ufeff'.isspace()]"
+ },
+ {
+  "id": "e3_istitle_cases",
+  "expr": "[\"It'S Ok\".istitle(), 'IT'.istitle(), 'A1 B2'.istitle(), 'a'.istitle(), ''.istitle()]"
+ },
+ {
+  "id": "e3_join_gen",
+  "expr": "','.join(str(i) for i in range(3))"
+ },
+ {
+  "id": "e3_join_nonstr",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: ','.join(['a', 1]))"
+ },
+ {
+  "id": "e3_just_family",
+  "expr": "['ab'.ljust(5, '*'), 'ab'.rjust(5, '*'), 'ab'.ljust(1), 'ab'.rjust(1)]"
+ },
+ {
+  "id": "e3_lower_upper_unicode",
+  "expr": "['AbC'.lower(), '\u00df'.upper(), '\u0130'.lower() == 'i\u0307', 'a\u00df'.upper()]"
+ },
+ {
+  "id": "e3_strip_family_pyws",
+  "expr": "[' \u00a0ab\\t '.strip(), '\\x1cx\\x1c'.strip(), '\ufeffx'.strip(), 'xxabxx'.strip('x'), 'xab'.lstrip('x'), 'abx'.rstrip('x'), '\ud835\udd38a\ud835\udd38'.strip('\ud835\udd38')]"
+ },
+ {
+  "id": "e3_strip_badarg",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'ab'.strip(5))"
+ },
+ {
+  "id": "e3_maketrans_translate",
+  "expr": "'abcd'.translate(str.maketrans({'a': 'A', 'b': None, 'c': 120}))"
+ },
+ {
+  "id": "e3_maketrans_two_arg",
+  "expr": "'abc'.translate(str.maketrans('ab', 'xy'))"
+ },
+ {
+  "id": "e3_maketrans_three_arg",
+  "expr": "'abcd'.translate(str.maketrans('a', 'A', 'bd'))"
+ },
+ {
+  "id": "e3_maketrans_unequal",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: str.maketrans('ab', 'xyz'))"
+ },
+ {
+  "id": "e3_partition_family",
+  "expr": "['a-b-c'.partition('-'), 'abc'.partition('-'), 'a-b-c'.rpartition('-'), 'abc'.rpartition('-')]"
+ },
+ {
+  "id": "e3_removeaffix",
+  "expr": "['TestHook'.removeprefix('Test'), 'TestHook'.removeprefix('Xest'), 'MiscTests'.removesuffix('Tests'), 'MiscTests'.removesuffix(''), ('Te' + 'stHook').removeprefix('Test')]"
+ },
+ {
+  "id": "e3_replace_full",
+  "expr": "['banana'.replace('an', 'AN'), 'banana'.replace('an', 'AN', 1), 'banana'.replace('', '-'), 'ab'.replace('', '-', 2), 'ab'.replace('x', 'y', 0)]"
+ },
+ {
+  "id": "e3_rfind_rindex_astral",
+  "expr": "['\ud835\udd38x\ud835\udd38x'.rfind('x'), '\ud835\udd38x'.rindex('x'), 'banana'.rfind('na', 0, 4)]"
+ },
+ {
+  "id": "e3_split_full",
+  "expr": "['a b  c'.split(), '  '.split(), 'a-b-c'.split('-', 1), 'a-b-c'.split(sep='-', maxsplit=1), 'a\\x1cb'.split(), 'a b c'.split(maxsplit=1)]"
+ },
+ {
+  "id": "e3_split_empty_sep",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'abc'.split(''))"
+ },
+ {
+  "id": "e3_split_bad_sep",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'abc'.split(5))"
+ },
+ {
+  "id": "e3_rsplit_full",
+  "expr": "['a b  c'.rsplit(), 'a-b-c'.rsplit('-', 1), 'a b c'.rsplit(maxsplit=1), 'a-b-c'.rsplit(sep='-', maxsplit=1)]"
+ },
+ {
+  "id": "e3_splitlines_full",
+  "expr": "['a\\nb\\rc\\r\\nd'.splitlines(), 'a\\vb\\fc\\x1cd\\x1de\\x1ef'.splitlines(), 'a\\u2028b\\u2029c\\x85d'.splitlines(), 'a\\nb'.splitlines(keepends=True), ''.splitlines()]"
+ },
+ {
+  "id": "e3_startswith_tuple_bounds",
+  "expr": "['hello'.startswith(('x', 'he')), 'hello'.startswith('ll', 2), 'hello'.startswith('he', -5)]"
+ },
+ {
+  "id": "e3_swapcase",
+  "expr": "'AbC\u00df\u00b5'.swapcase()"
+ },
+ {
+  "id": "e3_title_unicode",
+  "expr": "[\"it's ok\".title(), '\u01c6ab \u00dfx'.title(), '2x2 aa'.title()]"
+ },
+ {
+  "id": "e3_zfill_full",
+  "expr": "['-5'.zfill(6), '+5'.zfill(6), '42'.zfill(2), 'ab'.zfill(4), '\ud835\udd38'.zfill(3)]"
+ },
+ {
+  "id": "e3_zfill_badwidth",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '5'.zfill(2.5))"
+ },
+ {
+  "id": "e3_format_basic",
+  "expr": "'{} {a} {0!r}'.format(1, a=2) if False else '{}-{n}'.format(5, n='x')"
+ },
+ {
+  "id": "e3_format_accessors",
+  "expr": "'{0[1]} {1.imag}'.format([10, 20], 3j)"
+ },
+ {
+  "id": "e3_format_nested_spec",
+  "expr": "'{:{}}'.format(7, '04d')"
+ },
+ {
+  "id": "e3_format_nested_named",
+  "expr": "'{v:{w}.{p}f}'.format(v=3.14159, w=8, p=2)"
+ },
+ {
+  "id": "e3_format_auto_then_manual",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '{} {0}'.format(1, 2))"
+ },
+ {
+  "id": "e3_format_manual_then_auto",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '{0} {}'.format(1, 2))"
+ },
+ {
+  "id": "e3_format_missing_key",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '{missing}'.format(x=1))"
+ },
+ {
+  "id": "e3_format_index_range",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '{2}'.format(0, 1))"
+ },
+ {
+  "id": "e3_format_single_brace",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a{'.format())"
+ },
+ {
+  "id": "e3_format_bad_conversion",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '{0!q}'.format(1))"
+ },
+ {
+  "id": "e3_format_builtin",
+  "expr": "[format(255, '#06x'), format(3.14159, '.2f'), format('x', '<3'), format(True), format(None)]"
+ },
+ {
+  "id": "e3_format_builtin_badspec",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format(3.5, 'd'))"
+ },
+ {
+  "id": "e3_format_map_basic",
+  "expr": "'{a} {b}'.format_map({'a': 1, 'b': 2})"
+ },
+ {
+  "id": "e3_format_map_missing",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '{q}'.format_map({'a': 1}))"
+ },
+ {
+  "id": "e3_fstring_conversions",
+  "expr": "f'{3.0!r} {\"x\"!s} {\"\u00e9\"!a}'"
+ },
+ {
+  "id": "e3_fstring_debug_eq",
+  "expr": "(lambda x: f'{x=}')(42)"
+ },
+ {
+  "id": "e3_fstring_debug_eq_spec",
+  "expr": "(lambda x: f'{x=:.2f}')(2.5)"
+ },
+ {
+  "id": "e3_fstring_debug_eq_str",
+  "expr": "(lambda s: f'{s = }')('hi')"
+ },
+ {
+  "id": "e3_fstring_nested_spec",
+  "expr": "(lambda w, p: f'{3.14159:{w}.{p}f}')(9, 3)"
+ },
+ {
+  "id": "e3_fstring_dynamic_fill",
+  "expr": "(lambda c: f'{7:{c}>4}')('*')"
+ },
+ {
+  "id": "e3_fstring_invalid_spec",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format(5, 'foo'))"
+ },
+ {
+  "id": "e3_fstring_braces",
+  "expr": "f'{{literal}} {1 + 1}'"
+ },
+ {
+  "id": "e3_fstring_bool_none",
+  "expr": "f'{True} {None} {[1, 2]}'"
+ },
+ {
+  "id": "e3_fstring_z_flag",
+  "expr": "f'{-0.0001:z.1f} {-0.5:z.0f}'"
+ },
+ {
+  "id": "e3_fstring_percent_type",
+  "expr": "f'{0.25:.1%} {1.5:08.2%}'"
+ },
+ {
+  "id": "e3_fstring_grouping_zero",
+  "expr": "f'{1234:011,} {1234567:#016_x}'"
+ },
+ {
+  "id": "e3_mod_basic",
+  "expr": "['%s|%r|%d' % ('a', 'a', 3), '%05.1f' % 2.5, '%x %X %o' % (255, 255, 8), '%#x %#o' % (255, 8)]"
+ },
+ {
+  "id": "e3_mod_e_g",
+  "expr": "['%e' % 12345.678, '%.2e' % 12345.678, '%g' % 0.00001234, '%G' % 1e20]"
+ },
+ {
+  "id": "e3_mod_c",
+  "expr": "['%c' % 65, '%c' % 'x', '%c%c' % (0x1F600, 97)]"
+ },
+ {
+  "id": "e3_mod_mapping",
+  "expr": "'%(a)s=%(b)03d' % {'a': 'v', 'b': 7}"
+ },
+ {
+  "id": "e3_mod_star",
+  "expr": "'%*d|%-*d|%.*f' % (5, 42, 5, 42, 2, 3.14159)"
+ },
+ {
+  "id": "e3_mod_single_dict",
+  "expr": "'%s' % {'a': 1}"
+ },
+ {
+  "id": "e3_mod_list_single",
+  "expr": "'%s' % [1, 2]"
+ },
+ {
+  "id": "e3_mod_percent_literal",
+  "expr": "'100%% sure' % ()"
+ },
+ {
+  "id": "e3_mod_flags",
+  "expr": "['%+d % d' % (5, 5), '%-6dX' % 42, '%06.2f' % 3.14159]"
+ },
+ {
+  "id": "e3_mod_float_int",
+  "expr": "'%d' % 3.7"
+ },
+ {
+  "id": "e3_mod_not_enough",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '%s %s' % 'a')"
+ },
+ {
+  "id": "e3_mod_too_many",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '%s' % ('a', 'b'))"
+ },
+ {
+  "id": "e3_mod_int_required",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '%x' % 3.5)"
+ },
+ {
+  "id": "e3_mod_real_required",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '%d' % 'x')"
+ },
+ {
+  "id": "e3_mod_unsupported_char",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '%y' % 5)"
+ },
+ {
+  "id": "e3_mod_c_overflow",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '%c' % 1114112)"
+ },
+ {
+  "id": "e3_mod_bigint",
+  "expr": "'%d %x' % (2**64 + 1, 2**64)"
+ },
+ {
+  "id": "e3_repr_str_quotes",
+  "expr": "[repr(\"a'b\"), repr('a\"b'), repr('a\\'b\"c')]"
+ },
+ {
+  "id": "e3_repr_str_escapes",
+  "expr": "repr('a\\tb\\nc\\\\d\\x07\\x1b')"
+ },
+ {
+  "id": "e3_repr_nonprintable",
+  "expr": "repr('a\u00a0b\u200bc\u00add\u3000e')"
+ },
+ {
+  "id": "e3_repr_astral_escape",
+  "expr": "repr('\ud835\udd38\udb40\udc01')"
+ },
+ {
+  "id": "e3_repr_float_family",
+  "expr": "[repr(8.0), repr(-0.0), repr(0.1), repr(1e16), repr(1e17), repr(5e-07), repr(float('inf')), repr(float('nan'))]"
+ },
+ {
+  "id": "e3_repr_containers",
+  "expr": "repr(([1, 'a'], (1,), (1, 2), {1: 'x'}, {'\u00e9'}, set()))"
+ },
+ {
+  "id": "e3_repr_selfref",
+  "expr": "(lambda xs: (xs.append(xs), repr(xs))[1])([1, 2])"
+ },
+ {
+  "id": "e3_repr_selfref_dict",
+  "_setup": "d = {}\nd['k'] = d",
+  "expr": "repr(d)"
+ },
+ {
+  "id": "e3_repr_bytes",
+  "expr": "[repr(b'ab\\x00\\xff'), repr(bytearray(b'x')), str(b'ab')]"
+ },
+ {
+  "id": "e3_repr_exception_obj",
+  "expr": "_exrepr()",
+  "_setup": "def _exrepr():\n    try:\n        raise ValueError('boom')\n    except ValueError as e:\n        return repr(e)"
+ },
+ {
+  "id": "e3_ascii_builtin",
+  "expr": "[ascii('h\u00e9\ud835\udd38'), ascii(['\u00e9']), ascii('abc')]"
+ },
+ {
+  "id": "e3_str_of_values",
+  "expr": "[str(True), str(None), str(3.0), str([1.0, 'x']), str((1,)), str({'a': b'b'})]"
+ },
+ {
+  "id": "e3_chained_conversion_spec",
+  "expr": "f'{\"caf\u00e9\"!r:>10}'"
+ },
+ {
+  "id": "e3_repr_conversion_numeric_spec",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format('x', '=5'))"
+ },
+ {
+  "id": "e3_print_sep_end",
+  "_setup": "print(1, 2.0, sep='-', end='|')\nprint('a', 'b', sep='', end='|')",
+  "expr": "0"
+ },
+ {
+  "id": "e3_print_sep_none",
+  "_setup": "print(1, 2, sep=None, end='|')",
+  "expr": "0"
+ },
+ {
+  "id": "e3_print_empty_end",
+  "_setup": "print('x', end='')\nprint('y', end='|')",
+  "expr": "0"
+ },
+ {
+  "id": "e3_print_bad_sep",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: print(1, 2, sep=5))"
+ },
+ {
+  "id": "e3_dynamic_spec_full",
+  "expr": "[format(255, ',d'), format(-1552, '#.0f'), format(1234567, '_'), format(0.0001, 'g'), format(1e21, 'g')]"
+ },
+ {
+  "id": "e3_dynamic_spec_c",
+  "expr": "[format(97, 'c'), format(128512, '5c')]"
+ },
+ {
+  "id": "e3_dynamic_missing_precision",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format(5, '.'))"
+ },
+ {
+  "id": "e3_dynamic_both_groupings",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format(5, ',_'))"
+ },
+ {
+  "id": "e3_dynamic_unknown_single",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format(5, 'q'))"
+ },
+ {
+  "id": "e3_dynamic_invalid_multi",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format(5, 'qq'))"
+ },
+ {
+  "id": "e3_dynamic_obj_family",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format([1], '>8'))"
+ },
+ {
+  "id": "e3_format_obj_empty",
+  "expr": "[format([1, 2], ''), format(None)]"
+ },
+ {
+  "id": "e3r2_frac_grouping",
+  "expr": "[format(123456789.123456789, ',.9_f'), format(2.0, '.6,f'), format(0.5, '.3_%'), format(1234.5678, '.7,e'), format(1234.5678, '.,'), format(5, '.,d'), format('ab', '.3,s')]"
+ },
+ {
+  "id": "e3r2_frac_double_diff",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format(5, '.3,_f'))"
+ },
+ {
+  "id": "e3r2_frac_double_same",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: format(5, '.3,,f'))"
+ },
+ {
+  "id": "e3r2_find_float_bound",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'abc'.find('a', 1.5))"
+ },
+ {
+  "id": "e3r2_count_str_bound",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'abc'.count('a', 'x'))"
+ },
+ {
+  "id": "e3r2_startswith_list_bound",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'abc'.startswith('a', []))"
+ },
+ {
+  "id": "e3r2_find_bool_none_bounds",
+  "expr": "['abc'.find('a', True, None), 'abcabc'.count('a', False, 6), 'abc'.endswith('c', None, None)]"
+ },
+ {
+  "id": "e3r2_split_float_maxsplit",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a-b'.split('-', 1.5))"
+ },
+ {
+  "id": "e3r2_rsplit_float_maxsplit",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a b'.rsplit(None, 2.5))"
+ },
+ {
+  "id": "e3r2_replace_float_count",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'ab'.replace('a', 'b', 1.5))"
+ },
+ {
+  "id": "e3r2_replace_arg1_type",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'ab'.replace(1, 'b'))"
+ },
+ {
+  "id": "e3r2_replace_arg2_type",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'ab'.replace('a', 2))"
+ },
+ {
+  "id": "e3r2_replace_bool_count",
+  "expr": "'aaa'.replace('a', 'b', True)"
+ },
+ {
+  "id": "e3r2_removeprefix_type",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'abc'.removeprefix(1))"
+ },
+ {
+  "id": "e3r2_removesuffix_type",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'abc'.removesuffix(b'c'))"
+ },
+ {
+  "id": "e3r2_isidentifier_xid",
+  "expr": "['a\u00f1_1'.isidentifier(), '\u2118'.isidentifier(), '1a'.isidentifier()]"
+ },
+ {
+  "id": "e3r2_swapcase_titlecase",
+  "expr": "'\u01c5b A\u1f88'.swapcase()"
+ },
+ {
+  "id": "e3r2_encode_none_encoding",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a'.encode(None))"
+ },
+ {
+  "id": "e3r2_encode_bogus_handler",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '\u00e9'.encode('ascii', 'bogus'))"
+ },
+ {
+  "id": "e3r2_encode_bogus_unused",
+  "expr": "'a'.encode('ascii', 'bogus')"
+ },
+ {
+  "id": "e3r2_encode_run_span",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '\u00e9\u00df'.encode('ascii'))"
+ },
+ {
+  "id": "e3r2_encode_mid_run",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a\u00e9\u00dfb'.encode('ascii'))"
+ },
+ {
+  "id": "e3r2_translate_bad_entry",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a'.translate({97: []}))"
+ },
+ {
+  "id": "e3r2_translate_range",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: 'a'.translate({97: 1114112}))"
+ },
+ {
+  "id": "e3r2_translate_ok_mixed",
+  "expr": "'abc'.translate({97: 120, 98: None, 99: 'ZZ'})"
+ },
+ {
+  "id": "e3r2_mod_c_bool",
+  "expr": "'%c' % True"
+ },
+ {
+  "id": "e3r2_mod_d_inf",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '%d' % float('inf'))"
+ },
+ {
+  "id": "e3r2_mod_d_nan",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: '%d' % float('nan'))"
+ },
+ {
+  "id": "e3r2_mod_precision_int",
+  "expr": "['%5.3d' % 7, '%#08x' % 255, '%+05d' % 42]"
+ },
+ {
+  "id": "e3r3_find_badindex_result",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)\nclass _BadI:\n    def __index__(self):\n        return '1'",
+  "expr": "[_probe(lambda: 'abc'.find('a', _BadI())), _probe(lambda: 'abc'.startswith('a', _BadI())), _probe(lambda: 'abc'.count('a', _BadI()))]"
+ },
+ {
+  "id": "e3r3_find_goodindex",
+  "_setup": "class _I1:\n    def __index__(self):\n        return 1",
+  "expr": "['hello'.find('l', _I1()), 'hello'.count('l', _I1()), 'hello'.startswith('e', _I1())]"
+ },
+ {
+  "id": "e3r3_count_arg_taxonomy",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "[_probe(lambda: 'abc'.count(1)), _probe(lambda: 'abc'.count(None))]"
+ },
+ {
+  "id": "e3r3_count_lone_surrogate",
+  "expr": "[('a' + chr(0x1F600) + 'b').count(chr(0xD83D)), ('a' + chr(0xD83D) + 'b').count(chr(0xD83D)), ('a' + chr(0x1F600) + chr(0x1F600)).count(chr(0x1F600))]"
+ },
+ {
+  "id": "e3r3_find_arg_msg_314",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "[_probe(lambda: 'abc'.find(1)), _probe(lambda: 'abc'.index(1)), _probe(lambda: 'abc'.rindex(1))]"
+ },
+ {
+  "id": "e3r3_startswith_taxonomy",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "[_probe(lambda: 'abc'.startswith(['a'])), _probe(lambda: 'abc'.startswith(1)), _probe(lambda: 'abc'.startswith(('x', 1))), 'abc'.startswith(('a', 1)), _probe(lambda: 'abc'.endswith(('x', 1))), _probe(lambda: 'abc'.endswith(['c']))]"
+ },
+ {
+  "id": "e3r3_split_ws_maxsplit_remainder",
+  "expr": "['  a b  '.split(None, 0), '  a b  '.rsplit(None, 0), '  a b  c  '.split(None, 1), '  a b  c  '.rsplit(None, 1)]"
+ },
+ {
+  "id": "e3r3_split_index_maxsplit",
+  "_setup": "class _I1:\n    def __index__(self):\n        return 1",
+  "expr": "['a b c'.split(None, _I1()), 'a b c'.rsplit(None, _I1()), 'a-b-c'.split('-', _I1()), 'aaa'.replace('a', 'b', _I1())]"
+ },
+ {
+  "id": "e3r3_split_badindex_maxsplit",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)\nclass _BadI:\n    def __index__(self):\n        return '1'",
+  "expr": "_probe(lambda: 'a b'.split(None, _BadI()))"
+ },
+ {
+  "id": "e3r3_translate_taxonomy",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "[_probe(lambda: 'a'.translate(None)), ''.translate(None), _probe(lambda: 'a'.translate(0)), 'a'.translate({97: True}), 'abc'.translate('XYZ'), chr(1).translate(['X', 'q'])]"
+ },
+ {
+  "id": "e3r3_translate_getitem",
+  "_setup": "class _Tbl:\n    def __getitem__(self, k):\n        if k == 97:\n            return 'Z'\n        raise LookupError(k)",
+  "expr": "'ab'.translate(_Tbl())"
+ },
+ {
+  "id": "e3r3_encode_surrogate_reason",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "[_probe(lambda: chr(0xD800).encode('ascii')), _probe(lambda: chr(0xD800).encode('latin-1')), _probe(lambda: chr(0xD800).encode('utf-8'))]"
+ },
+ {
+  "id": "e3r3_printf_zero_flag_precision",
+  "expr": "['%08.3d' % 7, '%08.3d' % -7, '%#08.3x' % 255, '%#8.3x' % 255, '%+08.3d' % 7, '%#08.3o' % 7, '%.5d' % -7, '%-8.3d' % 7]"
+ },
+ {
+  "id": "e3r3_printf_int_protocols",
+  "_setup": "class _Ix:\n    def __index__(self):\n        return 15\nclass _In:\n    def __int__(self):\n        return 42\nclass _Ic:\n    def __index__(self):\n        return 65",
+  "expr": "['%x' % _Ix(), '%d' % _In(), '%d' % _Ix(), '%c' % _Ic()]"
+ },
+ {
+  "id": "e3r3_printf_int_taxonomy",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "[_probe(lambda: '%x' % 1.5), _probe(lambda: '%d' % 's'), _probe(lambda: '%x' % None)]"
+ },
+ {
+  "id": "e3r3_printf_c_range",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "[_probe(lambda: '%c' % (2**100)), _probe(lambda: '%c' % (-1)), _probe(lambda: '%c' % 0x110000), '%c' % True]"
+ },
+ {
+  "id": "e3r3_printf_d_huge_float",
+  "expr": "'%d' % 1e100"
+ },
+ {
+  "id": "e3r3_fmt_width_toobig_static",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "_probe(lambda: f'{1:999999999999999999999d}')"
+ },
+ {
+  "id": "e3r3_fmt_width_toobig_dynamic",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "[_probe(lambda: format(1, '999999999999999999999d')), _probe(lambda: format(1.5, '.999999999999999999999f')), _probe(lambda: format(1, '9223372036854775808d'))]"
+ },
+ {
+  "id": "e3r3_printf_width_toobig",
+  "_setup": "def _probe(f):\n    try:\n        return repr(f())\n    except BaseException as e:\n        return type(e).__name__ + ': ' + str(e)",
+  "expr": "[_probe(lambda: '%999999999999999999999d' % 1), _probe(lambda: '%.999999999999999999999d' % 1)]"
+ }
+]

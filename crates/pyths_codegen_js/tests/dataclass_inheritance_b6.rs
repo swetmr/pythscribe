@@ -170,10 +170,17 @@ b = B(7)\nprint(b.x, b.y)\n";
 #[test]
 fn plain_dataclass_no_base_unchanged() {
     // No-base dataclass: no super call at all (regression guard).
+    // E3: scan only the USER portion — the extracted canonical runtime
+    // legitimately contains super() (exception-class constructors), so the
+    // assertion splits at the runtime end marker.
     let js =
         compile_inline("from dataclasses import dataclass\n@dataclass\nclass P:\n    x: int\n");
+    let user = js
+        .split("// --- End Runtime ---")
+        .last()
+        .expect("runtime end marker present");
     assert!(
-        !js.contains("super("),
-        "a base-less dataclass must not emit any super call:\n{js}"
+        !user.contains("super("),
+        "a base-less dataclass must not emit any super call:\n{user}"
     );
 }

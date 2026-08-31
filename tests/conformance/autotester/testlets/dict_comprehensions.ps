@@ -1,0 +1,13 @@
+# Ported from Transcrypt dict_comprehensions/__init__.py (Apache-2.0). Edits:
+# - stripped Transcrypt import: 'from org.transcrypt.stubs.browser import __pragma__'
+# (AutoTester shim is inlined by the runner at execution time.)
+
+
+__pragma__ ('iconv')    # Convert dict to key list without using keys () method
+
+def run (autoTester):
+    original = {'Isaac': 'Newton', 'Albert': 'Einstein', 'Paul': 'Dirac'}
+    autoTester.check (original)
+
+    inverted = {original [key]: key for key in original}
+    autoTester.check (inverted)
