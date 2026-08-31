@@ -61,6 +61,19 @@ jobs:
         # FAILS (not skips) if this install is missing.
         run: npm ci --prefix crates/pyths_cli/tests/ts-toolchain
 
+      - uses: actions/setup-python@v5
+        with:
+          # CPython differential ORACLE for `cargo test --workspace`.
+          # crates/pyths_codegen_js/tests/str_method_matrix.rs (E3 r3) runs the
+          # str-method INLINE≡RUNTIME parity matrix against a LIVE CPython 3.14
+          # oracle and, by anti-vacuity design, has NO skip switch — a missing
+          # oracle FAILS the test (a gate that passes on a skipped check is not a
+          # gate). Provision the SAME pinned 3.14 the differential job uses so the
+          # test job no longer relies on ambient python (ubuntu-latest ships 3.12,
+          # which the test correctly rejects; macOS happened to ship 3.14). Bump
+          # deliberately + regenerate — see docs/python-oracle-policy.md.
+          python-version: '3.14'
+
       - name: Test (Rust workspace, all crates)
         run: cargo test --workspace
 
