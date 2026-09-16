@@ -69,7 +69,11 @@ web-bundled = ["nodejs-wheel-binaries>=22.12,<23"]
 test = ["pytest>=8", "pytest-timeout>=2", "hypothesis>=6", "playwright>=1.50", "wasmtime>=48", "gradio>=6,<7",
         "pyyaml>=6",  # M4 workflow-lint (tests/pythscribe/test_wheel_m4_acceptance.py parses release.yml / publish-pypi.yml)
         # M1 (examples/gradio-image-preprocess): the reference resize, the notebook and its executor
-        "pillow>=10", "numpy>=1.26", "matplotlib>=3.8", "nbformat>=5", "nbclient>=0.10", "ipykernel>=6"]
+        "pillow>=10", "numpy>=1.26", "matplotlib>=3.8", "nbformat>=5", "nbclient>=0.10", "ipykernel>=6",
+        # The pip test suite gate-imports these as REQUIRED prerequisites (a skip is a FAILURE under
+        # PYTHSCRIBE_REQUIRE_ORACLE): streamlit for the callback/E2E adapter tests, numba for the M4
+        # Livermore/admission perf-comparison. Both have cp314 wheels, so the CI (py 3.14) provisions them.
+        "streamlit>=1.37", "numba>=0.60"]
 
 [tool.setuptools]
 packages = [
