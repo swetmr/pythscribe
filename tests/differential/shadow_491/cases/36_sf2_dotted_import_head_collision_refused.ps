@@ -1,0 +1,23 @@
+# EXPECT: loud
+# #491 SF2: the ONE shape the captured-`global` rename pre-pass cannot express -- a
+# function-local `import a.b` with no alias whose head `a` is declared `global a` by a
+# nested scope -- is REFUSED at compile time (a loud diagnostic; `pyths compile` fails).
+# Unrenamed it emits `let os = {}` in `outer` and the nested `os = 7` lands on that package
+# object (silent wrong value: CPython's `outer()` returns 'module' and the module `os`
+# becomes 7). A refusal is acceptable; a silent miscompile is not. NOTE: at HEAD this
+# shape also fails to LINK under node ("os/path" is not resolvable), so this case is
+# loud either way -- the load-bearing control is the Rust diagnostic test
+# (`captured_global_rename::tests::dotted_import_head_collision_is_refused` +
+# `behavioral_differential::test_dotted_import_head_collision_is_refused_loudly`).
+def outer():
+    import os.path
+
+    def inner():
+        global os
+        os = 7
+    inner()
+    return type(os).__name__
+
+
+print(outer())
+print(os)

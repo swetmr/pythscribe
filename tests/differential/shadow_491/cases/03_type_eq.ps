@@ -1,0 +1,19 @@
+# repro 3: `type(x) == int` with a user `def int` compares against the user fn.
+# Module scope AND a function body (call-time). The forward-ref (before the def)
+# is still the builtin type.
+print(type(3) == int)
+
+
+def is_int(x: int) -> bool:
+    return type(x) == int
+
+
+print(is_int(3))
+
+
+def int(x: int) -> int:
+    return 99
+
+
+print(type(3) == int)
+print(is_int(3))

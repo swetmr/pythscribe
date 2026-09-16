@@ -1,0 +1,16 @@
+# #491 BLOCKER-1: a `global abs` WRITE inside a class METHOD rebinds the MODULE cell
+# (not a method-local `let abs`) — `peek` resolves `abs` at call time, so it demotes.
+# DEMOTE: peek
+def peek() -> int:
+    return abs(-9)
+
+
+class C:
+    def m(self):
+        global abs
+        abs = 7
+
+
+print(peek())
+C().m()
+print(abs)

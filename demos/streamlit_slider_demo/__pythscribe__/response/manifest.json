@@ -1,0 +1,35 @@
+{
+  "compiler": {
+    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "name": "pyths",
+    "version": "0.2.5"
+  },
+  "entry": "response.js",
+  "files": {
+    "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
+    "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
+    "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
+    "pyths-runtime/react.js": "79c85d9599d3a6b7c813d83d538ab225ac0fd8776857f7fdba1512096099df47",
+    "pyths-runtime/runtime.js": "21a474e1f6aa2f959a2101a46be393190a923576fb67e3e78edba39c7ddd0b78",
+    "pyths-runtime/types.js": "b5af591c394a1984715054cd5c8c100ffdc2ea1c6b85e01bf3ae33e2cf1b265b",
+    "response.glue.js": "8f5bc2bd7089a0db224f5a04a3cc3db3a55f7a1e75509c45780af469cf50e5d8",
+    "response.js": "43c9086a4bb3ad902d7d736bebf2f1bcf3e37f247f931f9f7dca1c80a98d324c",
+    "response.ps": "a8558dcc8819e30c6ebd7f60610885ddfd00425b3ba91bf6b337693593b8ae92",
+    "response.wasm": "81e0450d798a57fe9477d755d41955d6f27c69642fe568c88bde6fa69317f5c5"
+  },
+  "function": "response",
+  "glue": "response.glue.js",
+  "manifest_sha256": "b6c6f7403807f5f6a6869adcd6a95deccf20d640016dfb641952a9b3038d8011",
+  "optimizer": {
+    "applied": false,
+    "error": null,
+    "id": "none",
+    "path_sha256": null
+  },
+  "runtime_dir": "pyths-runtime",
+  "schema": 1,
+  "source_file": "kernels.py",
+  "source_sha256": "a8558dcc8819e30c6ebd7f60610885ddfd00425b3ba91bf6b337693593b8ae92",
+  "target": "js+wasm",
+  "wasm": "response.wasm"
+}

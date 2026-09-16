@@ -1,0 +1,14 @@
+@wasm
+def luhn_ok(digits: list[int]) -> float:
+    total = 0
+    parity = len(digits) % 2
+    for i in range(len(digits)):
+        d = digits[i]
+        if i % 2 == parity:
+            d = d * 2
+            if d > 9:
+                d = d - 9
+        total = total + d
+    if total % 10 == 0:
+        return 0.0
+    return 1.0

@@ -1,0 +1,16 @@
+# a prior `from math import sqrt as abs` loses to a later user `def abs` (2 args).
+# WASM: abs,use
+from math import sqrt as abs
+print(abs(16))
+
+
+def abs(x: int, y: int) -> int:
+    return x * y
+
+
+def use(x: int, y: int) -> int:
+    return abs(x, y)
+
+
+print(abs(3, 4))
+print(use(6, 5))

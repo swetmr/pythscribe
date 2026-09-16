@@ -1,10 +1,11 @@
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use pyths_syntax::ast::*;
 use pyths_syntax::operators::*;
 
 use crate::builtins::{builtin_func_mapping, BuiltinMapping};
+use crate::captured_global_rename::python_name;
 use crate::method_lowering::{is_simple_receiver, method_lowering, InlineSpec, MethodLowering};
 use crate::method_table::{container_method_arity, ReceiverKind};
 use crate::react;
@@ -1086,6 +1087,13 @@ struct ClassCtx {
     /// before touching `this` — when the Python `__init__` has no
     /// `super().__init__(...)` to hoist, a bare `super();` is synthesized.
     has_bases: bool,
+    /// #491 BLOCKER-2: the names declared `global` anywhere in this CLASS
+    /// BLOCK (`collect_global_declared` — control-flow deep, not into nested
+    /// def/class scopes). A class-body statement that binds ONLY such names is
+    /// a MODULE write, not a class attribute: `emit_class_body` skips it and
+    /// `emit_class_def` emits it post-class in the enclosing scope
+    /// (`is_class_body_global_write`).
+    globals: HashSet<String>,
 }
 
 /// WB-15 (naming soundness, NB-1 family): how a bare identifier `self` lowers
@@ -1176,6 +1184,36 @@ pub struct JsCodegen {
     /// binding hoists under a unique name (alias-and-rewrite) instead of
     /// clashing ("Identifier already declared" / a silently killed import).
     module_bound_names: HashSet<String>,
+    /// #491 call-time builtin-shadow resolution — the module binding CELLS
+    /// (SHADOW_BINDING_DESIGN.md §1). Key: a name bound at module level by ANY
+    /// binder that is (a) a builtin the emitter lowers specially when
+    /// unshadowed, or (b) a WASM-routed def with a second module binder.
+    /// Value: the cell's initializer JS (the builtin's first-class value), or
+    /// `None` for an `export let N;` with no builtin (case b). Emitted as
+    /// `export let N = <init>;` at the module top and `declare`d from the start,
+    /// so EVERY read — module scope before/after the binder, and function
+    /// bodies at CALL time — is the bare name; every binder REASSIGNS it at its
+    /// source position (the assignment-form def/class, the import Rebind plan,
+    /// bare assignment, `global` writes, `N = __wasm$N`), and `del N` restores
+    /// the initializer.
+    module_cells: BTreeMap<String, Option<String>>,
+    /// #491: WASM-routed defs whose name is a cell — `emit_wasm_reexports`
+    /// imports their glue export under the hidden `__wasm$N` alias (the cell's
+    /// `export let` already exports `N`) and the def's source position emits
+    /// `N = __wasm$N;`.
+    wasm_cell_names: HashSet<String>,
+    /// #491: the index of the module-body statement currently being emitted
+    /// (`None` outside the module body loop). With `wasm_skip_indices` it
+    /// identifies THE def a WASM-routed name refers to.
+    top_stmt_index: Option<usize>,
+    /// #491 (S3): `wasm_skip` is a NAME set, but the WASM side routes exactly
+    /// ONE def per name — the LAST top-level def (an earlier same-named def is
+    /// dead-by-name and stays JS). Map each routed name to that statement
+    /// index so only that def is skipped; a `def floor` → `from math import
+    /// floor` → `def floor` chain keeps its first def as the JS binding at its
+    /// source position. A nested def under a module-level block is never the
+    /// routed one (admission takes top-level defs only).
+    wasm_skip_indices: HashMap<String, usize>,
     /// #452/#453 (naming soundness): EVERY identifier the module uses anywhere
     /// — bare-name references AND binding names, at any nesting depth
     /// (order-independent whole-module pre-pass via `collect_all_idents`).
@@ -1188,6 +1226,10 @@ pub struct JsCodegen {
     /// skipping intervening enclosing-function frames (an enclosing local `X`
     /// must not capture it). Pushed/popped in lockstep with `scope_bindings`.
     scope_globals: Vec<HashSet<String>>,
+    /// #491 B1: the `nonlocal`-declared names of each function scope (the
+    /// twin of `scope_globals`; both are pre-declared + marked hoisted by
+    /// `predeclare_outer_binding`, the one write-target authority).
+    scope_nonlocals: Vec<HashSet<String>>,
     /// #274: JS binding names already emitted by a module-scope `import` (the
     /// name after `as`, or the plain imported name). Python tolerates importing
     /// the same name twice (idempotent rebind); ES modules do not — a second
@@ -1519,8 +1561,13 @@ impl JsCodegen {
             declared_scopes: vec![HashSet::new()], // module scope
             scope_bindings: vec![HashSet::new()],  // module scope (filled in emit_module)
             module_bound_names: HashSet::new(),
+            module_cells: BTreeMap::new(),
+            wasm_cell_names: HashSet::new(),
+            top_stmt_index: None,
+            wasm_skip_indices: HashMap::new(),
             module_idents: HashSet::new(),
             scope_globals: vec![HashSet::new()],
+            scope_nonlocals: vec![HashSet::new()],
             dotted_import_scopes: vec![DottedImportScope::default()], // module scope
             hoisted_scopes: vec![HashSet::new()],                     // module scope
             sentinel_scopes: vec![HashSet::new()],                    // module scope
@@ -1598,8 +1645,13 @@ impl JsCodegen {
             declared_scopes: vec![HashSet::new()], // module scope
             scope_bindings: vec![HashSet::new()],  // module scope (filled in emit_module)
             module_bound_names: HashSet::new(),
+            module_cells: BTreeMap::new(),
+            wasm_cell_names: HashSet::new(),
+            top_stmt_index: None,
+            wasm_skip_indices: HashMap::new(),
             module_idents: HashSet::new(),
             scope_globals: vec![HashSet::new()],
+            scope_nonlocals: vec![HashSet::new()],
             dotted_import_scopes: vec![DottedImportScope::default()], // module scope
             hoisted_scopes: vec![HashSet::new()],                     // module scope
             sentinel_scopes: vec![HashSet::new()],                    // module scope
@@ -1730,21 +1782,33 @@ impl JsCodegen {
         // re-export names IDENTICALLY here so the import binds the glue's real
         // export and matches this module's call sites (which also go through
         // `sanitize_ident`).
-        let joined = names
-            .iter()
-            .map(|s| Self::sanitize_ident(s).into_owned())
-            .collect::<Vec<_>>()
-            .join(", ");
+        // #491: a WASM-routed def whose name is a module CELL is imported under
+        // the hidden `__wasm$N` alias (its source position assigned the cell; the
+        // cell's `export let N` already exports it) — a plain `import { N }`
+        // would collide with the `let` ("Identifier already declared").
+        let mut plain: Vec<String> = Vec::new();
+        let mut hidden: Vec<String> = Vec::new();
+        for s in &names {
+            let js = Self::sanitize_ident(s).into_owned();
+            if self.wasm_cell_names.contains(s.as_str()) {
+                hidden.push(format!("{} as __wasm${}", js, js));
+            } else {
+                plain.push(js);
+            }
+        }
         // SECURITY (#4): `glue_filename` is source/output-stem-derived. A `"`
         // or newline in it would break out of the import specifier string.
-        // Encode it. `joined` is the sorted set of WASM-skipped function names
+        // Encode it. The names are the sorted set of WASM-skipped function names
         // (parser identifiers), which cannot contain a quote.
+        let specs: Vec<String> = plain.iter().cloned().chain(hidden).collect();
         self.write(&format!(
             "\nimport {{ {} }} from {};\n",
-            joined,
+            specs.join(", "),
             js_string_literal(glue_filename)
         ));
-        self.write(&format!("export {{ {} }};\n", joined));
+        if !plain.is_empty() {
+            self.write(&format!("export {{ {} }};\n", plain.join(", ")));
+        }
     }
 
     pub fn finish(self) -> String {
@@ -3426,6 +3490,16 @@ function pyBitXor(a, b, fctx) {
         None
     }
 
+    /// #491: the `type(x) == T` fast path is only valid when BOTH `type` and the
+    /// type-name operand `T` resolve to the builtins at the use-site — a user binding
+    /// of either name (`def int`, `type = ...`) changes the comparison's meaning
+    /// (compare against the user object), so the caller must fall through to `pyEq`.
+    /// `type` is manifest-gated (a specially-lowered builtin); `tyname` is a dynamic
+    /// per-call name, so it uses `is_declared_in_any_scope` directly.
+    fn type_identity_unshadowed(&self, tyname: &str) -> bool {
+        self.fast_path_builtin_unshadowed("type") && !self.is_declared_in_any_scope(tyname)
+    }
+
     /// #244: `dict()` with no args — a forced local assigned this must be
     /// Map-backed (extends #230 beyond the `{}` literal to the constructor).
     fn is_empty_dict_ctor(value: &Expr) -> bool {
@@ -3548,6 +3622,7 @@ function pyBitXor(a, b, fctx) {
         // Empty by default; func/method sites populate it with their `global`
         // declarations right after pushing (see `set_scope_globals`).
         self.scope_globals.push(HashSet::new());
+        self.scope_nonlocals.push(HashSet::new());
         self.hoisted_scopes.push(HashSet::new());
         self.sentinel_scopes.push(HashSet::new());
         self.local_types.push(HashMap::new());
@@ -3560,6 +3635,7 @@ function pyBitXor(a, b, fctx) {
         self.declared_scopes.pop();
         self.scope_bindings.pop();
         self.scope_globals.pop();
+        self.scope_nonlocals.pop();
         self.hoisted_scopes.pop();
         self.sentinel_scopes.pop();
         self.local_types.pop();
@@ -3576,9 +3652,83 @@ function pyBitXor(a, b, fctx) {
         }
     }
 
+    /// The ONE function-scope prologue — shared by `emit_func_def` and the
+    /// class-method emitter (`emit_class_method`), so a Python function body opens its
+    /// scope identically wherever it is emitted (#491 BLOCKER-1 root fix):
+    ///
+    /// 1. push the scope with its PRE-COMPUTED complete local binding set
+    ///    (params + body locals, `global`/`nonlocal` names excluded — #438);
+    /// 2. record the body's `global` declarations (review finding 2) so a
+    ///    `global X` reference resolves at module scope;
+    /// 3. `#199`: mark every `global`/`nonlocal`-declared name DECLARED up
+    ///    front, so neither `emit_hoisted_local_decls` nor a first inline
+    ///    assignment emits a shadowing `let` — the write goes to the outer
+    ///    binding (the module `export let N` cell for a #491 shadow name).
+    ///
+    /// Before this helper the method emitter had (1)+(2) but NOT (3), so
+    /// `class C: def m(self): global abs; abs = 7` emitted a method-LOCAL
+    /// `let abs = 7` — a silent wrong value for a builtin-shadow name and a
+    /// TDZ ReferenceError for `global counter; counter = counter + 10`.
+    /// Callers still `declare` their (non-receiver) params afterwards and call
+    /// `emit_hoisted_local_decls` AFTER this (and, for a derived constructor,
+    /// after `super(...)`); the paired `pop_scope` closes the scope.
+    fn open_function_scope(&mut self, body: &[Stmt], param_names: &[String]) {
+        self.push_scope(Self::collect_local_bindings(body, param_names));
+        let globals = Self::collect_global_declared(body);
+        let nonlocals: HashSet<String> = Self::collect_global_names(body)
+            .into_iter()
+            .filter(|n| !globals.contains(n))
+            .collect();
+        self.set_scope_globals(globals);
+        if let Some(top) = self.scope_nonlocals.last_mut() {
+            *top = nonlocals;
+        }
+        for g in Self::collect_global_names(body) {
+            self.predeclare_outer_binding(&g);
+        }
+    }
+
+    /// THE ONE write-target authority for a `global`/`nonlocal`-declared name
+    /// (#491 BLOCKER-B1 class closure). A name declared `global`/`nonlocal`
+    /// in the scope being opened has an OUTER binding that every write must
+    /// reach — the module cell / `export let`, or the enclosing function's
+    /// `let`. Two facts encode that, and every target-lowering arm keys on one
+    /// of them:
+    ///
+    /// * `declare` (#199) — so `emit_assign` / aug-assign / annotated-assign /
+    ///   walrus / with-as (via `emit_assign`) / `del` emit a BARE write, never
+    ///   a shadowing `let`;
+    /// * `mark_hoisted` (#269) — so `emit_for` (Name AND tuple/list elements),
+    ///   `try_emit_range_for`, the match `Capture` / `Star` bindings and the
+    ///   `except … as N` alias emit a BARE write, never a fresh block-local
+    ///   `const`/`let`.
+    ///
+    /// Before this helper the prologue set only the first fact, so the arms
+    /// that key on `is_hoisted` (for-target, range fast path, match capture,
+    /// except-as) silently wrote a fresh block-local while `global N; N = v`
+    /// wrote the module cell — the B1 silent-wrong arm (`for abs in [11, 22]`
+    /// left the module `abs` as the builtin; CPython: 22). Both the function
+    /// prologue (`open_function_scope`) and the class-body `global` path route
+    /// through here; an arm that consults only one of the two facts is not a
+    /// new authority — both are set together, always.
+    fn predeclare_outer_binding(&mut self, name: &str) {
+        self.declare(name);
+        self.mark_hoisted(name);
+    }
+
+    /// Is `name` declared `global` or `nonlocal` in the innermost function
+    /// scope (an outer-binding write target)? Module scope: never.
+    fn is_outer_declared(&self, name: &str) -> bool {
+        self.scope_globals.last().is_some_and(|g| g.contains(name))
+            || self
+                .scope_nonlocals
+                .last()
+                .is_some_and(|g| g.contains(name))
+    }
+
     /// Names declared `global` (NOT `nonlocal`) directly in this body, honoring
     /// nested control-flow but not nested def/class scopes.
-    fn collect_global_declared(body: &[Stmt]) -> HashSet<String> {
+    pub(crate) fn collect_global_declared(body: &[Stmt]) -> HashSet<String> {
         fn walk(stmts: &[Stmt], out: &mut HashSet<String>) {
             for s in stmts {
                 match &s.kind {
@@ -3642,6 +3792,222 @@ function pyBitXor(a, b, fctx) {
         let mut out = HashSet::new();
         walk(body, &mut out);
         out
+    }
+
+    /// #491 BLOCKER-2: the names a CLASS BLOCK binds through its VALUE-binding
+    /// statements — assignment / aug-assign / annotated-with-value / tuple
+    /// target / for / with / except / del / import / walrus, through nested
+    /// control-flow blocks — EXCLUDING the block's `def` / `class` statements
+    /// (a method or nested class stays a class attribute even under a `global`
+    /// declaration of its name: that exotic form keeps the method / nested-class
+    /// lowering and is recorded as a known gap, not modelled here). Class-scope
+    /// rule for annotations: a bare `x: T` binds nothing (and `global x` +
+    /// `x: T` is a CPython SyntaxError anyway). The ONE binder census for a
+    /// class body: `collect_global_declared_deep` (cell census) and
+    /// `is_class_body_global_write` (emitter) both derive from it, and the HIR
+    /// twin is `pyths_hir::wasm_analysis::class_body_binding_names`.
+    pub(crate) fn class_body_value_binders(body: &[Stmt]) -> HashSet<String> {
+        let mut bound = HashSet::new();
+        for s in body {
+            if !matches!(s.kind, StmtKind::FuncDef { .. } | StmtKind::ClassDef { .. }) {
+                Self::collect_module_bound_names(std::slice::from_ref(s), &mut bound);
+            }
+        }
+        bound
+    }
+
+    /// #491 BLOCKER-2: is `stmt` (a direct statement of a class block whose
+    /// `global` declarations are `class_globals`) a MODULE write? True iff it is
+    /// a value-binding statement (not a def / class) that binds at least one
+    /// name and EVERY name it binds is `global`-declared in that block —
+    /// `global abs; abs = 7`, `global x; x += 5`, `global a, b; a, b = 1, 2`,
+    /// `global abs; del abs`, `global abs; if c: abs = 7` — or a COMPOUND block
+    /// (`if`/`for`/`while`/`with`/`try`/`match`) that binds no class-attribute
+    /// name at all (`if c: global max` — the declaration inside the block —
+    /// or a side-effect-only block). Such a statement executes at
+    /// class-definition time against the MODULE namespace (CPython), so the
+    /// emitter skips it inside the JS class (where a raw block is a JS
+    /// SyntaxError) and emits it post-class as an ordinary statement of the
+    /// enclosing scope. A statement that binds a MIX of global and
+    /// class-attribute names is not claimed here: a single-name tuple target is
+    /// split per element by the installer; a mixed compound block keeps the
+    /// existing (loud, invalid-JS) class-body lowering.
+    fn is_class_body_global_write(stmt: &Stmt, class_globals: &HashSet<String>) -> bool {
+        if matches!(
+            stmt.kind,
+            StmtKind::FuncDef { .. } | StmtKind::ClassDef { .. }
+        ) {
+            return false;
+        }
+        let compound = matches!(
+            stmt.kind,
+            StmtKind::If { .. }
+                | StmtKind::For { .. }
+                | StmtKind::While { .. }
+                | StmtKind::With { .. }
+                | StmtKind::Try { .. }
+                | StmtKind::Match { .. }
+        );
+        if class_globals.is_empty() && !compound {
+            return false;
+        }
+        let mut bound = HashSet::new();
+        Self::collect_module_bound_names(std::slice::from_ref(stmt), &mut bound);
+        (compound || !bound.is_empty()) && bound.iter().all(|n| class_globals.contains(n))
+    }
+
+    /// #491: names declared `global` inside a function body at ANY nesting depth
+    /// (a def inside a class / def / module-level block) AND bound in that same
+    /// function (an assignment / for / with / except / del / import / def /
+    /// class / walrus target). Such a name is bound at MODULE scope whenever that
+    /// function runs — a module binder with an unknowable execution time — so it
+    /// participates in the cell set. A bare `global N` with no binding of `N` in
+    /// the function is NOT a binder (Python: it only redirects reads), so it
+    /// keeps the plain builtin lowering. `in_def` = the binding set of the
+    /// innermost enclosing function (None at module level). A CLASS BODY is its
+    /// own binder scope (#491 BLOCKER-2): `global N` + a value binding of `N` in
+    /// the class block is a module write executed at class-definition time, so
+    /// the walk enters a class body with THAT block's `class_body_value_binders`
+    /// as `in_def` (mirrored by the HIR `collect_global_writes_deep`).
+    fn collect_global_declared_deep(
+        stmts: &[Stmt],
+        in_def: Option<&HashSet<String>>,
+        out: &mut HashSet<String>,
+    ) {
+        for s in stmts {
+            match &s.kind {
+                StmtKind::Global(names) => {
+                    if let Some(bound) = in_def {
+                        for n in names {
+                            if bound.contains(n) {
+                                out.insert(n.clone());
+                            }
+                        }
+                    }
+                }
+                StmtKind::FuncDef { body, .. } => {
+                    let mut bound = HashSet::new();
+                    Self::collect_bound_names(body, &mut bound);
+                    Self::collect_global_declared_deep(body, Some(&bound), out)
+                }
+                StmtKind::ClassDef { body, .. } => {
+                    // #491 BLOCKER-2: the class block is its own binder scope.
+                    let bound = Self::class_body_value_binders(body);
+                    Self::collect_global_declared_deep(body, Some(&bound), out)
+                }
+                StmtKind::If {
+                    body,
+                    elif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    Self::collect_global_declared_deep(body, in_def, out);
+                    for (_, b) in elif_clauses {
+                        Self::collect_global_declared_deep(b, in_def, out);
+                    }
+                    if let Some(b) = else_body {
+                        Self::collect_global_declared_deep(b, in_def, out);
+                    }
+                }
+                StmtKind::While {
+                    body, else_body, ..
+                }
+                | StmtKind::For {
+                    body, else_body, ..
+                } => {
+                    Self::collect_global_declared_deep(body, in_def, out);
+                    if let Some(b) = else_body {
+                        Self::collect_global_declared_deep(b, in_def, out);
+                    }
+                }
+                StmtKind::With { body, .. } => {
+                    Self::collect_global_declared_deep(body, in_def, out)
+                }
+                StmtKind::Try {
+                    body,
+                    handlers,
+                    else_body,
+                    finally_body,
+                } => {
+                    Self::collect_global_declared_deep(body, in_def, out);
+                    for h in handlers {
+                        Self::collect_global_declared_deep(&h.body, in_def, out);
+                    }
+                    if let Some(b) = else_body {
+                        Self::collect_global_declared_deep(b, in_def, out);
+                    }
+                    if let Some(b) = finally_body {
+                        Self::collect_global_declared_deep(b, in_def, out);
+                    }
+                }
+                StmtKind::Match { cases, .. } => {
+                    for c in cases {
+                        Self::collect_global_declared_deep(&c.body, in_def, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// #491: how many module-level binder STATEMENTS bind each name (one
+    /// top-level statement — with its nested blocks — counts once per name it
+    /// binds; a `global` write inside any def counts once more). A WASM-routed
+    /// def with multiplicity ≥ 2 (`from math import sqrt` + `def sqrt`, `def f`
+    /// twice) needs a cell so the glue import can bind under a hidden alias.
+    fn module_binder_multiplicity(
+        body: &[Stmt],
+        global_writes: &HashSet<String>,
+    ) -> HashMap<String, usize> {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for stmt in body {
+            let mut bound = HashSet::new();
+            Self::collect_module_bound_names(std::slice::from_ref(stmt), &mut bound);
+            for n in bound {
+                *counts.entry(n).or_insert(0) += 1;
+            }
+        }
+        for g in global_writes {
+            *counts.entry(g.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// #491: the JS expression a module builtin-shadow CELL is initialized to —
+    /// the builtin's first-class value (with the runtime deps it needs), or
+    /// `None` when the name is not a specially-lowered builtin OR has no
+    /// first-class runtime value (`super`/`staticmethod`/`classmethod`/
+    /// `import_module` and the unimplemented builtins keep the pre-existing
+    /// source-order lowering: a use before the binder is the existing LOUD
+    /// compile diagnostic, never a silent value). Derived from the SAME mapping
+    /// tables the call/value lowerings use, so implementing a builtin
+    /// automatically makes it cell-able — the two cannot drift.
+    fn builtin_cell_init(&self, name: &str) -> Option<(String, Vec<&'static str>)> {
+        if let Some((js, deps)) = crate::builtins::builtin_value_mapping(name) {
+            return Some((js.to_string(), deps.to_vec()));
+        }
+        match crate::builtins::builtin_func_mapping(name) {
+            // A runtime helper IS a first-class function with CPython call
+            // semantics (`isinstance` → `__pyIsInstance`, `bin` → `pyBin`, …).
+            Some(BuiltinMapping::Runtime(helper)) => {
+                return Some((helper.to_string(), vec![helper]))
+            }
+            Some(BuiltinMapping::Direct(expr)) => return Some((expr.to_string(), vec![])),
+            Some(BuiltinMapping::NativeCall(_)) | None => {}
+        }
+        match name {
+            // Bare `__doc__` read = the module docstring (None when absent).
+            "__doc__" => Some((
+                self.module_doc
+                    .as_deref()
+                    .map(js_string_literal)
+                    .unwrap_or_else(|| "null".to_string()),
+                vec![],
+            )),
+            // `breakpoint()` lowers to a `debugger;` statement — its value form.
+            "breakpoint" => Some(("(() => { debugger; })".to_string(), vec![])),
+            _ => None,
+        }
     }
 
     /// #269: mark `name` as genuinely hoisted (a function/module-scope `let`)
@@ -5074,6 +5440,71 @@ function pyBitXor(a, b, fctx) {
         }
     }
 
+    /// CPython 3.13+ compile-time docstring dedent (`_PyCompile_CleanDoc`): first EXPAND
+    /// TABS (`expand_tabs8`, tabsize 8), then left-strip the FIRST line fully and remove
+    /// the COMMON leading indentation -- the minimum count of leading SPACES over the
+    /// non-blank later lines (0 if there are none) -- from every later line. Trailing
+    /// whitespace, blank lines and a trailing newline are preserved (`.ps` source is LF).
+    /// This is the SINGLE authority applied to every `__doc__` value emitted below
+    /// (module / function / class / method), so a bare `__doc__` read and each attached
+    /// docstring match the `py -3.14` oracle the conformance ratchet compares against
+    /// (verified against the docstrings testlet + a 27-case edge battery: multi-line
+    /// dedent; tabs vs 2/7/9 spaces, tab in content, tab-only line, code-point column;
+    /// blank / whitespace-only lines; trailing ws; leading / trailing newline;
+    /// first-line indent; single-line; and empty).
+    fn clean_doc(raw: &str) -> String {
+        // CPython 3.13+ EXPANDS TABS (tabsize 8, column-aware) BEFORE the margin scan and then
+        // measures indentation in SPACES only — a tab is not one column. Columns are counted in
+        // CODE POINTS (`ü` is one column), and a newline OR carriage return resets the column.
+        let expanded = Self::expand_tabs8(raw);
+        // After expansion the only indentation character is a space (ASCII, 1 byte), so a char
+        // count is also a valid byte offset landing on a char boundary.
+        let leading_spaces = |s: &str| s.chars().take_while(|&c| c == ' ').count();
+        let lines: Vec<&str> = expanded.split('\n').collect();
+        // Common indentation of the later lines (blank / whitespace-only lines excluded).
+        let indent = lines[1..]
+            .iter()
+            .filter(|l| !l.chars().all(|c| c == ' '))
+            .map(|l| leading_spaces(l))
+            .min()
+            .unwrap_or(0);
+        let mut out = String::with_capacity(expanded.len());
+        out.push_str(&lines[0][leading_spaces(lines[0])..]);
+        for line in &lines[1..] {
+            out.push('\n');
+            out.push_str(&line[leading_spaces(line).min(indent)..]);
+        }
+        out
+    }
+
+    /// `str.expandtabs(8)`: replace tabs with spaces to the next multiple-of-8 column, columns
+    /// counted in CODE POINTS, with `\n`/`\r` resetting the column to 0 (CPython's semantics).
+    /// Runs before the docstring margin scan so a tab contributes its visual width, not one char.
+    fn expand_tabs8(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut col = 0usize;
+        for c in s.chars() {
+            match c {
+                '\t' => {
+                    let n = 8 - (col % 8);
+                    for _ in 0..n {
+                        out.push(' ');
+                    }
+                    col += n;
+                }
+                '\n' | '\r' => {
+                    out.push(c);
+                    col = 0;
+                }
+                _ => {
+                    out.push(c);
+                    col += 1;
+                }
+            }
+        }
+        out
+    }
+
     /// WB-15: does this method body directly contain a `this`-rebinding nested
     /// scope — a nested `function` def OR a nested `class` — that a bare `self`
     /// could close over? Such a method must capture `const __self = this;` so
@@ -5244,6 +5675,22 @@ function pyBitXor(a, b, fctx) {
     }
 
     pub fn emit_module(&mut self, module: &Module) {
+        // #491 BLOCKER-3 (root): the captured-`global` collision pre-pass — the
+        // ONE authority, applied at the single seam every codegen entry point
+        // and the WASM glue twin pass through. A function local that collides
+        // with a nested scope's `global N` is renamed to `N$l<k>` throughout
+        // that function (see `captured_global_rename`), so the nested access
+        // is a bare module-cell access by construction. `None` (no collision)
+        // keeps the original module: byte-identical emission.
+        let renamed = crate::captured_global_rename::rename_captured_globals(module);
+        // #491 SF2: the unrenamable dotted-import shape is REFUSED (a hard
+        // compile diagnostic + inline throw), never shipped as a silent
+        // miscompile. Emission continues so the rest of the module still
+        // reports its own diagnostics.
+        for diag in &renamed.refused {
+            self.emit_import_error(diag);
+        }
+        let module = renamed.module.as_ref().unwrap_or(module);
         // Heuristic: ~80 bytes of JS per statement
         self.output.reserve(module.body.len() * 80);
 
@@ -5271,7 +5718,7 @@ function pyBitXor(a, b, fctx) {
         // convergence is the DX-B2 register's lane (source-order aware), and
         // including a later import's binding here would wrongly alias the
         // EARLIER import against it. See `module_bound_names`.
-        Self::collect_bound_names(&module.body, &mut self.module_bound_names);
+        Self::collect_module_bound_names(&module.body, &mut self.module_bound_names);
         {
             let mut import_bound = HashSet::new();
             Self::collect_import_bound_names(&module.body, &mut import_bound);
@@ -5286,7 +5733,29 @@ function pyBitXor(a, b, fctx) {
         // still forces the suffixed temp).
         Self::collect_all_idents(&module.body, &mut self.module_idents);
         self.module_has_dunder_call = Self::defines_dunder_call(&module.body);
-        self.module_doc = Self::body_docstring(&module.body).map(str::to_owned);
+        self.module_doc = Self::body_docstring(&module.body).map(Self::clean_doc);
+        // #491: the module-level binder census — every bound name (all binder
+        // forms + `global` writes in nested defs) and how many binder statements
+        // bind each. A name-keyed STATIC fact (a `-> float` def, a class, a
+        // WASM-routed def) is only valid when the name has exactly ONE binder;
+        // a rebound name is resolved at call time through its cell instead.
+        let mut all_bound: HashSet<String> = HashSet::new();
+        Self::collect_module_bound_names(&module.body, &mut all_bound);
+        // #491 SF1: the MODULE-LEVEL binders alone (before the `global`-write
+        // census is folded in) — a `global N` write whose name has no
+        // module-level binder must CREATE the module binding (below).
+        let module_level_binders: HashSet<String> = all_bound.clone();
+        let mut global_writes: HashSet<String> = HashSet::new();
+        Self::collect_global_declared_deep(&module.body, None, &mut global_writes);
+        all_bound.extend(global_writes.iter().cloned());
+        let binder_multiplicity = Self::module_binder_multiplicity(&module.body, &global_writes);
+        for (i, stmt) in module.body.iter().enumerate() {
+            if let StmtKind::FuncDef { name, .. } = &stmt.kind {
+                if self.wasm_skip.contains(name) {
+                    self.wasm_skip_indices.insert(name.clone(), i); // last wins
+                }
+            }
+        }
         for stmt in &module.body {
             // #253: datetime's classes are lowercase, so record them here so
             // `date(...)` / `datetime(...)` get `new` (heuristic won't fire).
@@ -5377,8 +5846,14 @@ function pyBitXor(a, b, fctx) {
                 // floats (the annotation is the user's contract), so
                 // repr/str/print/f-string of their call results can
                 // float-format at compile time.
+                // #491: only when the name has ONE module binder — a later
+                // import/assignment/def rebinding it (`def floor -> float` then
+                // `from math import floor`) makes the static float fact wrong at
+                // the rebound call sites (2.0 vs CPython's 2).
                 if let Some(rt_expr) = return_type {
-                    if matches!(&rt_expr.kind, ExprKind::Name(n) if n == "float") {
+                    if matches!(&rt_expr.kind, ExprKind::Name(n) if n == "float")
+                        && binder_multiplicity.get(name).copied().unwrap_or(0) <= 1
+                    {
                         self.float_returning_functions.insert(name.clone());
                     }
                 }
@@ -5419,7 +5894,82 @@ function pyBitXor(a, b, fctx) {
         // is initialized to the __UNBOUND sentinel; reads route through
         // __pyChkGlobal so a zero-iteration loop leaves it raising NameError
         // (CPython) instead of reading as undefined→None.
-        let hoisted_names = Self::collect_hoisted_names(&module.body, true);
+        // #491 call-time builtin-shadow resolution: the module binding CELLS
+        // (SHADOW_BINDING_DESIGN.md §1). Every name bound at module level by ANY
+        // binder form (`collect_bound_names` — def/class/import/assign/for/with/
+        // except/walrus/match/del — plus `global` writes inside any nested def)
+        // that is ALSO a specially-lowered builtin gets a mutable cell declared
+        // HERE, at the module top, initialized to the builtin's first-class value
+        // and `declare`d from the start. From now on every reference is the bare
+        // name (the cell), so module scope resolves in EXECUTION order (builtin
+        // before the binder runs, the user binding after, last-wins, `del`
+        // restores) and function bodies resolve at CALL time — CPython's global
+        // name lookup. A WASM-routed def whose name carries a second module binder
+        // (`from math import sqrt` + `def sqrt`) is a cell too (init undefined) so
+        // the hoisted glue import binds under a hidden alias and the def's source
+        // position reassigns — no `Identifier already declared` SyntaxError.
+        {
+            let mut cells: BTreeMap<String, Option<(String, Vec<&'static str>)>> = BTreeMap::new();
+            for name in &all_bound {
+                if let Some(init) = self.builtin_cell_init(name) {
+                    cells.insert(name.clone(), Some(init));
+                } else if self.wasm_skip.contains(name)
+                    && binder_multiplicity.get(name).copied().unwrap_or(0) >= 2
+                {
+                    cells.insert(name.clone(), None);
+                }
+            }
+            for (name, init) in cells {
+                let js_name = Self::sanitize_ident(&name).into_owned();
+                self.write_indent();
+                match &init {
+                    Some((expr, deps)) => {
+                        for d in deps.iter() {
+                            self.need_runtime(d);
+                        }
+                        self.write(&format!("export let {} = {};\n", js_name, expr));
+                    }
+                    None => self.write(&format!("export let {};\n", js_name)),
+                }
+                self.declare(&name);
+                self.mark_hoisted(&name);
+                self.module_cells.insert(name, init.map(|(e, _)| e));
+            }
+            // #491 SF1: a `global N` WRITE inside a def / class body whose name
+            // has NO module-level binder and no builtin cell. CPython CREATES
+            // the module global when the write executes; before this the bare
+            // `N = v` had no declaration at all → a strict-mode
+            // `ReferenceError` (loud — and, for `for N in …`, a fresh local:
+            // the B1 shape). Hoist the module binding here as an __UNBOUND
+            // sentinel so the write has a target and a read BEFORE the write
+            // still raises NameError through __pyChkGlobal (CPython's
+            // dynamic globals lookup), not undefined→None. OVER-FIX guard: a
+            // name with any module-level binder (`y = 0`, `def y`, `import
+            // y`, a module for-target, …) or a builtin cell is NOT touched —
+            // its existing declaration path owns it.
+            let created: BTreeSet<String> = global_writes
+                .iter()
+                .filter(|n| {
+                    !module_level_binders.contains(*n)
+                        && !self.module_cells.contains_key(*n)
+                        && !self.is_declared(n)
+                })
+                .cloned()
+                .collect();
+            for name in created {
+                self.need_runtime("__UNBOUND");
+                self.write_indent();
+                self.write(&format!(
+                    "let {} = __UNBOUND;\n",
+                    Self::sanitize_ident(&name)
+                ));
+                self.declare(&name);
+                self.mark_sentinel(&name);
+                self.mark_hoisted(&name);
+            }
+        }
+
+        let hoisted_names = Self::collect_hoisted_names(&module.body, true, &HashSet::new());
         let hoisted_set: HashSet<String> = hoisted_names.iter().map(|(n, _)| n.clone()).collect();
         let mut sentinels = Self::sentinel_for_names(&module.body, &hoisted_set);
         // #288: a promoted name's depth-0 first assignment executes before
@@ -5460,8 +6010,10 @@ function pyBitXor(a, b, fctx) {
             if directive_idxs.contains(&i) {
                 continue; // already hoisted above
             }
+            self.top_stmt_index = Some(i);
             self.emit_stmt(stmt);
         }
+        self.top_stmt_index = None;
     }
 
     // ── Statements ────────────────────────────────────────
@@ -5797,7 +6349,32 @@ function pyBitXor(a, b, fctx) {
                 return_type,
                 is_async,
             } => {
-                if self.wasm_skip.contains(name) {
+                // #491 (S3): only THE routed def — the last top-level def of the
+                // name, at module scope — is skipped; an earlier same-named def
+                // (dead-by-name on the WASM side) or a nested one is emitted as
+                // ordinary JS at its source position.
+                if self.wasm_skip.contains(name)
+                    && self.declared_scopes.len() == 1
+                    && self.top_stmt_index.is_some()
+                    && self.wasm_skip_indices.get(name) == self.top_stmt_index.as_ref()
+                {
+                    // #491 call-time resolution: a def routed to WASM is imported from
+                    // the glue. When its name is a module CELL (a shadowed builtin, or
+                    // a name with a second module binder), the glue export is imported
+                    // under the hidden `__wasm$N` alias (`emit_wasm_reexports`) and the
+                    // def's SOURCE POSITION rebinds the cell — exactly like the
+                    // assignment-form JS def — so a call before this point sees the
+                    // earlier binding (the builtin), and a call after it (module scope
+                    // or any function body at call time) the WASM user fn.
+                    if self.module_cells.contains_key(name) {
+                        self.write_indent();
+                        let js = Self::sanitize_ident(name).into_owned();
+                        self.write(&format!("{} = __wasm${};\n", js, js));
+                        self.wasm_cell_names.insert(name.clone());
+                        return;
+                    }
+                    // Not a cell: the hoisted glue import IS the module binding.
+                    self.declare(name);
                     return; // compiled to WASM, re-exported from glue
                 }
                 // #443: `def X` REBINDS X (Python last-wins). Captured BEFORE
@@ -6923,13 +7500,7 @@ function pyBitXor(a, b, fctx) {
                             self.emit_expr(value);
                             self.write(&format!(".{};\n", attr));
                         }
-                        ExprKind::Name(name) => {
-                            // Finding 1: `del x` unbinds the name — a later
-                            // re-import must re-emit, not dedup.
-                            self.invalidate_import_decl(name);
-                            self.write_indent();
-                            self.write(&format!("{} = undefined;\n", Self::sanitize_ident(name)));
-                        }
+                        ExprKind::Name(name) => self.emit_unbind_name(name),
                         _ => {
                             self.write_indent();
                             self.write("delete ");
@@ -6940,6 +7511,24 @@ function pyBitXor(a, b, fctx) {
                 }
             }
             StmtKind::AnnAssign { target, value, .. } => {
+                // #491 B1 audit: CPython REJECTS an annotated `global`/
+                // `nonlocal` name at compile time (`SyntaxError: annotated
+                // name 'y' can't be global`); it used to compile here as a
+                // plain outer write — accepts-invalid-input. Make it LOUD.
+                if let ExprKind::Name(n) = &target.kind {
+                    if self.is_outer_declared(n) {
+                        let kind = if self.scope_globals.last().is_some_and(|g| g.contains(n)) {
+                            "global"
+                        } else {
+                            "nonlocal"
+                        };
+                        self.record_codegen_error(&format!(
+                            "annotated name `{n}` can't be {kind} (CPython rejects an \
+                             annotated assignment to a `{kind}`-declared name; drop the \
+                             annotation or the `{kind}` declaration)"
+                        ));
+                    }
+                }
                 // Annotated assignment: emit as regular assignment, strip type annotation
                 if let Some(val) = value {
                     self.emit_assign(std::slice::from_ref(target), val);
@@ -6957,6 +7546,32 @@ function pyBitXor(a, b, fctx) {
                 self.emit_match(subject, cases);
             }
         }
+    }
+
+    /// `del name` (bare-name unbind) — shared by the `del` statement and the
+    /// implicit handler-exit unbind of an outer-bound `except … as name`.
+    /// Python's unbind-the-name has no direct JS equivalent: a bare `delete x`
+    /// is a strict-mode SyntaxError, so the binding is set to `undefined`.
+    /// #491: `del` of a module builtin-shadow CELL restores the BUILTIN
+    /// (CPython: the module global is unbound, so name lookup falls through
+    /// to builtins) — at module scope or through a `global` declaration.
+    fn emit_unbind_name(&mut self, name: &str) {
+        // Finding 1: `del x` unbinds the name — a later re-import must
+        // re-emit, not dedup.
+        self.invalidate_import_decl(name);
+        self.write_indent();
+        let restore = if self.declared_scopes.len() == 1
+            || self.scope_globals.last().is_some_and(|g| g.contains(name))
+        {
+            self.module_cells.get(name).cloned().flatten()
+        } else {
+            None
+        };
+        self.write(&format!(
+            "{} = {};\n",
+            Self::sanitize_ident(name),
+            restore.as_deref().unwrap_or("undefined")
+        ));
     }
 
     /// Emit the elements of a destructuring PATTERN (`[a, [b, c], ...rest]`),
@@ -7487,7 +8102,7 @@ function pyBitXor(a, b, fctx) {
     /// (forward-reference + param shadow), E (comprehension targets), F (a
     /// later-declared enclosing binding seen by an inner def), G (class methods),
     /// and H (`global` builtin fallback) at the root.
-    fn collect_local_bindings(body: &[Stmt], params: &[String]) -> HashSet<String> {
+    pub(crate) fn collect_local_bindings(body: &[Stmt], params: &[String]) -> HashSet<String> {
         let mut bound: HashSet<String> = params.iter().cloned().collect();
         Self::collect_bound_names(body, &mut bound);
         for g in Self::collect_global_names(body) {
@@ -8160,7 +8775,27 @@ function pyBitXor(a, b, fctx) {
 
     /// Statement walk for `collect_local_bindings` — records every bound name,
     /// descending into control-flow bodies but NOT nested def/class scopes.
+    /// FUNCTION-scope rule: an annotation-only `x: T` binds `x` (PEP 526 — a
+    /// static local, `UnboundLocalError` on read).
     fn collect_bound_names(body: &[Stmt], out: &mut HashSet<String>) {
+        Self::collect_bound_names_in(body, out, false);
+    }
+
+    /// #491 (SF1): the MODULE-scope binder census — the same walk under the
+    /// module rule: an annotation-only `x: T` (no value) binds NOTHING (PEP 526;
+    /// CPython `NameError` on read), exactly as the HIR authority
+    /// `pyths_hir::wasm_analysis::module_binders_in_stmt` counts it, so the two
+    /// censuses agree on the module NAME SET by construction. A walrus inside
+    /// the annotation still binds (module annotations ARE evaluated).
+    fn collect_module_bound_names(body: &[Stmt], out: &mut HashSet<String>) {
+        Self::collect_bound_names_in(body, out, true);
+    }
+
+    /// The shared walker behind `collect_bound_names` (function rule,
+    /// `module_scope = false`) and `collect_module_bound_names` (module rule,
+    /// `module_scope = true`). The flag ONLY changes the annotation-only
+    /// `AnnAssign` arm; every other binder form is identical at both scopes.
+    fn collect_bound_names_in(body: &[Stmt], out: &mut HashSet<String>, module_scope: bool) {
         fn tnames(e: &Expr, out: &mut HashSet<String>) {
             match &e.kind {
                 ExprKind::Name(n) => {
@@ -8189,10 +8824,15 @@ function pyBitXor(a, b, fctx) {
                     annotation,
                     value,
                 } => {
-                    // The annotated TARGET is a static local even with no
-                    // value (`len: int` alone → CPython UnboundLocalError on
-                    // a later read; PEP 526).
-                    tnames(target, out);
+                    // FUNCTION scope: the annotated TARGET is a static local
+                    // even with no value (`len: int` alone → CPython
+                    // UnboundLocalError on a later read; PEP 526). MODULE
+                    // scope (#491 SF1): a bare `x: T` binds nothing — only a
+                    // valued `x: T = v` is a module binder (matches the HIR
+                    // census `module_binders_in_stmt`).
+                    if value.is_some() || !module_scope {
+                        tnames(target, out);
+                    }
                     // Round-3 review: a walrus inside the ANNOTATION
                     // expression (`x: (len := int)`) also binds this scope
                     // statically — the annotation itself is never evaluated
@@ -8270,9 +8910,9 @@ function pyBitXor(a, b, fctx) {
                 } => {
                     tnames(target, out);
                     Self::collect_walrus_targets(iter, out);
-                    Self::collect_bound_names(body, out);
+                    Self::collect_bound_names_in(body, out, module_scope);
                     if let Some(e) = else_body {
-                        Self::collect_bound_names(e, out);
+                        Self::collect_bound_names_in(e, out, module_scope);
                     }
                 }
                 StmtKind::If {
@@ -8282,13 +8922,13 @@ function pyBitXor(a, b, fctx) {
                     else_body,
                 } => {
                     Self::collect_walrus_targets(test, out);
-                    Self::collect_bound_names(body, out);
+                    Self::collect_bound_names_in(body, out, module_scope);
                     for (c, b) in elif_clauses {
                         Self::collect_walrus_targets(c, out);
-                        Self::collect_bound_names(b, out);
+                        Self::collect_bound_names_in(b, out, module_scope);
                     }
                     if let Some(e) = else_body {
-                        Self::collect_bound_names(e, out);
+                        Self::collect_bound_names_in(e, out, module_scope);
                     }
                 }
                 StmtKind::While {
@@ -8297,9 +8937,9 @@ function pyBitXor(a, b, fctx) {
                     else_body,
                 } => {
                     Self::collect_walrus_targets(test, out);
-                    Self::collect_bound_names(body, out);
+                    Self::collect_bound_names_in(body, out, module_scope);
                     if let Some(e) = else_body {
-                        Self::collect_bound_names(e, out);
+                        Self::collect_bound_names_in(e, out, module_scope);
                     }
                 }
                 StmtKind::With { items, body, .. } => {
@@ -8309,7 +8949,7 @@ function pyBitXor(a, b, fctx) {
                             tnames(ov, out);
                         }
                     }
-                    Self::collect_bound_names(body, out);
+                    Self::collect_bound_names_in(body, out, module_scope);
                 }
                 StmtKind::Try {
                     body,
@@ -8317,18 +8957,18 @@ function pyBitXor(a, b, fctx) {
                     else_body,
                     finally_body,
                 } => {
-                    Self::collect_bound_names(body, out);
+                    Self::collect_bound_names_in(body, out, module_scope);
                     for h in handlers {
                         if let Some(n) = &h.name {
                             out.insert(n.clone());
                         }
-                        Self::collect_bound_names(&h.body, out);
+                        Self::collect_bound_names_in(&h.body, out, module_scope);
                     }
                     if let Some(e) = else_body {
-                        Self::collect_bound_names(e, out);
+                        Self::collect_bound_names_in(e, out, module_scope);
                     }
                     if let Some(f) = finally_body {
-                        Self::collect_bound_names(f, out);
+                        Self::collect_bound_names_in(f, out, module_scope);
                     }
                 }
                 StmtKind::Match { subject, cases } => {
@@ -8339,7 +8979,7 @@ function pyBitXor(a, b, fctx) {
                         if let Some(g) = &c.guard {
                             Self::collect_walrus_targets(g, out);
                         }
-                        Self::collect_bound_names(&c.body, out);
+                        Self::collect_bound_names_in(&c.body, out, module_scope);
                     }
                 }
                 StmtKind::Return(Some(e)) | StmtKind::Expr(e) | StmtKind::Raise(Some(e), _) => {
@@ -8811,7 +9451,16 @@ function pyBitXor(a, b, fctx) {
     /// at the import's position), and pre-hoisting it would replace the
     /// intended use-before-import TDZ fault (≈ UnboundLocalError) with a
     /// silent `undefined` read.
-    fn collect_hoisted_names(body: &[Stmt], at_module: bool) -> Vec<(String, bool)> {
+    ///
+    /// `params`: the function's PARAMETER names (empty for the module body).
+    /// #502: a match capture whose name is a parameter must WRITE that one
+    /// function-scope binding (the param), exactly like a capture whose name
+    /// is also bound by an ordinary assignment — see the Match arm.
+    fn collect_hoisted_names(
+        body: &[Stmt],
+        at_module: bool,
+        params: &HashSet<String>,
+    ) -> Vec<(String, bool)> {
         fn record(seen: &mut Vec<(String, u32)>, name: &str, depth: u32) {
             if !seen.iter().any(|(n, _)| n == name) {
                 seen.push((name.to_string(), depth));
@@ -9030,6 +9679,10 @@ function pyBitXor(a, b, fctx) {
             /// B2: true when walking the MODULE body (the import-rebind
             /// promotion + `del` recording are module-only).
             b2_module: bool,
+            /// #502: the enclosing function's parameter names (empty at
+            /// module scope) — a match capture of a param name rebinds the
+            /// param, so it is hoisted (marked) like a reassigned name.
+            params: HashSet<String>,
         }
         fn walk(
             stmts: &[Stmt],
@@ -9162,6 +9815,42 @@ function pyBitXor(a, b, fctx) {
                     }
                     StmtKind::Match { cases, .. } => {
                         for case in cases {
+                            // #500: a match CAPTURE is a function-scope
+                            // binder, exactly like a for-target (#220/#288):
+                            // when the same name is ALSO bound by an ordinary
+                            // assignment in this body (`r = 0` before the
+                            // match, or `r = r + 1000` in a case body), the
+                            // capture must WRITE that one function-scope
+                            // binding — hoist it (depth+1) and promote a
+                            // depth-0 first assignment — instead of shadowing
+                            // it with a case-block `let` (silent: the guard /
+                            // post-match read saw the stale outer value; a
+                            // case-body rebind wrote the shadow). A capture
+                            // name never assigned elsewhere keeps its
+                            // case-block `let` (no output churn), the same
+                            // rule as a never-reused for-target.
+                            //
+                            // #502: a capture whose name is a function
+                            // PARAMETER is the same case — CPython rebinds
+                            // the param (`def f(v, x): match v: case [1, x]`
+                            // then `return x` → the captured value). A
+                            // parameter is not an assignment in the body, so
+                            // `reassigned` never contained it and the capture
+                            // emitted a case-block `let x` that SHADOWED the
+                            // param (the post-match read saw the argument —
+                            // silent wrong value). Keyed on "name is a param",
+                            // not "read after the match": the rebind happens
+                            // either way. The param is already declared, so
+                            // the hoist emits NO `let` — it only marks the
+                            // name hoisted so the capture writes bare.
+                            let mut cn: HashSet<String> = HashSet::new();
+                            JsCodegen::pattern_bound_names(&case.pattern, &mut cn);
+                            for n in cn {
+                                if reassigned.contains(&n) || ctx.params.contains(&n) {
+                                    ctx.promote.insert(n.clone());
+                                    record(&mut ctx.seen, &n, depth + 1);
+                                }
+                            }
                             walk(&case.body, depth + 1, ctx, reassigned);
                         }
                     }
@@ -9252,7 +9941,10 @@ function pyBitXor(a, b, fctx) {
                         }
                     }
                     StmtKind::FuncDef { body, .. } => collect_global_declared(body, true, out),
-                    StmtKind::ClassDef { body, .. } => collect_global_declared(body, in_def, out),
+                    // #491 BLOCKER-2: a class block's own `global` declarations
+                    // rebind the module too (`class C: global X; X = v` after
+                    // `from m import X`) — same safe over-approximation.
+                    StmtKind::ClassDef { body, .. } => collect_global_declared(body, true, out),
                     StmtKind::If {
                         body,
                         elif_clauses,
@@ -9313,6 +10005,7 @@ function pyBitXor(a, b, fctx) {
             defclass: std::collections::HashSet::new(),
             import_bound,
             b2_module: at_module,
+            params: params.clone(),
         };
         let mut reassigned = Self::reassigned_names(body);
         // #269 (R17): a for-loop target that is READ outside its own loop leaks
@@ -9894,8 +10587,14 @@ function pyBitXor(a, b, fctx) {
     /// (`__UNBOUND`) covers unbound-local reads exactly as before (PBT-2/#288/
     /// #325). Must be called AFTER the scope is pushed and params declared, and
     /// (for a derived constructor) AFTER the `super(...)` call.
-    fn emit_hoisted_local_decls(&mut self, body: &[Stmt]) {
-        let hoisted_names = Self::collect_hoisted_names(body, false);
+    ///
+    /// `params`: the parameter names DECLARED in this scope (the dropped
+    /// method receiver excluded). #502: a match capture of one of these
+    /// rebinds the param — `collect_hoisted_names` hoists it, and since the
+    /// param is already declared this emits no `let`, only the hoisted mark
+    /// that routes the capture to a bare write of the param.
+    fn emit_hoisted_local_decls(&mut self, body: &[Stmt], params: &HashSet<String>) {
+        let hoisted_names = Self::collect_hoisted_names(body, false, params);
         let hoisted_set: HashSet<String> = hoisted_names.iter().map(|(n, _)| n.clone()).collect();
         let mut sentinels = Self::sentinel_for_names(body, &hoisted_set);
         // #288: a promoted name's depth-0 first assignment executes before
@@ -10211,7 +10910,15 @@ function pyBitXor(a, b, fctx) {
                     self.write(", ");
                 }
                 first = false;
-                self.write(&param.name);
+                // #491 BLOCKER-3: the prop KEY is the Python name; a param
+                // renamed by the captured-`global` pre-pass binds it under
+                // the renamed identifier (`{abs: abs$l0}`).
+                let py = python_name(&param.name);
+                if py != param.name {
+                    self.write(&format!("{}: {}", py, param.name));
+                } else {
+                    self.write(&param.name);
+                }
                 if let Some(default) = &param.default {
                     self.write(" = ");
                     self.emit_expr(default);
@@ -10244,9 +10951,10 @@ function pyBitXor(a, b, fctx) {
         self.emit_varargs_kw_prologue(params, name);
         // Issue #438: precompute this function's complete local binding set for
         // order-independent shadow resolution (params + body locals).
+        // The scope prologue (incl. the #199 `global`/`nonlocal` pre-declare) is
+        // the SHARED `open_function_scope` — identical for class methods.
         let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-        self.push_scope(Self::collect_local_bindings(body, &param_names));
-        self.set_scope_globals(Self::collect_global_declared(body));
+        self.open_function_scope(body, &param_names);
         // Enable PSX mode inside @component or @psx functions.
         // Both paths flip the same flag — the difference is the rest of
         // @component's machinery (export, props destructuring) doesn't
@@ -10276,12 +10984,8 @@ function pyBitXor(a, b, fctx) {
             self.write_indent();
             self.write(&format!("{}();\n", refresh_local));
         }
-        // #199: names declared `global`/`nonlocal` in this body rebind an
-        // outer binding — mark them declared up front so neither the hoist
-        // pass below nor a first inline assignment emits a shadowing `let`.
-        for g in Self::collect_global_names(body) {
-            self.declare(&g);
-        }
+        // #199 (`global`/`nonlocal` pre-declare) already ran in
+        // `open_function_scope` above — it must precede the hoist pass below.
         // B-023: hoist `let` for locals first-assigned inside a nested block so
         // they are function-scoped (Python semantics) rather than block-scoped.
         // PBT-2: sentinel-initialize hoisted for-targets with no other
@@ -10289,7 +10993,15 @@ function pyBitXor(a, b, fctx) {
         // zero-iteration loop leaves them raising UnboundLocalError (CPython)
         // instead of reading as undefined→None. Shared with class methods
         // (WB-5) via emit_hoisted_local_decls.
-        self.emit_hoisted_local_decls(body);
+        // #502: the declared params (every param but the implicit `self`,
+        // mirroring the declare loop above) — a match capture of a param name
+        // must write the param, not a shadowing case-block `let`.
+        let hoist_params: HashSet<String> = params
+            .iter()
+            .filter(|p| p.name != "self")
+            .map(|p| p.name.clone())
+            .collect();
+        self.emit_hoisted_local_decls(body, &hoist_params);
         // Round-4 sweep: `await` is only legal inside this body if the
         // function is async (async generators included).
         let prev_await_ok = self.await_ok;
@@ -10343,7 +11055,10 @@ function pyBitXor(a, b, fctx) {
                     // keyword-bindable first parameter (decorator wrappers).
                     !p.is_kwargs && !p.is_args && p.name != "cls" && star.is_none_or(|s| *i < s)
                 })
-                .map(|(_, p)| format!("\"{}\"", p.name))
+                // #491 BLOCKER-3: a param renamed by the captured-`global`
+                // pre-pass (`abs$l0`) keeps its PYTHON name in the metadata —
+                // keyword calls bind by that name.
+                .map(|(_, p)| format!("\"{}\"", python_name(&p.name)))
                 .collect();
             let has_kw = params.iter().any(|p| p.is_kwargs)
                 || (star.is_some() && Self::varargs_kw_split(params).is_some());
@@ -10375,7 +11090,7 @@ function pyBitXor(a, b, fctx) {
                 self.write(&format!(
                     "{}.__doc__ = {};\n",
                     js_name,
-                    js_string_literal(doc)
+                    js_string_literal(&Self::clean_doc(doc))
                 ));
             }
         }
@@ -10496,7 +11211,10 @@ function pyBitXor(a, b, fctx) {
             // of a missing keyword-only one, so validate the key set first
             // (the kw-only names are the allowed remainder).
             self.need_runtime("__pyNoExtraKw");
-            let allowed: Vec<String> = kwonly.iter().map(|p| format!("\"{}\"", p.name)).collect();
+            let allowed: Vec<String> = kwonly
+                .iter()
+                .map(|p| format!("\"{}\"", python_name(&p.name)))
+                .collect();
             self.write_indent();
             self.write(&format!(
                 "__pyNoExtraKw({}, \"{}\", [{}]);\n",
@@ -10512,7 +11230,7 @@ function pyBitXor(a, b, fctx) {
                 "let {} = __pyKwPop({}, \"{}\", \"{}\"",
                 Self::sanitize_ident(&p.name),
                 kw_var,
-                p.name,
+                python_name(&p.name),
                 fname
             ));
             if let Some(d) = &p.default {
@@ -10799,10 +11517,17 @@ function pyBitXor(a, b, fctx) {
         // via self/cls). Push an EMPTY binding set so class-level names never
         // pollute method shadow resolution.
         self.push_scope(HashSet::new());
+        // #491 BLOCKER-2: the class block's `global` declarations — a name in
+        // this set is a MODULE binding for every value-binding statement of
+        // the block (CPython: `global` in a class body rebinds the module,
+        // never the class namespace). Kept on the ClassCtx for
+        // `emit_class_body` and used again by the post-class installer.
+        let class_globals = Self::collect_global_declared(body);
         self.class_stack.push(ClassCtx {
             name: name.to_string(),
             pyobject_model,
             has_bases: !bases.is_empty(),
+            globals: class_globals.clone(),
         });
 
         if is_dataclass {
@@ -10904,7 +11629,7 @@ function pyBitXor(a, b, fctx) {
             self.write(&format!(
                 "{}.__doc__ = {};\n",
                 js_name,
-                js_string_literal(doc)
+                js_string_literal(&Self::clean_doc(doc))
             ));
         }
         for stmt in body {
@@ -10920,7 +11645,7 @@ function pyBitXor(a, b, fctx) {
                         "if ({cls}.prototype.{m}) {cls}.prototype.{m}.__doc__ = {d};\n",
                         cls = js_name,
                         m = Self::sanitize_ident(m_name),
-                        d = js_string_literal(doc)
+                        d = js_string_literal(&Self::clean_doc(doc))
                     ));
                 }
             }
@@ -10939,7 +11664,36 @@ function pyBitXor(a, b, fctx) {
             })
             .collect();
         self.class_attr_subst = Some((js_name.to_string(), method_names));
+        // #491 BLOCKER-2: a class nested in a FUNCTION scope — pre-declare the
+        // block's `global` names in that scope (the #199 rule the function
+        // prologue applies to its own `global` statements), so the post-class
+        // module write below is a bare `N = v` that resolves to the module
+        // `export let N` cell, never a function-local `let N`. At module scope
+        // nothing to do: a cell is declared up front and a non-builtin name
+        // gets its `export let` from the ordinary assignment path.
+        if self.declared_scopes.len() > 1 {
+            for g in &class_globals {
+                // #491 B1: the SAME authority as the function prologue —
+                // declared AND hoisted — so a class-body `global N; for N in
+                // …` / match-capture nested in a function writes the module
+                // cell instead of a fresh block-local (it did before: `0`
+                // where CPython prints `22`).
+                self.predeclare_outer_binding(g);
+            }
+        }
         for stmt in body {
+            // #491 BLOCKER-2: a `global`-only binding statement of the class
+            // block is a MODULE write executed at class-definition time — emit
+            // it here (post-class, in class-body order, enclosing scope) as an
+            // ordinary statement: `abs = 7;` writes the module cell that every
+            // call-time reader resolves, `x += 5` / `del abs` / `a, b = …` /
+            // `if c: abs = 7` take their normal module lowering. It was
+            // `__pyClassAttr(C, "abs", 7)` before: a class attribute, the
+            // module builtin untouched — a SILENT wrong value.
+            if Self::is_class_body_global_write(stmt, &class_globals) {
+                self.emit_stmt(stmt);
+                continue;
+            }
             let (target, value, ann) = match &stmt.kind {
                 StmtKind::Assign { targets, value } if targets.len() == 1 => {
                     (&targets[0], value, None)
@@ -11011,17 +11765,34 @@ function pyBitXor(a, b, fctx) {
                         unreachable!()
                     };
                     self.write_indent();
-                    self.write(&format!(
-                        "__pyClassAttr({}, \"{}\", ",
-                        js_name,
-                        Self::sanitize_ident(attr_name)
-                    ));
+                    // #491 BLOCKER-2: a MIXED tuple target (`global abs; abs, x
+                    // = 7, 1`) splits per element — the `global` element is a
+                    // module write (same let-decision as the assignment path),
+                    // the rest stay class attributes.
+                    let module_write = class_globals.contains(attr_name);
+                    if module_write {
+                        self.invalidate_import_decl(attr_name);
+                        if !self.is_declared(attr_name) {
+                            if self.indent == 0 {
+                                self.write("export ");
+                            }
+                            self.write("let ");
+                            self.declare(attr_name);
+                        }
+                        self.write(&format!("{} = ", Self::sanitize_ident(attr_name)));
+                    } else {
+                        self.write(&format!(
+                            "__pyClassAttr({}, \"{}\", ",
+                            js_name,
+                            Self::sanitize_ident(attr_name)
+                        ));
+                    }
                     match (&literal_vals, &tmp) {
                         (Some(vals), _) => self.emit_expr(&vals[i]),
                         (None, Some(t)) => self.write(&format!("{}[{}]", t, i)),
                         _ => unreachable!(),
                     }
-                    self.write(");\n");
+                    self.write(if module_write { ";\n" } else { ");\n" });
                 }
             }
         }
@@ -11128,7 +11899,7 @@ function pyBitXor(a, b, fctx) {
                                 && p.name != "cls"
                                 && star.is_none_or(|s| *i < s)
                         })
-                        .map(|(_, p)| format!("\"{}\"", p.name))
+                        .map(|(_, p)| format!("\"{}\"", python_name(&p.name)))
                         .collect();
                     let has_kw = m_params.iter().any(|p| p.is_kwargs)
                         || (star.is_some() && Self::varargs_kw_split(m_params).is_some());
@@ -11267,8 +12038,19 @@ function pyBitXor(a, b, fctx) {
     }
 
     fn emit_class_body(&mut self, body: &[Stmt]) {
+        let class_globals: HashSet<String> = self
+            .class_stack
+            .last()
+            .map(|c| c.globals.clone())
+            .unwrap_or_default();
         for stmt in body {
             match &stmt.kind {
+                // #491 BLOCKER-2: a statement that binds only `global`-declared
+                // names is a MODULE write executed at class-definition time —
+                // never a class attribute (and never a raw statement inside the
+                // JS class). Skipped here; `emit_class_def` emits it post-class
+                // in the enclosing scope, in class-body order.
+                _ if Self::is_class_body_global_write(stmt, &class_globals) => {}
                 StmtKind::FuncDef {
                     name: method_name,
                     params,
@@ -12351,9 +13133,12 @@ function pyBitXor(a, b, fctx) {
         // so a builtin-named param or local shadows the builtin regardless of
         // source order (incl. from a nested fn/lambda inside the method — case
         // G). Still `declare` the params for the incremental let-emission state.
+        // #491 BLOCKER-1: the prologue is the SHARED `open_function_scope` (the
+        // same one `emit_func_def` uses), which includes the #199 `global`/
+        // `nonlocal` pre-declare — so `global abs; abs = 7` in a method writes
+        // the module cell instead of emitting a method-local `let abs`.
         let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-        self.push_scope(Self::collect_local_bindings(body, &param_names));
-        self.set_scope_globals(Self::collect_global_declared(body));
+        self.open_function_scope(body, &param_names);
         // Declare every param EXCEPT the dropped receiver (bound as `this` /
         // `const <name>`). A static method's `self`/`cls` param is a real local
         // and must be declared (else it reads as an undeclared global).
@@ -12363,6 +13148,14 @@ function pyBitXor(a, b, fctx) {
             }
             self.declare(&param.name);
         }
+        // #502: the same declared-param set, for the hoist pass below — a
+        // match capture of a param name rebinds the param (emit_func_def twin).
+        let hoist_params: HashSet<String> = params
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !(drop_first && *i == 0))
+            .map(|(_, p)| p.name.clone())
+            .collect();
         self.record_param_types(params);
 
         // WB-15 — set the single `self`-lowering predicate for this method body
@@ -12467,7 +13260,7 @@ function pyBitXor(a, b, fctx) {
             // WB-5: hoist function-scope `let`s AFTER super() (a derived
             // constructor may not touch anything before super()) so a local
             // assigned only inside a branch is method-scoped, not block-scoped.
-            self.emit_hoisted_local_decls(body);
+            self.emit_hoisted_local_decls(body, &hoist_params);
             for stmt in body {
                 if super_init_args(stmt).is_some() {
                     continue; // already emitted as the hoisted super(...) call
@@ -12499,7 +13292,7 @@ function pyBitXor(a, b, fctx) {
             // emit_func_def does, so `if c: x=a else: x=b; return x` no longer
             // emits a block-scoped `let x` + a bare else-branch `x` (a strict-ESM
             // ReferenceError).
-            self.emit_hoisted_local_decls(body);
+            self.emit_hoisted_local_decls(body, &hoist_params);
             for stmt in body {
                 self.emit_stmt(stmt);
             }
@@ -12805,7 +13598,6 @@ function pyBitXor(a, b, fctx) {
         }
         self.loop_flag_stack.push(flag.clone());
 
-        self.write_indent();
         // #262: a for-target REASSIGNED inside the body (`for k, v in ...:
         // v = 99`, or `for i in ...: i = i*2`) can't be a `const` — use a
         // block-scoped `let` (per-iteration, reassignable; Python's rebind
@@ -12821,18 +13613,47 @@ function pyBitXor(a, b, fctx) {
         // loop must WRITE those bindings (`for ([a, b] of …)`), not shadow
         // them with a fresh per-iteration `const [a, b]`; Python leaks every
         // name of the tuple target. (`collect_hoisted_names` hoists all names
-        // of a reused pattern together, so the all() guard is normally
-        // all-or-nothing; a pathological partial pattern keeps the old
-        // shadowing path.)
-        let bare_target = match &target.kind {
-            ExprKind::Name(n) => self.is_hoisted(n),
+        // of a reused pattern together, so the guard is normally
+        // all-or-nothing.)
+        // #491 BLOCKER-B1 (class closure): `is_hoisted` is the ONE write-target
+        // authority — a `global`/`nonlocal`-declared name is marked hoisted by
+        // `predeclare_outer_binding` (the same prologue fact `emit_assign`
+        // keys on), so a function-scope `global N; for N in …` writes the
+        // module cell bare, exactly like `global N; N = v`. It used to emit
+        // `for (const N of …)`, a fresh block-local (silent: `print(abs)` gave
+        // the builtin where CPython prints 22). A PARTIAL pattern — some
+        // elements hoisted/outer, the rest fresh (`global a; for a, b in …`
+        // with `b` never read outside) — can no longer keep the old shadowing
+        // `const [a, b]` (it would silently skip the outer write of `a`): the
+        // fresh elements get a `let` in a wrapper block and the whole pattern
+        // is written bare.
+        let (bare_target, fresh_elems): (bool, Vec<String>) = match &target.kind {
+            ExprKind::Name(n) => (self.is_hoisted(n), Vec::new()),
             ExprKind::Tuple(elts) | ExprKind::List(elts) => {
                 let mut tn = Vec::new();
                 Self::collect_pattern_names(elts, &mut tn);
-                !tn.is_empty() && tn.iter().all(|n| self.is_hoisted(n))
+                let any_outer = tn.iter().any(|n| self.is_hoisted(n));
+                let mut fresh: Vec<String> = Vec::new();
+                if any_outer {
+                    for n in &tn {
+                        if !self.is_hoisted(n) && !fresh.contains(n) {
+                            fresh.push(n.clone());
+                        }
+                    }
+                }
+                (any_outer, fresh)
             }
-            _ => false,
+            _ => (false, Vec::new()),
         };
+        let wrapped = !fresh_elems.is_empty();
+        if wrapped {
+            self.writeln("{");
+            self.indent += 1;
+            for n in &fresh_elems {
+                self.writeln(&format!("let {};", Self::sanitize_ident(n)));
+            }
+        }
+        self.write_indent();
         let binder = if bare_target {
             ""
         } else if Self::for_target_reassigned(target, body) {
@@ -12916,6 +13737,10 @@ function pyBitXor(a, b, fctx) {
         }
         self.indent -= 1;
         self.writeln("}");
+        if wrapped {
+            self.indent -= 1;
+            self.writeln("}");
+        }
         self.loop_flag_stack.pop();
 
         if let Some(stmts) = else_body {
@@ -13038,15 +13863,45 @@ function pyBitXor(a, b, fctx) {
                 }
 
                 self.indent += 1;
+                // #491 BLOCKER-B1 (class closure): the `as` alias is a WRITE
+                // target — when the name has an outer binding to write (a
+                // `global`/`nonlocal`-declared name, or a hoisted function/
+                // module-scope `let`; the ONE `is_hoisted` authority) it must
+                // be written BARE, not shadowed by a fresh catch-block `let`
+                // (silent: a module reader saw the stale value during the
+                // handler). CPython then UNBINDS the alias when the handler
+                // exits (`except E as e:` compiles to `try: … finally: e =
+                // None; del e`) — so the module `e` is unbound afterwards and
+                // a builtin-named alias restores the builtin — emitted as a
+                // `try { … } finally { <del e> }` around the handler body.
+                let outer_alias = handler
+                    .name
+                    .as_deref()
+                    .filter(|n| self.is_hoisted(n))
+                    .map(str::to_owned);
                 if let Some(name) = &handler.name {
                     // SECURITY (#13): sanitize the exception alias — a reserved
                     // word (`let`, `default`, ...) would emit `let let = __exc`
                     // (SyntaxError). Body references go through the same
                     // sanitize_ident, so the rename stays consistent.
-                    self.writeln(&format!("let {} = __exc;", Self::sanitize_ident(name)));
+                    if outer_alias.is_some() {
+                        self.writeln(&format!("{} = __exc;", Self::sanitize_ident(name)));
+                        self.writeln("try {");
+                        self.indent += 1;
+                    } else {
+                        self.writeln(&format!("let {} = __exc;", Self::sanitize_ident(name)));
+                    }
                 }
                 for stmt in &handler.body {
                     self.emit_stmt(stmt);
+                }
+                if let Some(name) = &outer_alias {
+                    self.indent -= 1;
+                    self.writeln("} finally {");
+                    self.indent += 1;
+                    self.emit_unbind_name(name);
+                    self.indent -= 1;
+                    self.writeln("}");
                 }
                 self.indent -= 1;
             }
@@ -13298,9 +14153,31 @@ function pyBitXor(a, b, fctx) {
         self.emit_expr(subject);
         self.write(";\n");
 
+        // #500: CPython evaluates a case as pattern-test → BIND captures →
+        // guard → (true) body + leave the match / (false) fall through to the
+        // NEXT case with the bindings made so far persisting. The old lowering
+        // folded the guard into the pattern `if` (`if (<pat> && (<guard>)) {
+        // <bind>; … }`), so a guard that reads a capture saw the PRE-match
+        // value (`case [1, r] if r > 5` read the old `r` — silent wrong value,
+        // module `global` cell and plain local alike). A guarded match can no
+        // longer be an `if / else if` chain (a guard-false case must fall
+        // through to the next pattern test, which `else if` skips), so it
+        // lowers to a labeled block: each case is `if (<pat>) { <bind>; if
+        // (<guard>) { <body>; break <label>; } }` and a guard-free case inside
+        // it is `if (<pat>) { <bind>; <body>; break <label>; }`. A match with
+        // NO guards keeps the byte-identical `if / else if` chain (equivalent:
+        // with no guard the first structural hit always runs its body).
+        let any_guard = cases.iter().any(|c| c.guard.is_some());
+        let label = format!("{}_done", subj);
+        if any_guard {
+            self.writeln(&format!("{}: {{", label));
+            self.indent += 1;
+        }
+
+        let last = cases.len().saturating_sub(1);
         for (i, case) in cases.iter().enumerate() {
             self.write_indent();
-            if i == 0 {
+            if any_guard || i == 0 {
                 self.write("if (");
             } else {
                 self.write("} else if (");
@@ -13313,26 +14190,59 @@ function pyBitXor(a, b, fctx) {
                 self.emit_pattern_condition(&case.pattern, &subj);
             }
 
-            // Guard clause
-            if let Some(guard) = &case.guard {
-                self.write(" && (");
-                self.emit_expr(guard);
-                self.write(")");
+            if !any_guard {
+                // Guard-free chain: unchanged shape.
+                self.write(") {\n");
+                self.indent += 1;
+                self.emit_pattern_bindings(&case.pattern, &subj);
+                for stmt in &case.body {
+                    self.emit_stmt(stmt);
+                }
+                self.indent -= 1;
+                continue;
             }
 
             self.write(") {\n");
             self.indent += 1;
 
-            // Emit pattern bindings
+            // BIND first — the guard below must read the freshly-bound
+            // captures (the write target — a hoisted function/module-scope
+            // `let`, the `global`/`nonlocal` outer cell per #491, or a fresh
+            // case-block `let` — is decided by emit_pattern_bindings).
             self.emit_pattern_bindings(&case.pattern, &subj);
+
+            let guarded = case.guard.is_some();
+            if let Some(guard) = &case.guard {
+                // Evaluated exactly once, after the bindings, so a walrus /
+                // side effect in the guard runs once and sees the captures.
+                self.write_indent();
+                self.write("if (");
+                self.emit_expr(guard);
+                self.write(") {\n");
+                self.indent += 1;
+            }
 
             for stmt in &case.body {
                 self.emit_stmt(stmt);
             }
+            if i != last {
+                // Leave the match: a later case must NOT run after this
+                // case's body. (The last case simply falls out of the block.)
+                self.writeln(&format!("break {};", label));
+            }
+
+            if guarded {
+                self.indent -= 1;
+                self.writeln("}");
+            }
             self.indent -= 1;
+            self.writeln("}");
         }
 
-        if !cases.is_empty() {
+        if any_guard {
+            self.indent -= 1;
+            self.writeln("}");
+        } else if !cases.is_empty() {
             self.writeln("}");
         }
     }
@@ -13477,6 +14387,31 @@ function pyBitXor(a, b, fctx) {
 
     /// Emit variable bindings extracted from a pattern.
     fn emit_pattern_bindings(&mut self, pattern: &Pattern, subject: &str) {
+        self.emit_pattern_bindings_in(pattern, subject, false);
+    }
+
+    /// #501: the OR-pattern binding dispatch. Every capture bound anywhere in
+    /// `pattern` (all alternatives — a valid Python OR binds the SAME name set
+    /// in every alternative, possibly at DIFFERENT positions) is pre-declared
+    /// ONCE at the current (case-block) level, and each alternative then
+    /// carries its OWN structural re-test + its OWN bare capture writes, so
+    /// the bound value comes from the alternative that actually matched:
+    /// `if (<test A>) { <bind A> } else if (<test B>) { <bind B> } else {
+    /// <bind last> }`. The old lowering bound from the FIRST alternative's
+    /// structure whatever matched (`case [x, 1] | [1, x]` on `[1, 7]` bound
+    /// `x = __match[0]` = 1; CPython 7 — silent wrong value). The enclosing
+    /// pattern condition already proved SOME alternative matches, so the last
+    /// one binds under a plain `else`. Re-testing an alternative re-reads the
+    /// `const` subject through pure structural checks (`Array.isArray`,
+    /// `.length`, `===`, `instanceof`, `in`/`.has`), so the re-test is
+    /// unobservable. An OR that binds nothing (`case 200 | 201`) emits
+    /// nothing, byte-identical to before.
+    ///
+    /// `bare`: inside an alternative — every capture writes the pre-declared
+    /// (or hoisted) binding; a NESTED OR must not pre-declare again (a `let`
+    /// inside the alternative's block would shadow the outer pre-declaration
+    /// and the write would land on the shadow).
+    fn emit_pattern_bindings_in(&mut self, pattern: &Pattern, subject: &str, bare: bool) {
         match pattern {
             Pattern::Capture(name) => {
                 // PBT-2: a capture name with a genuine function/module-scope
@@ -13488,7 +14423,7 @@ function pyBitXor(a, b, fctx) {
                 // NOTE: is_hoisted, not is_declared — a per-iteration `const`
                 // for-target is marked declared without any function-scope
                 // binding to write.
-                if self.is_hoisted(name) {
+                if bare || self.is_hoisted(name) {
                     self.writeln(&format!("{} = {};", Self::sanitize_ident(name), subject));
                 } else {
                     // SECURITY (#13): sanitize the capture binding — reserved
@@ -13513,7 +14448,11 @@ function pyBitXor(a, b, fctx) {
                         match pat {
                             Pattern::Star(Some(name)) => {
                                 // PBT-2: same hoisted-name rule as Capture.
-                                let binder = if self.is_hoisted(name) { "" } else { "let " };
+                                let binder = if bare || self.is_hoisted(name) {
+                                    ""
+                                } else {
+                                    "let "
+                                };
                                 self.writeln(&format!(
                                     "{}{} = {}.slice({}, {}.length - {});",
                                     binder,
@@ -13526,10 +14465,12 @@ function pyBitXor(a, b, fctx) {
                                 self.declare(name);
                             }
                             Pattern::Star(None) => {}
-                            _ if i < si => {
-                                self.emit_pattern_bindings(pat, &format!("{}[{}]", subject, i))
-                            }
-                            _ => self.emit_pattern_bindings(
+                            _ if i < si => self.emit_pattern_bindings_in(
+                                pat,
+                                &format!("{}[{}]", subject, i),
+                                bare,
+                            ),
+                            _ => self.emit_pattern_bindings_in(
                                 pat,
                                 &format!(
                                     "{}[{}.length - {}]",
@@ -13537,12 +14478,13 @@ function pyBitXor(a, b, fctx) {
                                     subject,
                                     patterns.len() - i
                                 ),
+                                bare,
                             ),
                         }
                     }
                 } else {
                     for (i, pat) in patterns.iter().enumerate() {
-                        self.emit_pattern_bindings(pat, &format!("{}[{}]", subject, i));
+                        self.emit_pattern_bindings_in(pat, &format!("{}[{}]", subject, i), bare);
                     }
                 }
             }
@@ -13555,31 +14497,68 @@ function pyBitXor(a, b, fctx) {
                         // between JS quotes. A `"`/newline/backslash in it broke
                         // out of the literal; encode it via js_string_literal.
                         let k = js_string_literal(s);
-                        self.emit_pattern_bindings(
+                        self.emit_pattern_bindings_in(
                             pat,
                             &format!(
                                 "({subj} instanceof Map ? {subj}.get({k}) : {subj}[{k}])",
                                 subj = subject,
                                 k = k
                             ),
+                            bare,
                         );
                     }
                 }
             }
             Pattern::Class { args, .. } => {
                 for (i, pat) in args.iter().enumerate() {
-                    self.emit_pattern_bindings(pat, &format!("Object.values({})[{}]", subject, i));
+                    self.emit_pattern_bindings_in(
+                        pat,
+                        &format!("Object.values({})[{}]", subject, i),
+                        bare,
+                    );
                 }
             }
             Pattern::Or(alternatives) => {
-                // Bind from the first alternative that has captures
-                if let Some(alt) = alternatives.first() {
-                    self.emit_pattern_bindings(alt, subject);
+                // #501: per-alternative test + bind (see the doc comment on
+                // emit_pattern_bindings_in). Nothing bound → nothing emitted.
+                let mut bound: HashSet<String> = HashSet::new();
+                Self::pattern_bound_names(pattern, &mut bound);
+                if bound.is_empty() {
+                    return;
                 }
+                if !bare {
+                    // Pre-declare once at the case-block level (sorted: a
+                    // HashSet walk would make the output order run-dependent).
+                    // Hoisted names (#500 promoted / #491 `global`/`nonlocal` /
+                    // #502 param) already have their function-scope binding.
+                    let mut names: Vec<&String> = bound.iter().collect();
+                    names.sort();
+                    for name in names {
+                        if !self.is_hoisted(name) {
+                            self.writeln(&format!("let {};", Self::sanitize_ident(name)));
+                            self.declare(name);
+                        }
+                    }
+                }
+                let last = alternatives.len() - 1;
+                for (i, alt) in alternatives.iter().enumerate() {
+                    self.write_indent();
+                    if i == last && i > 0 {
+                        self.write("} else {\n");
+                    } else {
+                        self.write(if i == 0 { "if (" } else { "} else if (" });
+                        self.emit_pattern_condition(alt, subject);
+                        self.write(") {\n");
+                    }
+                    self.indent += 1;
+                    self.emit_pattern_bindings_in(alt, subject, true);
+                    self.indent -= 1;
+                }
+                self.writeln("}");
             }
             Pattern::As { pattern, name } => {
                 // PBT-2: same hoisted-name rule as Capture.
-                if self.is_hoisted(name) {
+                if bare || self.is_hoisted(name) {
                     self.writeln(&format!("{} = {};", Self::sanitize_ident(name), subject));
                 } else {
                     // SECURITY (#13): sanitize the as-pattern binding.
@@ -13590,7 +14569,7 @@ function pyBitXor(a, b, fctx) {
                     ));
                     self.declare(name);
                 }
-                self.emit_pattern_bindings(pattern, subject);
+                self.emit_pattern_bindings_in(pattern, subject, bare);
             }
             Pattern::Wildcard | Pattern::Literal(_) | Pattern::Value(_) | Pattern::Star(_) => {}
         }
@@ -13989,7 +14968,7 @@ function pyBitXor(a, b, fctx) {
                                 self.write(&format!(
                                     "__pyChkGlobal({}, \"{}\")",
                                     Self::sanitize_ident(name),
-                                    name
+                                    python_name(name)
                                 ));
                             }
                         }
@@ -13998,7 +14977,7 @@ function pyBitXor(a, b, fctx) {
                             self.write(&format!(
                                 "__pyChkLocal({}, \"{}\")",
                                 Self::sanitize_ident(name),
-                                name
+                                python_name(name)
                             ));
                         }
                         Some(SentinelRead::Free) => {
@@ -14011,7 +14990,7 @@ function pyBitXor(a, b, fctx) {
                             self.write(&format!(
                                 "__pyChkFree({}, \"{}\")",
                                 Self::sanitize_ident(name),
-                                name
+                                python_name(name)
                             ));
                         }
                         None => self.write(&Self::sanitize_ident(name)),
@@ -14483,7 +15462,7 @@ function pyBitXor(a, b, fctx) {
                     .iter()
                     .enumerate()
                     .filter(|(i, p)| !p.is_kwargs && !p.is_args && star.is_none_or(|s| *i < s))
-                    .map(|(_, p)| format!("\"{}\"", p.name))
+                    .map(|(_, p)| format!("\"{}\"", python_name(&p.name)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 // WB-14: Python evaluates default args ONCE at def-time (frozen);
@@ -15211,10 +16190,16 @@ function pyBitXor(a, b, fctx) {
                     self.emit_binop_helper(helper, left, right);
                 }
             }
-            BinOp::Eq | BinOp::NotEq if Self::type_identity_cmp(left, right).is_some() => {
+            BinOp::Eq | BinOp::NotEq
+                if Self::type_identity_cmp(left, right)
+                    .is_some_and(|(_, tyname)| self.type_identity_unshadowed(tyname)) =>
+            {
                 // #251: `type(x) == int` — the builtin type name lowers to its
                 // constructor function, so `pyEq(pyType(x), <fn>)` was always
                 // false. Compare the runtime type's __name__ instead.
+                // #491: only when neither `type` NOR the type-name operand is shadowed
+                // (checked in the guard); a user `def int` makes `type(x) == int`
+                // compare against the user fn — fall through to pyEq.
                 let (arg, tyname) = Self::type_identity_cmp(left, right).unwrap();
                 let cmp = if matches!(op, BinOp::Eq) {
                     "==="
@@ -15777,6 +16762,9 @@ function pyBitXor(a, b, fctx) {
                 // the call site matches, route to `new` and bail out so
                 // the PSX path doesn't claim it.
                 if self.known_classes.contains(name) {
+                    if self.emit_cell_class_call(name, args, kwargs, optional) {
+                        return;
+                    }
                     if !kwargs.is_empty() && !optional {
                         self.emit_ctor_kw_call(&Self::sanitize_ident(name), args, kwargs);
                         return;
@@ -16139,16 +17127,29 @@ function pyBitXor(a, b, fctx) {
                         // classes still pass as values. Tuple form maps each
                         // element.
                         if name == "isinstance" && args.len() == 2 {
-                            let is_ty = |e: &Expr| {
-                                matches!(&e.kind,
-                                ExprKind::Name(n) if matches!(n.as_str(),
-                                    "list" | "tuple" | "str" | "int" | "float"
-                                    | "bool" | "dict" | "set"
-                                    | "bytes" | "bytearray"))
+                            let is_builtin_ty_name = |n: &str| {
+                                matches!(
+                                    n,
+                                    "list"
+                                        | "tuple"
+                                        | "str"
+                                        | "int"
+                                        | "float"
+                                        | "bool"
+                                        | "dict"
+                                        | "set"
+                                        | "bytes"
+                                        | "bytearray"
+                                )
                             };
+                            // #491: a builtin type NAME lowers to a string sentinel ONLY
+                            // when unshadowed at the use-site; a user binding of the name
+                            // (`def int`) is a real value and must be passed as the class
+                            // operand (CPython isinstance against the user object), never
+                            // coerced to the `"int"` sentinel.
                             let emit_cls = |s: &mut Self, e: &Expr| {
                                 if let ExprKind::Name(n) = &e.kind {
-                                    if is_ty(e) {
+                                    if is_builtin_ty_name(n) && !s.is_declared_in_any_scope(n) {
                                         s.write(&format!("\"{}\"", n));
                                         return;
                                     }
@@ -16314,6 +17315,9 @@ function pyBitXor(a, b, fctx) {
                 || (name.chars().next().is_some_and(|c| c.is_uppercase())
                     && !self.known_functions.contains(name))
             {
+                if self.emit_cell_class_call(name, args, kwargs, optional) {
+                    return;
+                }
                 if !kwargs.is_empty() && !optional {
                     self.emit_ctor_kw_call(&Self::sanitize_ident(name), args, kwargs);
                     return;
@@ -16482,16 +17486,17 @@ function pyBitXor(a, b, fctx) {
         // function bind BY NAME to positional parameters in Python; the
         // legacy lowering passed a trailing options object, which landed
         // an object in the first keyword parameter's slot (garbage).
-        // Name-callee calls with kwargs route through __pyCallKw, which
-        // consults the callee's __pyparams__ metadata (attached at
-        // definition) and falls back to the options-object convention
-        // for functions without it (JS interop, components, methods).
-        // Attribute callees are excluded — extracting `obj.m` would lose
-        // its `this` binding.
-        if !kwargs.is_empty()
-            && !optional
-            && matches!(&func.kind, ExprKind::Name(_) | ExprKind::Lambda { .. })
-        {
+        // Non-attribute-callee calls with kwargs route through __pyCallKw,
+        // which consults the callee's __pyparams__ metadata (attached at
+        // definition) and falls back to the options-object convention for
+        // functions without it (JS interop, components, methods). #478: this
+        // covers a Name/Lambda callee AND any general callable EXPRESSION —
+        // a call result (`partial(f, 1)(2, z=3)`), a subscript, etc. — whose
+        // keywords previously leaked in as a bare trailing positional object.
+        // Attribute callees are excluded (the dedicated branch below keeps
+        // `this` via a call-site __pyKwArgs spread); known-class Name
+        // constructors are already intercepted above (emit_ctor_kw_call).
+        if !kwargs.is_empty() && !optional && !matches!(&func.kind, ExprKind::Attribute { .. }) {
             // Lambda IIFEs too (autotester arguments): the __pyFnMeta wrapper
             // carries the lambda's __pyparams__, so keyword binding works.
             self.need_runtime("__pyCallKw");
@@ -17162,6 +18167,47 @@ function pyBitXor(a, b, fctx) {
     /// (set at class emission from __init__ params / dataclass fields)
     /// maps names to positional slots; metadata-less classes get the
     /// legacy trailing options object inside the array.
+    /// #491: a call to a module CELL name that is ALSO a `class` binder
+    /// (`class abs: …` rebinding the builtin). Whether the call constructs
+    /// (`new`) or calls (the builtin, before the class statement runs — or a
+    /// later `def`) is a CALL-TIME fact, so route through the runtime's
+    /// `__pyCall` dispatcher (class → `new`, function → call, `__call__`
+    /// object, else CPython's TypeError). Keyword arguments bind through
+    /// `__pyKwArgs`, which reads the metadata off the class's `__init__` or
+    /// the function alike. Returns false when the name is not such a cell.
+    fn emit_cell_class_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        kwargs: &[Keyword],
+        optional: bool,
+    ) -> bool {
+        if optional || !self.module_cells.contains_key(name) {
+            return false;
+        }
+        let js = Self::sanitize_ident(name).into_owned();
+        self.need_runtime("__pyCall");
+        self.write(&format!("__pyCall({}, ", js));
+        if kwargs.is_empty() {
+            self.write("[");
+            self.emit_call_args(args, kwargs);
+            self.write("])");
+        } else {
+            self.need_runtime("__pyKwArgs");
+            self.write(&format!("__pyKwArgs({}, [", js));
+            for (i, a) in args.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.emit_expr(a);
+            }
+            self.write("], ");
+            self.emit_kwargs_value(kwargs);
+            self.write("))");
+        }
+        true
+    }
+
     fn emit_ctor_kw_call(&mut self, ctor_js: &str, args: &[Expr], kwargs: &[Keyword]) {
         self.need_runtime("__pyKwArgs");
         self.write(&format!("new {c}(...__pyKwArgs({c}, [", c = ctor_js));
@@ -19353,6 +20399,10 @@ pub const SPECIALLY_LOWERED_BUILTINS: &[(&str, &str)] = &[
     ("repr", "definitely-float arg fast path"),
     ("round", "float arg (pyFormatFloat classification)"),
     ("str", "definitely-float arg fast path"),
+    (
+        "type",
+        "type(x) == T identity fast path (.__name__ comparison)",
+    ),
 ];
 
 /// delta4 — the CHECKED MANIFEST of every runtime symbol the codegen can
@@ -19839,6 +20889,46 @@ fn is_react_or_next_module(module: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `clean_doc` must match CPython 3.13+ compile-time docstring dedent (the
+    /// `py -3.14` oracle the conformance ratchet compares against). Every pair
+    /// below was produced by running the raw string as a real docstring under
+    /// `py -3.14` (`def g():\n    '''<raw>'''`). This is the paired guard for the
+    /// docstrings-dedent fidelity fix — a regression to raw docstrings fails here.
+    #[test]
+    fn clean_doc_matches_cpython_dedent() {
+        let cases: &[(&str, &str)] = &[
+            ("a\n  b\n    c", "a\nb\n  c"), // dedent by the min later indent (2)
+            ("a\n    b\n  c", "a\n  b\nc"), // min later indent is line 3 (2)
+            ("first\n        called f", "first\ncalled f"),
+            ("  a\n  b", "a\nb"),   // first line left-stripped too
+            ("    a\n  b", "a\nb"), // first line fully stripped, not by `indent`
+            ("  a\n    b", "a\nb"),
+            ("a\n\n    b", "a\n\nb"),    // blank line ignored for indent
+            ("a\n   \n    b", "a\n\nb"), // whitespace-only line ignored for indent
+            // Tabs are EXPANDED (tabsize 8, column-aware, code-point columns) BEFORE the margin scan:
+            ("a\n\tb\n\tc", "a\nb\nc"), // equal tab prefixes cancel
+            ("x\n\t  y\n\t    z", "x\ny\n  z"),
+            ("a\n\tb\n  c", "a\n      b\nc"), // tab(->col 8) vs 2 spaces -> margin 2
+            ("a\tb\n  c", "a       b\nc"),    // tab INSIDE content expands to col 8
+            ("a\n\t\n  b", "a\n      \nb"),   // tab-only line expands, then up-to-margin strip
+            ("ü\tb\n  c", "ü       b\nc"),    // column counts CODE POINTS (ü = 1 col, not 2 bytes)
+            ("a\n\tb\n       c", "a\n b\nc"), // tab(8) vs 7 spaces -> margin 7
+            ("a\n\tb\n         c", "a\nb\n c"), // tab(8) vs 9 spaces -> margin 8
+            ("a\n    b   ", "a\nb   "),       // trailing whitespace preserved
+            ("a\n  b\n", "a\nb\n"),           // trailing newline preserved
+            ("\n    a\n    b", "\na\nb"),     // leading newline preserved
+            ("  \n  ", "\n  "),               // only later line is whitespace-only -> indent 0
+            ("  single", "single"),
+            ("single", "single"),
+            ("   ", ""),
+            ("a", "a"),
+            ("", ""),
+        ];
+        for (raw, want) in cases {
+            assert_eq!(&JsCodegen::clean_doc(raw), want, "clean_doc({raw:?})");
+        }
+    }
 
     /// Round-6 delta drift guard: EVERY builtin exception class is emittable
     /// as a class BASE (`class E(TypeError)` auto-imports it), so the checked

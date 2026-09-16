@@ -1,0 +1,113 @@
+{
+  "all_pass": true,
+  "inputs": {
+    "determinism": {
+      "n_states": 6,
+      "n_steps": 400,
+      "runs": 5,
+      "seed": 0
+    },
+    "fallback": {},
+    "fanout": {
+      "n": 1200,
+      "reps": 2,
+      "seed": 0,
+      "threads": 4
+    },
+    "isomorphic": {},
+    "m1_preprocessing": {},
+    "redaction": {
+      "n": 1960,
+      "seed": 0
+    },
+    "sandbox": {
+      "fuel": 20000000
+    },
+    "single_artifact": {},
+    "speedup": {
+      "n": 800,
+      "seed": 0
+    },
+    "where_it_loses": {
+      "n": 1000000,
+      "per_element_n": 20000,
+      "seed": 0
+    }
+  },
+  "n_measured": 12,
+  "n_rows": 12,
+  "rows": [
+    {
+      "claim": "same answer on every path; speedup vs interpreted CPython REPORTED",
+      "measured": "13.7x vs CPython on 800x800 edit distance (12.0 ms vs 164 ms); all paths == reference True",
+      "pass": true,
+      "row": "Non-vectorizable loops (server)"
+    },
+    {
+      "claim": "fuel-bounded, no ambient I/O; escapes are RED",
+      "measured": "snippet ok (fuel used 2250075); loop trapped in 2 ms; WASI import refused; open() refused at build; RED halves: unmetered loop ran until killed=True, WASI linker wrote file=True",
+      "pass": true,
+      "row": "Sandboxed (LLM-generated) code (server)"
+    },
+    {
+      "claim": "N threads scale; the CPython control does not",
+      "measured": "4 threads on 16 CPUs: WASM scaling 3.26x, CPython control 1.02x",
+      "pass": true,
+      "row": "GIL-free parallelism (server)"
+    },
+    {
+      "claim": "same bytes every run, == CPython, == V8 shim",
+      "measured": "5 runs, 1 digest(s); == CPython True; == Node/V8 True; host imports none",
+      "pass": true,
+      "row": "Bit-for-bit determinism (server)"
+    },
+    {
+      "claim": "one .wasm, no toolchain at run time",
+      "measured": "1861 B .wasm ran with the compiler unreachable (3 == 3)",
+      "pass": true,
+      "row": "Single-artifact deployment (server)"
+    },
+    {
+      "claim": "one @wasm fn, tab and in-process, identical bits",
+      "measured": "browser bits 0000000000000240 == server bits 0000000000000240 == CPython 0000000000000240: True (mode=server; browser python_calls=0, server_calls=0)",
+      "pass": true,
+      "row": "Isomorphic same-fn (browser + server)"
+    },
+    {
+      "claim": "the tab computes; the server does nothing",
+      "measured": "path=browser-wasm, server python_calls=0, server_calls=0, .wasm fetched by the tab=True",
+      "pass": true,
+      "row": "Zero-round-trip interactivity (browser)"
+    },
+    {
+      "claim": "resize in the tab before upload",
+      "measured": "89x fewer bytes uploaded across 3 images (M1 evidence, examples/gradio-image-preprocess/metrics_summary.json)",
+      "pass": true,
+      "row": "Preprocessing at the edge (browser)"
+    },
+    {
+      "claim": "PII masked before upload; identical everywhere; == regex spec",
+      "measured": "1122 of 1960 chars masked; V8 shim / server / CPython digests identical=True; == regex reference True",
+      "pass": true,
+      "row": "On-device redaction (browser channel)"
+    },
+    {
+      "claim": "plain Python, same answer",
+      "measured": "mode=fallback (absent); value 3 == 3; python_calls=1",
+      "pass": true,
+      "row": "Fallback (no artifact)"
+    },
+    {
+      "claim": "NumPy (C) is not beaten -- say so (and the answers agree)",
+      "measured": "sum of squares, n=1000000: NumPy 0.60 ms vs @wasm 234.9 ms vs CPython 44 ms (NumPy 394x faster; @wasm even 5x SLOWER than CPython here -- marshaling 1000000 floats across the boundary dominates); values agree True",
+      "pass": true,
+      "row": "WHERE IT LOSES: already-vectorised code"
+    },
+    {
+      "claim": "marshaling dominates -- batch the call",
+      "measured": "20000 per-element calls 2261 ms (113.1 us/call) vs one batched call 3.96 ms (572x)",
+      "pass": true,
+      "row": "WHERE IT LOSES: per-element boundary crossing"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+# #491 BLOCKER-3 OVER-FIX guard: a genuine enclosing local `abs` with NO nested
+# `global abs` must keep shadowing correctly (a closure reads / writes the
+# enclosing local via `nonlocal`; the module builtin is untouched). The Rust
+# control pins that this program emits a plain `let abs` (no rename).
+# DEMOTE: h
+def h(x: int) -> int:
+    abs = 5
+    return abs(x)
+
+
+def outer():
+    abs = 1
+    def inner():
+        return abs + 1
+    def bump():
+        nonlocal abs
+        abs = abs + 10
+    bump()
+    return (inner(), abs)
+
+
+try:
+    print(h(3))
+except TypeError:
+    print("TypeError")
+print(outer())
+print(abs(-4))

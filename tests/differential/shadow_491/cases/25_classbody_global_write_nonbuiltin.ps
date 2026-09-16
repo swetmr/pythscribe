@@ -1,0 +1,36 @@
+# #491 BLOCKER-2 non-builtin twins of the class-body `global` write: a name with NO other
+# module binder (`g` — was a ReferenceError: the class-attr install left the module read
+# unbound), an AUGMENTED write of a module global (`x += 5` — was a silent stale 1), a
+# TUPLE target (`a, b = …`), a MIXED tuple (`abs, k = …`: the global element is the
+# module write, `k` stays a class attribute), and `del` of a class-body global.
+x = 1
+
+
+class C:
+    global g, x, a, b
+    g = 5
+    x += 5
+    a, b = 10, 20
+
+
+print(g)
+print(x)
+print(a + b)
+
+
+class M:
+    global abs
+    abs, k = 7, 1
+
+
+print(abs)
+print(M.k)
+print(hasattr(M, "abs"))
+
+
+class D:
+    global abs
+    del abs
+
+
+print(abs(-2))

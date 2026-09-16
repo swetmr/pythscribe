@@ -1,3 +1,4 @@
+pub mod abi;
 pub mod bridge;
 pub mod cert;
 pub mod emit;
@@ -116,6 +117,7 @@ fn exclude_invalid_functions(module: &Module, analysis: &mut WasmAnalysis) {
             let reduced = WasmAnalysis {
                 eligible: trial,
                 rejected: Vec::new(),
+                shadow_bindings: analysis.shadow_bindings.clone(),
             };
             let bytes = emit::WasmEmitter::new().emit_module(module, &reduced);
             if reduced.eligible.is_empty() || wasm_is_valid(&bytes) {
@@ -131,8 +133,33 @@ fn exclude_invalid_functions(module: &Module, analysis: &mut WasmAnalysis) {
             return;
         }
 
-        // No single removal validated → multiple interacting culprits. Remove
-        // the first candidate and re-loop; each pass drops ≥1 function, so this
+        // No single removal validated → try PAIRS before demoting blindly
+        // (opus r5/NEW-r5-3: `names[0]` was an innocent alphabetically-first
+        // function while the two real culprits stayed). O(n²) emits, n small.
+        for i in 0..names.len() {
+            for j in (i + 1)..names.len() {
+                let mut trial = analysis.eligible.clone();
+                trial.remove(&names[i]);
+                trial.remove(&names[j]);
+                let reduced = WasmAnalysis {
+                    eligible: trial,
+                    rejected: Vec::new(),
+                    shadow_bindings: analysis.shadow_bindings.clone(),
+                };
+                let bytes = emit::WasmEmitter::new().emit_module(module, &reduced);
+                if reduced.eligible.is_empty() || wasm_is_valid(&bytes) {
+                    for n in [&names[i], &names[j]] {
+                        analysis.eligible.remove(n);
+                        analysis
+                            .rejected
+                            .push((n.clone(), INVALID_WASM_FALLBACK_REASON.to_string()));
+                    }
+                    return;
+                }
+            }
+        }
+        // Still invalid → three or more interacting culprits. Remove the first
+        // candidate and re-loop; each pass drops ≥1 function, so this
         // terminates (worst case: empty admitted set → no WASM, all JS).
         let n = names[0].clone();
         analysis.eligible.remove(&n);
@@ -156,6 +183,24 @@ pub fn codegen_wasm(module: &Module) -> WasmCodegenOutput {
     // that produces a valid module. Guarantees js+wasm output NEVER ships a
     // module that fails to instantiate. On the happy path this is a single
     // extra validation of an already-valid module.
+    // v0.2.5 Cluster A: the TYPED admission pre-check runs inside the emitter
+    // (it needs every local's type); functions it refuses move to `rejected`
+    // WITH a reason and stay on the JS path. Removing a function can only
+    // remove callers' targets (caught by the validity pass below), never
+    // change another function's types, so one drain per emit converges.
+    loop {
+        let (_, typed) = emit::WasmEmitter::emit_module_collecting(module, &analysis);
+        if typed.is_empty() {
+            break;
+        }
+        for (name, reason) in typed {
+            analysis.eligible.remove(&name);
+            analysis.rejected.push((name, reason));
+        }
+        if analysis.eligible.is_empty() {
+            return empty_output(analysis.rejected);
+        }
+    }
     {
         let bytes = emit::WasmEmitter::new().emit_module(module, &analysis);
         if !wasm_is_valid(&bytes) {
@@ -215,6 +260,35 @@ pub fn codegen_wasm(module: &Module) -> WasmCodegenOutput {
         custom_exceptions,
         needs_dicts,
         has_ovf: true,
+    }
+}
+
+/// #491 (fable B1 — the twin-consistency invariant): the module whose JS
+/// compilation is the glue's exact fallback twin (`__jsfb.<fn>`) of the
+/// WASM-compiled functions. It is the ORIGINAL module's top-level `import` /
+/// `from … import` statements plus the `compiled` `def`s, in source order — so a
+/// twin body's free callee resolves under the SAME module binder set the WASM body
+/// was admitted with: a builtin name with no binder → the builtin; a user def → the
+/// user def (the twin module's own binding cell); a math import → the import.
+/// Admission (SHADOW_BINDING_DESIGN.md §3) guarantees no other binder kind reaches
+/// a WASM body. The ONE constructor for the twin — `pyths compile` and the tests
+/// both use it (the CLI previously built a defs-only module inline, which dropped
+/// every import: a `floor` twin was a ReferenceError at fallback time).
+pub fn twin_module(module: &Module, compiled: &[String]) -> Module {
+    use pyths_syntax::ast::StmtKind;
+    let body = module
+        .body
+        .iter()
+        .filter(|s| match &s.kind {
+            StmtKind::Import { .. } | StmtKind::ImportFrom { .. } => true,
+            StmtKind::FuncDef { name, .. } => compiled.contains(name),
+            _ => false,
+        })
+        .cloned()
+        .collect();
+    Module {
+        body,
+        span: module.span,
     }
 }
 

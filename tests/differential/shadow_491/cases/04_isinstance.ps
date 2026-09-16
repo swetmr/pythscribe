@@ -1,0 +1,23 @@
+# repro 4: `isinstance(x, int)` with a user binding of `int` passes the USER binding
+# as the class operand, never the `"int"` builtin sentinel. A user CLASS `int` makes
+# `isinstance(3, int)` False (3 is not an instance of it); the forward-ref before the
+# class statement, and a function body called before it, still see the builtin (True).
+# (A user `def int` makes CPython raise TypeError — the codegen half is the same arm;
+# the runtime's "arg 2 must be a type" half is tracked separately, see the design note.)
+print(isinstance(3, int))
+
+
+def check(x: int) -> bool:
+    return isinstance(x, int)
+
+
+print(check(3))
+
+
+class int:
+    pass
+
+
+print(check(3))
+print(isinstance(3, int))
+print(isinstance(int(), int))

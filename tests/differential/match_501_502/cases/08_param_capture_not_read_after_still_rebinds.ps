@@ -1,0 +1,10 @@
+# EXPECT: match
+# #502: NOT read directly after the match - the rebind still happens (observed via a closure)
+def q(v, x):
+    def peek():
+        return x
+    match v:
+        case [1, x]:
+            print("hit")
+    return peek()
+print(q([1, 8], 100), q([2, 8], 100))

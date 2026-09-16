@@ -1,0 +1,34 @@
+# #491 BLOCKER-2: the class-body `global` write INSIDE a compound block at class-body
+# level (`if` / `try` / `while`) — the `global` declaration covers the whole class block
+# (declared inside an `if` too), and the block executes at class-definition time against
+# the MODULE namespace. Before the fix the compound statement was emitted RAW inside the
+# JS class body (a SyntaxError); `use` demotes (call-time `len`).
+# DEMOTE: use
+def use(xs: list) -> int:
+    return len(xs)
+
+
+print(use([1, 2, 3]))
+
+
+class C:
+    global len, abs
+    if True:
+        len = lambda xs: 42
+    try:
+        abs = 7
+    except Exception:
+        pass
+
+
+class D:
+    if True:
+        global max
+    while True:
+        max = lambda *a: -1
+        break
+
+
+print(use([1, 2, 3]))
+print(abs)
+print(max(1, 2))

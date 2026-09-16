@@ -1,0 +1,12 @@
+# a shadowing def under a FALSE condition never executes -> the name stays the
+# builtin at every use-site (module scope after the if, and in a function body).
+def use(x: int) -> int:
+    return abs(x)
+
+
+if len("") > 0:
+    def abs(x: int) -> int:
+        return x * 7
+
+print(abs(-5))
+print(use(-5))

@@ -1,0 +1,29 @@
+# #491 BLOCKER-2: the class-body `global` write with the class NESTED — inside a function
+# (the enclosing scope pre-declares the global so the write is a bare module-cell write,
+# not a function-local `let`) and inside another class (the nested-class block). Both
+# were the silent stale builtin before the fix. `peek` demotes (call-time `abs`).
+# DEMOTE: peek
+def peek() -> int:
+    return abs(-9)
+
+
+def f():
+    class C:
+        global abs
+        abs = 7
+    return C
+
+
+print(peek())
+f()
+print(abs)
+
+
+class Outer:
+    class Inner:
+        global abs
+        abs = lambda z: 100
+
+
+print(peek())
+print(abs(-9))

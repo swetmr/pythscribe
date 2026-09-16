@@ -271,6 +271,14 @@ pub fn run_wasm_opt_at(
     let mut optimized =
         fs::read(&opt_path).map_err(|e| format!("Cannot read wasm-opt output: {}", e))?;
     append_generated_marker(&mut optimized);
+    // M2.1: likewise preserve the `pyths.abi` contract section (spec 13-09-26
+    // §5.6) — the input was emitted by THIS compiler with THESE constants, so
+    // re-appending them restores exactly what a stripping binaryen dropped.
+    // Without it the runtime would refuse the optimized module (loud, but
+    // avoidable).
+    if !crate::abi::has_current_abi_section(&optimized) {
+        optimized.extend_from_slice(&crate::abi::abi_section_bytes());
+    }
 
     let size_after = optimized.len();
     Ok(Some(OptimizeResult {

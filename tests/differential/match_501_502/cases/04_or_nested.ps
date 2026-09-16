@@ -1,0 +1,9 @@
+# EXPECT: match
+# #501: a NESTED OR inside an alternative (no re-pre-declare: the outer let is the binding)
+def n(v):
+    match v:
+        case [1, ([y, 2] | [2, y])] | [y, 3]:
+            return y
+        case _:
+            return -1
+print(n([1, [7, 2]]), n([1, [2, 8]]), n([9, 3]), n([1, [3, 3]]))

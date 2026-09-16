@@ -1,6 +1,10 @@
 # Belt-and-suspenders alongside the `files:` allowlist in package.json.
-# `files: ["src/", "README.md"]` is the source of truth; this is a safety
-# net against stray scratch files in the runtime/ root.
+# `files: ["src/**/*.js", "src/**/*.js.map", ...]` is the source of truth; this is a
+# safety net against stray scratch files in the runtime/ root. NOTE (M0, spec
+# 13-09-26): an ignore pattern does NOT filter inside a directory listed in `files`
+# (`files: ["src/"]` shipped all 23 `src/**/*.test.mjs`), which is why `files` now
+# enumerates by extension; `scripts/prepare_release_payloads.py` asserts the tarball
+# membership == runtime_package_files() + LICENSE exactly.
 .DS_Store
 *.log
 node_modules/

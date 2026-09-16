@@ -1,0 +1,13 @@
+@wasm
+def threshold_lum(img: Array[uint8, 2], out: Array[uint8, 2], h: int, w: int, thr: int) -> int:
+    for y in range(h):
+        for x in range(w):
+            c = x * 3
+            s = img[y][c] + img[y][c + 1] + img[y][c + 2]
+            v = 0
+            if s > thr:
+                v = 255
+            out[y][c] = v
+            out[y][c + 1] = v
+            out[y][c + 2] = v
+    return h * w

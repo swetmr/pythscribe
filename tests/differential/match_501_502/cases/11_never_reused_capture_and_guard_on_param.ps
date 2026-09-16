@@ -1,0 +1,16 @@
+# EXPECT: match
+# #502: never-reused capture keeps its block let (no churn); guarded param capture (bind->guard->body)
+def never(v):
+    match v:
+        case [1, z]:
+            return z
+    return "no"
+print(never([1, 5]), never([3]))
+def pg(v, x):
+    match v:
+        case [1, x] if x > 5:
+            return ("big", x)
+        case [1, x]:
+            return ("small", x)
+    return ("none", x)
+print(pg([1, 8], 100), pg([1, 2], 100), pg([3], 100))

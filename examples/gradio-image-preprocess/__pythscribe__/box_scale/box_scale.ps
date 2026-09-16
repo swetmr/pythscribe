@@ -1,0 +1,8 @@
+@wasm
+def box_scale(w: int, h: int, max_dim: int) -> int:
+    big = w
+    if h > big:
+        big = h
+    if big <= max_dim:
+        return 1
+    return (big + max_dim - 1) // max_dim

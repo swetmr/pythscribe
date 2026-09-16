@@ -1,0 +1,35 @@
+{
+  "compiler": {
+    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "name": "pyths",
+    "version": "0.2.5"
+  },
+  "entry": "sum_squares.js",
+  "files": {
+    "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
+    "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
+    "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
+    "pyths-runtime/react.js": "79c85d9599d3a6b7c813d83d538ab225ac0fd8776857f7fdba1512096099df47",
+    "pyths-runtime/runtime.js": "21a474e1f6aa2f959a2101a46be393190a923576fb67e3e78edba39c7ddd0b78",
+    "pyths-runtime/types.js": "b5af591c394a1984715054cd5c8c100ffdc2ea1c6b85e01bf3ae33e2cf1b265b",
+    "sum_squares.glue.js": "2cb31dba380dc8bbea8f2cfe841d68c0360ebc08deac8a5afbae2075e11fae6b",
+    "sum_squares.js": "8ff494e5557dcbf78cb196d9dbeacb3bf66ba4650198e38ee3791c1baf5e99c3",
+    "sum_squares.ps": "e0441722b0266446fd2e0842bb205f6ca5f715315033636379a750d89b4a512b",
+    "sum_squares.wasm": "9b43af3a789e5c66c51c92758be38a1ecc3de53d8cd407ebb1712b6f75831c7d"
+  },
+  "function": "sum_squares",
+  "glue": "sum_squares.glue.js",
+  "manifest_sha256": "989a2c815c243e2fd00e0984cbf4226221d7cec6e0033c4e4c6dcfc574e9306f",
+  "optimizer": {
+    "applied": false,
+    "error": null,
+    "id": "none",
+    "path_sha256": null
+  },
+  "runtime_dir": "pyths-runtime",
+  "schema": 1,
+  "source_file": "kernels.py",
+  "source_sha256": "e0441722b0266446fd2e0842bb205f6ca5f715315033636379a750d89b4a512b",
+  "target": "js+wasm",
+  "wasm": "sum_squares.wasm"
+}

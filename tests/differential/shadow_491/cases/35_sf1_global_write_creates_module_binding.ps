@@ -1,0 +1,52 @@
+# #491 SF1: a function-scope `global N` WRITE whose name has NO module-level binder
+# CREATES the module global when the write executes (CPython) -- an assignment, a
+# for-target, an `import ... as N` -- and a read BEFORE the write raises NameError (the
+# hoisted __UNBOUND cell, guarded by __pyChkGlobal; a reading function goes through the
+# same guard). Before the fix: a bare `N = v` with no declaration -> ReferenceError
+# (loud), and a fresh local for the for-target (the B1 shape). OVER-FIX guard: `k` HAS a
+# module binder, so its ordinary declaration path owns it (no sentinel hoist).
+def f():
+    global y
+    y = 1
+
+
+def g():
+    global w
+    for w in [1, 2]:
+        pass
+
+
+def h():
+    global m
+    import math as m
+
+
+def reads_w():
+    return w
+
+
+k = 0
+
+
+def bump():
+    global k
+    k = k + 1
+
+
+try:
+    print(y)
+except NameError:
+    print("NameError")
+f()
+print(y)
+try:
+    print(reads_w())
+except NameError:
+    print("NameError")
+g()
+print(w, reads_w())
+h()
+print(m.floor(2.5))
+print(k)
+bump()
+print(k)

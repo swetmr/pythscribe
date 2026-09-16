@@ -1,0 +1,20 @@
+{
+  "photo_1600x1200.jpg": {
+    "bytes": 411850,
+    "h": 1200,
+    "sha256": "15805967cbf1672abaae0c8f98aadacaabce57956d9f4b276a79821941fe30d5",
+    "w": 1600
+  },
+  "photo_4000x3000.jpg": {
+    "bytes": 2494311,
+    "h": 3000,
+    "sha256": "178ee12bf1d0fc6f6c63eb5a1b4d1a0ca6687d10740b8e81ffa839217693d8dd",
+    "w": 4000
+  },
+  "photo_640x480.jpg": {
+    "bytes": 71009,
+    "h": 480,
+    "sha256": "fb3aa190ed5c94351d9d85ad1145e7eae8b64772db4bdc0b6ff527f603d5b9b4",
+    "w": 640
+  }
+}

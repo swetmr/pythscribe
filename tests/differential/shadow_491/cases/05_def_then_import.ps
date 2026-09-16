@@ -1,0 +1,16 @@
+# repro 5 (blocker 4): `def abs` then `from math import fabs as abs` -> the LATER
+# import wins, at module scope and at call time in a function defined earlier.
+# DEMOTE: use
+def use(x: float) -> float:
+    return abs(x)
+
+
+def abs(x: int) -> int:
+    return x * 7
+
+
+print(abs(-5))
+print(use(-5.0))
+from math import fabs as abs
+print(abs(-5))
+print(use(-5.0))

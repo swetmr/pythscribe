@@ -1,5 +1,5 @@
 name = "PythExpandVerify"
-defaultTargets = ["PythExpandVerify", "expanddiff", "RpcBoundary", "Union7", "RoutingSoundness", "JsWasmMirror", "InternalConsistency", "EffectOrder", "C2TypeRepr", "C8HostInterop", "Union8", "C1C3C4Outcome"]
+defaultTargets = ["PythExpandVerify", "expanddiff", "RpcBoundary", "Union7", "RoutingSoundness", "JsWasmMirror", "InternalConsistency", "EffectOrder", "C2TypeRepr", "C8HostInterop", "Union8", "C1C3C4Outcome", "axiomgate"]
 
 # Dependency-free: pure Lean 4 core (no mathlib) so `lake build`
 # needs only the pinned toolchain, no network fetch.
@@ -38,6 +38,19 @@ name = "PythExpandVerify"
 [[lean_exe]]
 name = "expanddiff"
 root = "Main"
+
+# WHOLE-TREE axiom-enforcement gate (verification/AxiomGate.lean). Given the
+# shipping module names as args it re-imports them into a fresh environment,
+# RE-TYPECHECKS every declaration through the kernel (Environment.replay), and
+# asserts that EVERY declaration's axiom footprint ⊆ the pinned trio, no
+# verification module declares an axiom, no decl is `unsafe`, and every import is
+# within Init∪covered (`partial`/`implemented_by`/`extern` are inventoried, not
+# failed) — the single chained-environment gate over ALL verification/*.lean (not
+# just PythExpandVerify's import closure). Driven by
+# comparator/whole_tree_axiom_gate.py. Imports Lean (the meta API).
+[[lean_exe]]
+name = "axiomgate"
+root = "AxiomGate"
 
 # C7 (object identity / aliasing, rpc-boundary-spec §8.4) + §8.6 tag
 # disjointness. Model-level (the RPC boundary is a design doc — nothing

@@ -1,0 +1,35 @@
+# OVER-FIX guards for the B1 class closure: a plain for-target with no `global`/`nonlocal`
+# stays a normal function local (leaks past the loop, never touches the same-named module
+# binding); a comprehension target is the comprehension's OWN local (Py3 scoping) even
+# under `global`; and SF1's sentinel hoist must NOT fire for a name that already has a
+# module binder (`k = 0` keeps its ordinary declaration).
+i = 100
+
+
+def plain():
+    for i in [1, 2]:
+        pass
+    return i
+
+
+y = 0
+
+
+def comp():
+    global y
+    return [y for y in (5, 6)]
+
+
+k = 0
+
+
+def bump():
+    global k
+    k = k + 1
+
+
+print(plain(), i)
+print(comp(), y)
+print(k)
+bump()
+print(k)

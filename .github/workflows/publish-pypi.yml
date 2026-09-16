@@ -1,0 +1,297 @@
+name: Publish pythscribe to PyPI
+
+# Publishes the pip package `pythscribe` via TRUSTED PUBLISHING (OpenID Connect) -- no API token/secret is
+# stored. Separate from release.yml (compiler binary + npm) so the trusted-publisher registration is
+# unambiguous: it names THIS workflow file + an environment.
+#
+# M6.3 (spec 13-09-26, requirements §5.1 / §5.2; plan M6.3): NO REBUILD. Both publication entrypoints download the
+# MANIFEST-BOUND `dist/` (the `pythscribe-dist` artifact of the release.yml run the manifest names) and assert every
+# file hashes to the manifest BEFORE anything else (scripts/verify_dist_manifest.py). The evidence gate
+# (scripts/require_evidence.py --role promotion) is the FIRST gate of every job and the ONLY path to an upload: no
+# workflow_dispatch input can bypass it (workflow-linted: no `if:` on the gate steps, role literal `promotion`, no
+# `role`/`skip_*` input, no `python -m build` anywhere in this file).
+#
+# RELEASE SEQUENCE: npm FIRST (release.yml, R-BA + R-NI), then validate the REAL published artifact, then PyPI:
+#
+#   1. push tag v<V>                 -> release.yml: build, manifest, node-free acceptance (R-BA), npm publish +
+#                                       identity (R-NI); evidence attached to the GitHub Release
+#   2. gh workflow run publish-pypi.yml --ref v<V> -f target=testpypi
+#         testpypi           requires R-BA + R-NI  -> uploads the manifest-bound dist/ to TestPyPI -> emits R-TP
+#         testpypi-validate  per target: pip download pythscribe==V from TestPyPI, sha256 == manifest, install,
+#                            A0..A4 through the shipped path + the all-features smoke -> leg outputs
+#         testpypi-evidence  assembles R-TV (5 targets, all-features field) -> attached to the Release
+#   3. gh workflow run publish-pypi.yml --ref v<V> -f target=pypi
+#         pypi               requires R-BA + R-NI + R-TP + R-TV (source_sha == S, one manifest hash, full target
+#                            sets, producer runs verified) -> uploads the SAME bytes (dist == manifest == R-TP)
+#
+# ALWAYS dispatch against the release TAG ref (GITHUB_SHA is then S, the commit the manifest binds). Defense in
+# depth (repo setting, not in this file): a required-reviewer rule on the `pypi` environment.
+#
+# TWO targets (register a trusted publisher on EACH registry -- they are separate): TestPyPI (environment
+# `testpypi`) and PyPI (environment `pypi`). Owner: swetmr | Repository: pythscribe | Workflow: publish-pypi.yml.
+# The PyPI NAME `pythscribe` (+ `pyths`) is claimed by the FIRST publish (validation §L4): a foreign-owned name
+# fails the trusted-publisher upload loudly here -- never silently.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Publish target (dispatch against the release TAG ref, e.g. v0.2.5)'
+        required: true
+        type: choice
+        options:
+          - testpypi
+          - pypi
+        default: testpypi
+
+permissions:
+  contents: read
+  # NEW (codex pass-4): every job here runs require_evidence.py --role promotion, which queries the
+  # Actions API (runs/jobs + the immutable artifact ZIPs during promotion). Once permissions are
+  # explicitly declared, unspecified ones are unavailable, so an honest promotion would 403 without
+  # `actions: read`. Every job below ALSO declares it in its own block (a job block fully replaces the
+  # workflow default); this workflow-level grant covers any future job that omits its own block.
+  actions: read
+
+jobs:
+  testpypi:
+    # B4: the job DISPLAY name MUST equal the job key -- require_evidence.RECORD_PRODUCER_JOB["R-TP"]
+    # maps to "testpypi" and the Actions /jobs API returns this `name:`. A descriptive rename would
+    # make the API display name diverge from the map and REJECT an honest R-TP (lint-guarded).
+    name: testpypi
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      contents: write   # gh release upload evidence/R-TP.json
+      actions: read     # gh run download of the build run's artifacts
+      id-token: write   # OIDC trusted publishing (no token)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Guard -- a v* TAG ref whose name matches the version (B1)
+        run: |
+          case "${GITHUB_REF_NAME}" in v*) ;; *) echo "::error::dispatch against a release tag (--ref v<version>), got '${GITHUB_REF_NAME}'"; exit 1 ;; esac
+          python3 scripts/guard_tag_version.py "${GITHUB_REF_NAME}"
+      - name: Fetch the release manifest + evidence records for this tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p evidence
+          gh release download "${GITHUB_REF_NAME}" --pattern 'release_manifest.json' --dir . --clobber
+          gh release download "${GITHUB_REF_NAME}" --pattern 'R-*.json' --dir evidence --clobber || true
+      # E3 (requirements §5.2): the evidence gate is the FIRST gate and the ONLY path to the upload; no dispatch
+      # input can bypass it (workflow-linted: no `if:` on this step, role literal `promotion`, no `role` input).
+      - name: Require evidence -- promotion role (whole run completed+success at S; R-BA + R-NI; manifest-job attempt binding)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-BA R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
+      - name: Download the manifest-bound dist/ (by the manifest's build run id -- never a rebuild)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eux
+          RUN_ID="$(python3 -c "import json; print(json.load(open('release_manifest.json'))['build_run_id'])")"
+          gh run download "$RUN_ID" -n pythscribe-dist -D dist
+      - name: Assert dist/ == manifest (every file, by name and sha256) BEFORE anything touches it
+        run: python3 scripts/verify_dist_manifest.py --manifest release_manifest.json --dist dist
+      - name: Wheel gates on the bound set (complete set; clean; licence + third-party notices)
+        run: |
+          python3 scripts/verify_wheel_set.py --dist dist
+          python3 scripts/verify_wheel_clean.py --dist dist
+          python3 scripts/verify_wheel_license.py --dist dist --cargo-lock Cargo.lock
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+          # B3: a re-dispatch tolerates files already there, but R-TP now PROVES the registry serves
+          # exactly the manifest bytes (every wheel AND the sdist) -- so a pre-existing DIFFERENT file
+          # skip-existing leaves in place is caught (it was not, before: R-TP hashed only local dist/,
+          # and R-TV validates wheels only, so a foreign sdist escaped both).
+          skip-existing: true
+      - name: Wait for the TestPyPI JSON API to reflect this version (R-TP queries what the registry serves)
+        run: |
+          set -eu
+          V="$(python3 -c "import json; print(json.load(open('release_manifest.json'))['version'])")"
+          for i in $(seq 1 18); do
+            if curl -sf "https://test.pypi.org/pypi/pythscribe/${V}/json" >/dev/null 2>&1; then echo "registry has pythscribe==${V}"; break; fi
+            echo "waiting for TestPyPI JSON API propagation of pythscribe==${V} ($i)"; sleep 10
+          done
+      - name: Emit R-TP (uploaded AND registry-served filenames+hashes == the manifest's distribution set)
+        run: python3 scripts/assemble_rtp.py --manifest release_manifest.json --dist dist --repository-url https://test.pypi.org/legacy/ --out evidence/R-TP.json
+      - name: Upload R-TP
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-R-TP-${{ github.run_attempt }}
+          path: evidence/R-TP.json
+          if-no-files-found: error
+      - name: Attach R-TP to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p upload/evidence && cp evidence/R-TP.json upload/evidence/R-TP.json
+          gh release upload "${GITHUB_REF_NAME}" "upload/evidence/R-TP.json#evidence/R-TP.json" --clobber
+
+  # M6.3: per target, on that target's runner -- the PUBLIC artifact, fetched from TestPyPI, hashed against the
+  # manifest BEFORE install, then A0..A4 through the shipped path + the L5 all-features smoke (scripts/
+  # testpypi_validate.py). Topology `native-scrubbed-path` (PATH scrubbed; no node file under the venv): the OS-user
+  # / container boundary is R-BA's job on the SAME bytes (wheel sha == manifest == R-BA's wheel), so R-BA's
+  # node-free verdict transfers by identity; this leg proves the registry serves and runs those bytes.
+  testpypi-validate:
+    name: testpypi-validate ${{ matrix.target }}
+    needs: testpypi
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    permissions:
+      contents: read
+      actions: read      # require_evidence.py --role promotion queries the Actions API
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch the release manifest + evidence records for this tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p evidence
+          gh release download "${GITHUB_REF_NAME}" --pattern 'release_manifest.json' --dir . --clobber
+          gh release download "${GITHUB_REF_NAME}" --pattern 'R-*.json' --dir evidence --clobber || true
+      - name: Require evidence -- promotion role (R-BA + R-NI bound to this manifest; R-TP self-referential here, opus M6 B1)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-BA R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
+      - name: "Validate the PUBLIC artifact: pip download from TestPyPI, sha256 == manifest, install, A0..A4, all-features smoke"
+        shell: bash
+        run: python scripts/testpypi_validate.py --manifest release_manifest.json --target "${{ matrix.target }}" --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ --out "legs/${{ matrix.target }}" --checkout "$(pwd)"
+      - name: Upload the leg's outputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: testpypi-leg-${{ matrix.target }}
+          path: legs/${{ matrix.target }}/
+          if-no-files-found: error
+
+  testpypi-evidence:
+    # B4: DISPLAY name == job key (RECORD_PRODUCER_JOB["R-TV"] == "testpypi-evidence"); see the testpypi job.
+    name: testpypi-evidence
+    needs: [testpypi, testpypi-validate]
+    if: always() && needs.testpypi.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release upload evidence/R-TV.json
+      actions: read      # require_evidence.py --role promotion queries the Actions API
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch the release manifest + evidence records for this tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p evidence
+          gh release download "${GITHUB_REF_NAME}" --pattern 'release_manifest.json' --dir . --clobber
+          gh release download "${GITHUB_REF_NAME}" --pattern 'R-*.json' --dir evidence --clobber || true
+      - name: Require evidence -- promotion role (R-BA + R-NI bound to this manifest; R-TP self-referential here, opus M6 B1)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-BA R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
+      - name: Download every leg
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: testpypi-leg-*
+          path: legs-dl
+      - name: Assemble R-TV (a missing leg, a failed step or a missing all-features result -> verdict fail)
+        run: |
+          set -eux
+          mkdir -p legs
+          for d in legs-dl/testpypi-leg-*; do mv "$d" "legs/$(basename "$d" | sed 's/^testpypi-leg-//')"; done
+          python3 scripts/assemble_rtv.py --manifest release_manifest.json --legs legs --out evidence/R-TV.json
+      - name: Upload R-TV
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-R-TV-${{ github.run_attempt }}
+          path: evidence/R-TV.json
+          if-no-files-found: error
+      - name: Attach R-TV to the GitHub Release
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p upload/evidence && cp evidence/R-TV.json upload/evidence/R-TV.json
+          gh release upload "${GITHUB_REF_NAME}" "upload/evidence/R-TV.json#evidence/R-TV.json" --clobber
+
+  pypi:
+    name: Promote the validated dist to PyPI (production)
+    # DELIBERATE manual promotion ONLY -- never auto-fires on the tag. Dispatch with target=pypi against the tag ref
+    # after target=testpypi has produced R-TP + R-TV.
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      actions: read     # gh run download of the build run's artifacts
+      id-token: write   # OIDC trusted publishing (no token)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Guard -- must be dispatched against a v* TAG ref, and the tag must match the version (B1)
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            v*) ;;
+            *) echo "::error::publish-pypi (target=pypi) must be dispatched against a release tag (--ref v<version>), got ref '${GITHUB_REF_NAME}'"; exit 1 ;;
+          esac
+          python3 scripts/guard_tag_version.py "${GITHUB_REF_NAME}"
+      - name: Fetch the release manifest + evidence records for this tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p evidence
+          gh release download "${GITHUB_REF_NAME}" --pattern 'release_manifest.json' --dir . --clobber
+          gh release download "${GITHUB_REF_NAME}" --pattern 'R-*.json' --dir evidence --clobber || true
+      - name: Require evidence -- promotion role (all FOUR records; whole run completed+success at S; manifest-job attempt binding)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-BA R-NI R-TP R-TV --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
+      - name: Download the manifest-bound dist/ (by the manifest's build run id -- never a rebuild)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eux
+          RUN_ID="$(python3 -c "import json; print(json.load(open('release_manifest.json'))['build_run_id'])")"
+          gh run download "$RUN_ID" -n pythscribe-dist -D dist
+      - name: Assert dist/ == manifest == R-TP uploaded_files (the SAME bytes TestPyPI validated; E2)
+        run: python3 scripts/verify_dist_manifest.py --manifest release_manifest.json --dist dist --rtp evidence/R-TP.json
+      - name: Wheel gates on the bound set (complete set; clean; licence + third-party notices)
+        run: |
+          python3 scripts/verify_wheel_set.py --dist dist
+          python3 scripts/verify_wheel_clean.py --dist dist
+          python3 scripts/verify_wheel_license.py --dist dist --cargo-lock Cargo.lock
+      - name: Publish to PyPI (the same bytes; an already-existing file is a loud failure, never a silent skip)
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/
+          skip-existing: false

@@ -1,0 +1,9 @@
+# pythscribe @wasm demos — minimal dependencies.
+# pythscribe bundles the `pyths` compiler + runtime; the extras add the demo hosts.
+pythscribe[gradio,streamlit,server]
+numpy
+pillow
+# to run the two notebooks:
+jupyterlab
+# the wasm_features_demo timing table compares against Numba (optional; skip if unavailable):
+numba

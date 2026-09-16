@@ -1,0 +1,7 @@
+@wasm
+def count_vowels(codes: list[int]) -> int:
+    n = 0
+    for c in codes:
+        if c == 97 or c == 101 or c == 105 or c == 111 or c == 117:
+            n = n + 1
+    return n

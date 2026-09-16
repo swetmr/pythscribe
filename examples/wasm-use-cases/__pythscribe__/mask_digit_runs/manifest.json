@@ -1,0 +1,35 @@
+{
+  "compiler": {
+    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "name": "pyths",
+    "version": "0.2.5"
+  },
+  "entry": "mask_digit_runs.js",
+  "files": {
+    "mask_digit_runs.glue.js": "72af03a0351119df036305fff3195c6948aa1deb534e31b38a5e9ade01f005d5",
+    "mask_digit_runs.js": "b43f8cfc9d26caa2c1a775920764a5b4471a3d8c0dff8b33e28917a8b4c6357a",
+    "mask_digit_runs.ps": "645b0b6deea6326655d52d14ede6eba19dab81f8d8f606d22eab11924ff8ae8b",
+    "mask_digit_runs.wasm": "b67e719836abd431e803ba1ea05ed65633d37f0128adb27ef8aad842e82671a1",
+    "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
+    "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
+    "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
+    "pyths-runtime/react.js": "79c85d9599d3a6b7c813d83d538ab225ac0fd8776857f7fdba1512096099df47",
+    "pyths-runtime/runtime.js": "21a474e1f6aa2f959a2101a46be393190a923576fb67e3e78edba39c7ddd0b78",
+    "pyths-runtime/types.js": "b5af591c394a1984715054cd5c8c100ffdc2ea1c6b85e01bf3ae33e2cf1b265b"
+  },
+  "function": "mask_digit_runs",
+  "glue": "mask_digit_runs.glue.js",
+  "manifest_sha256": "916a7abaeade0454b6b63ff67a2bf8f7bcacb0418edca73c048fecf65f2e337d",
+  "optimizer": {
+    "applied": false,
+    "error": null,
+    "id": "none",
+    "path_sha256": null
+  },
+  "runtime_dir": "pyths-runtime",
+  "schema": 1,
+  "source_file": "kernels.py",
+  "source_sha256": "645b0b6deea6326655d52d14ede6eba19dab81f8d8f606d22eab11924ff8ae8b",
+  "target": "js+wasm",
+  "wasm": "mask_digit_runs.wasm"
+}

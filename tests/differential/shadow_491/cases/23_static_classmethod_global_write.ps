@@ -1,0 +1,29 @@
+# #491 BLOCKER-1 on the @staticmethod / @classmethod arms: a `global` write in either
+# rebinds the MODULE cell (builtin-shadow `len` via the static, non-builtin `total` via
+# the classmethod); `size` resolves `len` at call time, so it demotes.
+# DEMOTE: size
+total = 1
+
+
+def size(xs: list) -> int:
+    return len(xs)
+
+
+class K:
+    @staticmethod
+    def s():
+        global len
+        len = lambda xs: 42
+
+    @classmethod
+    def c(cls):
+        global total
+        total = total * 5
+
+
+print(size([1, 2, 3]))
+K.s()
+print(size([1, 2, 3]))
+K.c()
+K().c()
+print(total)

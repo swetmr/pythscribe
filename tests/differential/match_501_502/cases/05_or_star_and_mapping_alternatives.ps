@@ -1,0 +1,16 @@
+# EXPECT: match
+# #501: star-capture and mapping-capture alternatives
+def s(v):
+    match v:
+        case [1, *rest] | [*rest, 1]:
+            return rest
+        case _:
+            return None
+print(s([1, 2, 3]), s([4, 5, 1]), s([2, 2]))
+def m(v):
+    match v:
+        case {"a": a} | {"b": a}:
+            return a
+        case _:
+            return -1
+print(m({"a": 1}), m({"b": 2}), m({"c": 3}))

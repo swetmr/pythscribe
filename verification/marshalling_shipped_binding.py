@@ -129,6 +129,44 @@ except ZeroDivisionError:
     print("ZeroDivisionError caught")
 '''
 
+# #484: SYMMETRIC marshalling — an in-place `list` out-parameter mutation must
+# be written BACK to the caller's array on the WASM path (the `wb` rows). The
+# top-level code calls the kernel and prints the (mutated) buffer, so the
+# observation binds the emitted `__list_write_back(...)` glue text to real
+# CPython aliasing semantics.
+WB_MOD = '''\
+def fill(out: list[int], n: int) -> int:
+    for i in range(n):
+        out[i] = i * i
+    return n
+
+def dbl(xs: list[int], n: int) -> int:
+    for i in range(n):
+        xs[i] = xs[i] * 2
+    return n
+
+def stamp_then_assert(xs: list[int], ok: bool) -> int:
+    xs[0] = 99
+    assert ok
+    return xs[0]
+
+# --- write-back rows: the caller observes the in-place mutation ---
+buf = [0, 0, 0, 0, 0]
+fill(buf, 5)
+print(buf)
+ys = [3, 1, 4, 1, 5]
+dbl(ys, 5)
+print(ys)
+# --- the PARTIAL mutation survives a mid-kernel raise (write-back precedes
+#     __check_err): CPython aliasing makes xs[0]=99 visible alongside the raise ---
+zs = [1, 2, 3]
+try:
+    stamp_then_assert(zs, False)
+except AssertionError:
+    pass
+print(zs)
+'''
+
 # 4th column: EXPECTED observation-line count (E7 harness-integrity pin) —
 # the number of output lines each module MUST produce (excmod: the first
 # divk print + the caught-exception message; its zero-division print raises
@@ -138,12 +176,18 @@ MODULES = [
     ("floatmod", FLOAT_MOD, ["fsum", "fmul"], 3),
     ("boolmod", BOOL_MOD, ["bcount", "isneg"], 3),
     ("excmod", EXC_MOD, ["divk"], 2),
+    ("wbmod", WB_MOD, ["fill", "dbl", "stamp_then_assert"], 3),
 ]
 
 # The exact guard line the false-world control deletes (must match bridge.rs).
 ELEM_GUARD = ("      if (b > 9223372036854775807n || b < -9223372036854775808n) "
               "throw new RangeError('OverflowError: list element exceeds the i64 "
               "range of the WASM fast path');\n")
+
+# #484: the write-back CALL sites (NOT the helper definition) the false-world
+# control deletes — a call ends `);`, the `function __list_write_back(...)`
+# definition ends `{`, so this pattern removes only the calls.
+WB_CALL = re.compile(r" *__list_write_back\([^;\n]*\);\n")
 
 D1_WHOLE = re.compile(r"^(-?\d+)\.0$")
 
@@ -190,6 +234,13 @@ def main() -> None:
                     f"kernel `{k}` was NOT admitted to WASM in {name} — the "
                     f"differential would be vacuous (JS-only) for it")
             assert (d / f"{name}.wasm").stat().st_size > 0, f"empty wasm: {name}"
+            # #484: the write-back module must ACTUALLY emit the symmetric
+            # `__list_write_back` glue (the `wb` table rows) — else the
+            # write-back differential below would be vacuous.
+            if name == "wbmod":
+                assert "function __list_write_back(" in glue and WB_CALL.search(glue), (
+                    "wbmod glue does not emit __list_write_back — the write-back "
+                    "rows are not bound to the shipped path")
 
             # 3. ESM wiring.
             (d / f"{name}.mjs").write_text(
@@ -221,6 +272,9 @@ def main() -> None:
             if name == "intmod":
                 int_glue = glue
                 int_py_out = py_out
+            if name == "wbmod":
+                wb_glue = glue
+                wb_py_out = py_out
 
         print(f"shipped-binding OK: {total_obs} boundary observations across "
               f"{len(MODULES)} modules, js+wasm == CPython (D1-normalized), "
@@ -246,6 +300,29 @@ def main() -> None:
             f"expected the pre-fix wrapped value in the forged run: {forged_div}")
         print(f"false-world control OK: guard-deleted glue diverges on "
               f"{len(forged_div)} case(s) (silent wrap reproduced, harness has teeth)")
+
+        # 7. FALSE-WORLD control on the write-back module (#484): delete the
+        #    `__list_write_back(...)` CALL sites (leaving the helper defined) and
+        #    require the differential to CATCH the reverted silent drop — the
+        #    caller's buffer stays unmutated, exactly the pre-fix bug.
+        assert WB_CALL.search(wb_glue), (
+            "no __list_write_back call in the shipped wbmod glue — either the "
+            "write-back regressed or bridge.rs changed shape")
+        forged_glue = WB_CALL.sub("", wb_glue)
+        assert not WB_CALL.search(forged_glue) and "function __list_write_back(" in forged_glue, (
+            "the forge must remove every write-back CALL site but keep the helper")
+        (d / "wbmod.glue.mjs").write_text(forged_glue, encoding="utf-8")
+        wb_forged = normalize_d1(run(["node", "wbmod.mjs"], cwd=d))
+        wb_forged_div = [(i, a, b)
+                         for i, (a, b) in enumerate(zip(wb_forged, wb_py_out)) if a != b]
+        assert wb_forged_div, (
+            "FALSE-WORLD control failed: deleting the write-back did not make the "
+            "differential diverge — the harness would not catch the pre-fix "
+            "silent-drop (#484) bug")
+        assert any("0, 0, 0, 0, 0" in a for _, a, _b in wb_forged_div), (
+            f"expected the unmutated buffer in the write-back-deleted run: {wb_forged_div}")
+        print(f"false-world control OK (#484): write-back-deleted glue diverges on "
+              f"{len(wb_forged_div)} case(s) (silent drop reproduced, harness has teeth)")
 
 
 if __name__ == "__main__":

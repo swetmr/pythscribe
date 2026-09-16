@@ -197,7 +197,7 @@ headline_claims:
     declaration: PythExpandVerify.wasm_admission_sound
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 2686
+    line: 2743
     sorry_count: 0
     axioms: [Quot.sound, propext]
     witness: none
@@ -208,7 +208,7 @@ headline_claims:
     declaration: PythExpandVerify.wasmRouteSafe
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17183
+    line: 17251
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.wasmRouteSafe_wrapStub_fails
@@ -219,7 +219,7 @@ headline_claims:
     declaration: PythExpandVerify.wasmRouteSafe_jsWasm
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17201
+    line: 17269
     sorry_count: 0
     axioms: [propext]
     witness: PythExpandVerify.wasmRouteSafe_wrapStub_fails
@@ -230,7 +230,7 @@ headline_claims:
     declaration: PythExpandVerify.marshal_param_admitted_sound
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18818
+    line: 19085
     sorry_count: 0
     axioms: [propext]
     witness: PythExpandVerify.listInt_i32KindStub_fails
@@ -241,7 +241,7 @@ headline_claims:
     declaration: PythExpandVerify.marshal_ret_admitted_sound
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18838
+    line: 19112
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -252,7 +252,7 @@ headline_claims:
     declaration: PythExpandVerify.i64ArgMarshal_exact
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18625
+    line: 18758
     sorry_count: 0
     axioms: [Quot.sound, propext]
     witness: PythExpandVerify.i64Marshal_unguardedStub_fails
@@ -263,7 +263,7 @@ headline_claims:
     declaration: PythExpandVerify.i64_boundary_roundtrip
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18659
+    line: 18792
     sorry_count: 0
     axioms: [Quot.sound, propext]
     witness: PythExpandVerify.i64Marshal_unguardedStub_fails
@@ -274,7 +274,7 @@ headline_claims:
     declaration: PythExpandVerify.marshal_exhaustive
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18867
+    line: 19141
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -285,7 +285,7 @@ headline_claims:
     declaration: PythExpandVerify.i64Marshal_unguardedStub_fails
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18677
+    line: 18810
     sorry_count: 0
     axioms: []  # axiom-free (tighter than the pinned ceiling)
     witness: none
@@ -296,7 +296,7 @@ headline_claims:
     declaration: PythExpandVerify.slice_walk_inbounds
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 2937
+    line: 3005
     sorry_count: 0
     axioms: [Quot.sound, propext]
     witness: none
@@ -307,7 +307,7 @@ headline_claims:
     declaration: PythExpandVerify.slice_walk_complete
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 3033
+    line: 3101
     sorry_count: 0
     axioms: [Quot.sound, propext]
     witness: none
@@ -318,7 +318,7 @@ headline_claims:
     declaration: PythExpandVerify.getIndex_inbounds
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 3116
+    line: 3184
     sorry_count: 0
     axioms: []  # axiom-free (tighter than the pinned ceiling)
     witness: none
@@ -329,7 +329,7 @@ headline_claims:
     declaration: PythExpandVerify.getIndex_spec
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 3126
+    line: 3194
     sorry_count: 0
     axioms: []  # axiom-free (tighter than the pinned ceiling)
     witness: none
@@ -340,7 +340,7 @@ headline_claims:
     declaration: PythExpandVerify.setIndex_inbounds
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 3137
+    line: 3205
     sorry_count: 0
     axioms: []  # axiom-free (tighter than the pinned ceiling)
     witness: none
@@ -351,7 +351,7 @@ headline_claims:
     declaration: PythExpandVerify.pyBool_iff_not_falsy
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 3215
+    line: 3283
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: none
@@ -362,7 +362,7 @@ headline_claims:
     declaration: PythExpandVerify.pyEqV_trans
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 4229
+    line: 4297
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: none
@@ -373,7 +373,7 @@ headline_claims:
     declaration: PythExpandVerify.preservation
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 4838
+    line: 4906
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: none
@@ -384,7 +384,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationE
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 5057
+    line: 5125
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationE_stub_fails
@@ -395,7 +395,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationS
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 5201
+    line: 5269
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationS_stub_fails
@@ -406,7 +406,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationFE
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 5548
+    line: 5616
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationFE_stub_fails
@@ -417,7 +417,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationFS
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 5556
+    line: 5624
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationFS_stub_fails
@@ -428,7 +428,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationC
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 5875
+    line: 5943
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationC_stub_fails
@@ -439,7 +439,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationCs
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 5880
+    line: 5948
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationCs_stub_fails
@@ -450,7 +450,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationG
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 6300
+    line: 6368
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationG_stub_fails
@@ -461,7 +461,7 @@ headline_claims:
     declaration: PythExpandVerify.anyG_preservation
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 6449
+    line: 6517
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.anyG_stub_fails
@@ -472,7 +472,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationI
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 6942
+    line: 7010
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationI_stub_fails
@@ -483,7 +483,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationD
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 7527
+    line: 7595
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationD_stub_fails
@@ -494,7 +494,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationCls
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 8130
+    line: 8198
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationCls_stub_fails
@@ -505,7 +505,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationS11
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 8568
+    line: 8636
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationS11_stub_fails
@@ -516,7 +516,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationBw
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 9191
+    line: 9259
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationBw_stub_fails
@@ -527,7 +527,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationPow
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 9740
+    line: 9808
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationPow_stub_fails
@@ -538,7 +538,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationSort
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 10577
+    line: 10645
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationSort_stub_fails
@@ -549,7 +549,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationSm
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 11110
+    line: 11178
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationSm_stub_fails
@@ -560,7 +560,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationNb
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 11564
+    line: 11632
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationNb_stub_fails
@@ -571,7 +571,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationSg
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 13834
+    line: 13902
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationSg_stub_fails
@@ -582,7 +582,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationD2
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 14785
+    line: 14853
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationD2_stub_fails
@@ -593,7 +593,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationWasm
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 7219
+    line: 7287
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: none
@@ -604,7 +604,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationA
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 15396
+    line: 15464
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationA_valueStub_fails
@@ -615,7 +615,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationA_zeroKindStub_fails
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 15458
+    line: 15526
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -626,7 +626,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationA_typeKindStub_fails
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 15466
+    line: 15534
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -637,7 +637,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationA_tag
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 15649
+    line: 15717
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationA_tagStub_fails
@@ -648,7 +648,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationA_rho_holds_d1
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 15732
+    line: 15800
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationA_rhoStub_fails
@@ -659,7 +659,7 @@ headline_claims:
     declaration: PythExpandVerify.evalAtgt_d1_collapse
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 15669
+    line: 15737
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: none
@@ -670,7 +670,7 @@ headline_claims:
     declaration: PythExpandVerify.typeTag_not_rhoFaithful
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16924
+    line: 16992
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -681,7 +681,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationSub
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16010
+    line: 16078
     sorry_count: 0
     axioms: [Quot.sound, propext]
     witness: PythExpandVerify.preservationSub_valueStub_fails
@@ -692,7 +692,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationSub_keyKindStub_fails
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16039
+    line: 16107
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -703,7 +703,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationSc
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16405
+    line: 16473
     sorry_count: 0
     axioms: [Quot.sound]
     witness: PythExpandVerify.preservationSc_eagerStub_fails
@@ -714,7 +714,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationSc_trace_fails_on_success
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16594
+    line: 16662
     sorry_count: 0
     axioms: []  # axiom-free (tighter than the pinned ceiling)
     witness: PythExpandVerify.preservationSc_eagerStub_fails
@@ -725,7 +725,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationAy
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16739
+    line: 16807
     sorry_count: 0
     axioms: [propext]
     witness: PythExpandVerify.preservationAy_reorderStub_fails
@@ -736,7 +736,7 @@ headline_claims:
     declaration: PythExpandVerify.compositionThm
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16868
+    line: 16936
     sorry_count: 0
     axioms: [propext]
     witness: PythExpandVerify.compositionThm_typeTagStub_fails
@@ -747,7 +747,7 @@ headline_claims:
     declaration: PythExpandVerify.compositionThm_arith
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16900
+    line: 16968
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.compositionThm_typeTagStub_fails
@@ -758,7 +758,7 @@ headline_claims:
     declaration: PythExpandVerify.compositionThm_arith_d1
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16914
+    line: 16982
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.compositionThm_arith_d1_typeTagStub_fails
@@ -769,7 +769,7 @@ headline_claims:
     declaration: PythExpandVerify.d1c_rhoFaithful
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 16960
+    line: 17028
     sorry_count: 0
     axioms: [propext]
     witness: PythExpandVerify.typeTag_not_rhoFaithful
@@ -780,7 +780,7 @@ headline_claims:
     declaration: PythExpandVerify.M_dom_rhoFaithful
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17047
+    line: 17115
     sorry_count: 0
     axioms: [propext]
     witness: PythExpandVerify.M_dom_reorderStub_fails
@@ -791,7 +791,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationUnion
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17877
+    line: 17945
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationUnion_occurrenceStub_fails
@@ -802,7 +802,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationUnion_value
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17953
+    line: 18021
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationUnion_valueStub_fails
@@ -813,7 +813,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationUnion_tag
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17958
+    line: 18026
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.evalUtgt_d1_untag
@@ -824,7 +824,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationUnion_occurrence
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17971
+    line: 18039
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationUnion_occurrenceStub_fails
@@ -835,7 +835,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationUnion_kind
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17975
+    line: 18043
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationUnion_kindStub_fails
@@ -846,7 +846,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationUnion_trace
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17979
+    line: 18047
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationUnion_orderStub_fails
@@ -857,7 +857,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationUnion_terminates
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18115
+    line: 18183
     sorry_count: 0
     axioms: [Classical.choice, Quot.sound, propext]
     witness: PythExpandVerify.preservationUnion_terminationStub_fails
@@ -868,7 +868,7 @@ headline_claims:
     declaration: PythExpandVerify.evalUpy_fuel_mono
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 17997
+    line: 18065
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -879,7 +879,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationUnion_occurrenceStub_fails
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18163
+    line: 18231
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -890,7 +890,7 @@ headline_claims:
     declaration: PythExpandVerify.preservationUnion_terminationStub_fails
     kind: theorem
     file: verification/PythExpandVerify.lean
-    line: 18236
+    line: 18304
     sorry_count: 0
     axioms: [propext]
     witness: none
@@ -898,7 +898,7 @@ headline_claims:
     paper_claim: "Paper C union termination non-vacuity; semantic_preservance 6."
 
 aggregate_integrity:
-  total_theorems_and_lemmas: 460   # `grep -cE '^\s*(theorem|lemma) ' PythExpandVerify.lean`
+  total_theorems_and_lemmas: 467   # `grep -cE '^\s*(theorem|lemma) ' PythExpandVerify.lean`
   global_sorry_count: 0   # sorry/admit/axiom/native_decide across the whole development
   headline_claim_count: 80
   pinned_axiom_footprint: [Classical.choice, Quot.sound, propext]   # the CEILING (ten-proofs pins exactly this trio)
@@ -906,7 +906,8 @@ aggregate_integrity:
   footprint_within_pinned: true
   uses_classical_choice: true   # inherited from Lean core `String` (String.length/ofList), not our own
   enforcement:
-    - '`python comparator/axiom_footprint.py gate` (CI verification job) — asserts every headline decl axioms subset pinned + 0 sorry'
-    - '`#guard_msgs`-pinned `#print axioms` assertions inside PythExpandVerify.lean (per-decl, build-enforced)'
-    - '`lake build` + the CI trust-base grep (no sorry/admit/axiom/native_decide)'
-    - 'comparator/run_comparator.sh — export (lean4export) + independent re-check (nanoda) when wired; see comparator.md'
+    - '`python comparator/whole_tree_axiom_gate.py gate` (CI verification job) — the WHOLE-TREE kernel gate: kernel-replays (Environment.replay) every decl across ALL verification/*.lean, and asserts axiom footprint subset pinned, no user-declared axiom, no unsafe, imports subset Init-union-covered (partial/implemented_by/extern inventoried) (via Lean.collectAxioms; immune to grep bypasses)'
+    - '`python comparator/whole_tree_axiom_gate.py selftest` — paired negative-control mutation drill: each hard bypass form (private/@[simp] axiom, sorryAx, native_decide, unsafe) + a planted partial (inventoried) + an uncovered shipping module provably turns the gate RED/reports, clean tree PASSES'
+    - '`python comparator/axiom_footprint.py gate` (CI verification job) — per-HEADLINE subset gate: every PythExpandVerify headline decl (+ witness) axioms subset pinned + 0 sorry; drives this manifest'
+    - '`#guard_msgs`-pinned `#print axioms` assertions inside the .lean modules (per-decl, build-enforced)'
+    - 'comparator/run_comparator.sh — export (lean4export) + independent re-check (nanoda) of PythExpandVerify when wired; see comparator.md'

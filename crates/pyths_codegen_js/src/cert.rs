@@ -725,8 +725,10 @@ mod tests {
 
     #[test]
     fn positional_check_skips_offsets_inside_the_hoisted_directive() {
-        let mut cert = Certificate::default();
-        cert.directive_len = 100; // a large directive floor
+        let mut cert = Certificate {
+            directive_len: 100, // a large directive floor
+            ..Default::default()
+        };
         cert.sites.push(helper_site_at(2, 12));
         // js_start (2) < directive_len (100) → the `js_start >= directive_len`
         // guard must SKIP positional remapping. A pyGetItem call elsewhere keeps

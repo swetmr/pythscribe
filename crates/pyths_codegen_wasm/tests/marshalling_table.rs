@@ -31,7 +31,7 @@ fn admitted_arg_rows_use_exact_marshallers() {
     // numeric converters — never the str/dict/tuple/closure marshallers and
     // never a `-` (no representation). The i64 converters' exactness is the
     // guarded discipline pinned by the `fault` rows + the Lean value lemmas.
-    let exact: [&str; 6] = [
+    let exact: [&str; 16] = [
         "(typeof x === \"bigint\" ? x : BigInt(Math.trunc(x)))",
         // #38/#461/#465: f64 args are identity on a native Number, with the
         // standard int→float coercion on the hybrid BigInt form (ToNumber
@@ -43,6 +43,22 @@ fn admitted_arg_rows_use_exact_marshallers() {
         "__list_to_wasm(x, \"i64\")",
         "__list_to_wasm(x, \"f64\")",
         "__list_to_wasm(x, \"i32\")", // exact for ADMITTED lists: elements are bool (0/1)
+        // M2a-4/M2b: the 10 admitted array crossings (5 dtypes × ndim {1, 2}).
+        // `__array_to_wasm` runs the TOTAL runtime dtype/ndim/contiguity check
+        // and bulk-copies at the exact dtype width (or reroutes to the JS twin /
+        // throws) — the width-exact, refuse-on-mismatch class (see the Lean
+        // `argValueExact (.ptrArray _ _)` and the per-dtype semantic-forcing
+        // theorems + the 2-D row-major offset theorem), never a silent misread.
+        "__array_to_wasm(x, \"int32\", 1)",
+        "__array_to_wasm(x, \"int32\", 2)",
+        "__array_to_wasm(x, \"int64\", 1)",
+        "__array_to_wasm(x, \"int64\", 2)",
+        "__array_to_wasm(x, \"float32\", 1)",
+        "__array_to_wasm(x, \"float32\", 2)",
+        "__array_to_wasm(x, \"float64\", 1)",
+        "__array_to_wasm(x, \"float64\", 2)",
+        "__array_to_wasm(x, \"uint8\", 1)",
+        "__array_to_wasm(x, \"uint8\", 2)",
     ];
     let mut admitted = 0;
     for line in marshalling_table().lines() {
@@ -59,8 +75,9 @@ fn admitted_arg_rows_use_exact_marshallers() {
             );
         }
     }
-    // int, float, bool, list<int>, list<float>, list<bool> — the #364 surface.
-    assert_eq!(admitted, 6, "admitted-param surface changed size");
+    // int, float, bool, list<int>, list<float>, list<bool> + the 10 admitted
+    // arrays (5 dtypes × ndim {1, 2}) — the #364 surface, M2a-4/M2b.
+    assert_eq!(admitted, 16, "admitted-param surface changed size");
 }
 
 #[test]
@@ -126,6 +143,12 @@ fn every_disposition_class_is_witnessed() {
         "-> propagate-py",
         " ; -",
         "__list_to_wasm",
+        "__list_write_back", // #484: symmetric write-back rows (Section 1b)
+        "wb list<int> -> __list_write_back(x, p, \"i64\")",
+        "__array_to_wasm",    // M2a-4: the 1-D array crossings
+        "__array_write_back", // M2a-4: symmetric array write-back rows
+        "wb array<int32,1> -> __array_write_back(x, p, \"int32\", 1)",
+        "arg array<uint8,1> -> 1 ; __array_to_wasm(x, \"uint8\", 1)",
         "__dict_to_wasm",
         "__tuple_to_wasm",
         "__closure_to_wasm",
@@ -136,5 +159,31 @@ fn every_disposition_class_is_witnessed() {
             "disposition class unwitnessed in table: {needle}"
         );
     }
-    assert_eq!(table.lines().count(), 56, "table row count drifted");
+    // 66 conversion rows (33 shapes × arg/ret) + 17 write-back rows (7 list #484
+    // + 10 array: 5 dtypes × ndim {1, 2}, M2a-4/M2b) + 10 fault rows.
+    assert_eq!(table.lines().count(), 93, "table row count drifted");
+    // Every write-back row's shape has a matching arg row that marshals IN
+    // through the SAME channel (`__list_to_wasm` for lists, `__array_to_wasm`
+    // for arrays) — the symmetric-marshalling invariant, checkable from the
+    // table itself.
+    let wb_shapes: Vec<&str> = table
+        .lines()
+        .filter_map(|l| l.strip_prefix("wb "))
+        .filter_map(|r| r.split_once(" -> ").map(|(s, _)| s))
+        .collect();
+    assert_eq!(wb_shapes.len(), 17, "write-back row count drifted");
+    for shape in &wb_shapes {
+        let channel = if shape.starts_with("array<") {
+            "__array_to_wasm"
+        } else {
+            "__list_to_wasm"
+        };
+        assert!(
+            table.contains(&format!("arg {} -> ", shape))
+                && table
+                    .lines()
+                    .any(|l| l.starts_with(&format!("arg {} -> ", shape)) && l.contains(channel)),
+            "write-back shape {shape} has no matching {channel} arg row (asymmetry)"
+        );
+    }
 }

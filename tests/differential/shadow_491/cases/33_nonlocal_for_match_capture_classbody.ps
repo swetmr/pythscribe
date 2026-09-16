@@ -1,0 +1,68 @@
+# #491 B1 class closure: the SAME authority covers the `nonlocal` for-target, the
+# match-statement capture / star bindings (`global` + builtin cell) and a class-body
+# `global` for-target nested in a function -- every arm that keyed on `is_hoisted` alone
+# wrote a fresh block-local before (silent: 0 / <function pyAbs> where CPython prints
+# 2 / 8 / [2, 3] / 22 / 8).
+# DEMOTE: peek
+def peek() -> int:
+    return abs(-3)
+
+
+def outer():
+    y = 0
+
+    def inner():
+        nonlocal y
+        for y in [1, 2]:
+            pass
+    inner()
+    return y
+
+
+r = 0
+
+
+def cap(v):
+    global r
+    match v:
+        case [1, r]:
+            pass
+
+
+def cap_builtin(v):
+    global abs
+    match v:
+        case [1, abs]:
+            pass
+
+
+s = 0
+
+
+def star(v):
+    global s
+    match v:
+        case [1, *s]:
+            pass
+
+
+z = 0
+
+
+def in_class():
+    class C:
+        global z
+        for z in [11, 22]:
+            pass
+
+
+print(outer())
+cap([1, 8])
+print(r)
+star([1, 2, 3])
+print(s)
+in_class()
+print(z)
+print(peek())
+cap_builtin([1, 8])
+print(abs)

@@ -1,0 +1,9 @@
+# a function defined before a module-level `len = lambda ...` sees the lambda at
+# call time (3 then 99); the shadow is an assignment, not a def.
+def f() -> int:
+    return len("abc")
+
+
+print(f())
+len = lambda s: 99
+print(f())

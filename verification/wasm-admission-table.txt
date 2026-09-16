@@ -230,3 +230,13 @@ list<list<none>> -> 0 0
 list<list<any>> -> 1 1
 list<list<void>> -> 0 0
 list<list<named>> -> 0 0
+array<int32,1> -> 1 1
+array<int32,2> -> 1 1
+array<int64,1> -> 1 1
+array<int64,2> -> 1 1
+array<float32,1> -> 1 1
+array<float32,2> -> 1 1
+array<float64,1> -> 1 1
+array<float64,2> -> 1 1
+array<uint8,1> -> 1 1
+array<uint8,2> -> 1 1

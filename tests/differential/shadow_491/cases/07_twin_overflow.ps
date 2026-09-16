@@ -1,0 +1,14 @@
+# repro 7 (fable B1): the glue overflow TWIN (`__jsfb.use_abs`) must resolve `abs`
+# to the USER fn like the WASM body does. 2**62 * 7 overflows i64 -> the twin runs.
+# WASM: abs,use_abs
+def use_abs(x: int) -> int:
+    return abs(x)
+
+
+def abs(x: int) -> int:
+    return x * 7
+
+
+print(use_abs(-5))
+print(use_abs(2 ** 62))
+print(use_abs(-(2 ** 62)))

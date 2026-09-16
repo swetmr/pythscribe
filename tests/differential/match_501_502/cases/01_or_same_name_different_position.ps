@@ -1,0 +1,9 @@
+# EXPECT: match
+# #501: same name bound at DIFFERENT positions -> value from the alternative that matched
+def f(v):
+    match v:
+        case [x, 1] | [1, x]:
+            return x
+        case _:
+            return -1
+print(f([5, 1]), f([1, 7]), f([2, 2]))

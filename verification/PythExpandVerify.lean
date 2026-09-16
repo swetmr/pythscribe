@@ -2590,6 +2590,13 @@ enumerates. The soundness argument is identical at every arity (all-inner);
 the n-ary residual is covered by the Rust `admission_table_is_sound_on_every_row`
 test + the examples corpus certificate, not by this theorem. -/
 
+/-- Fixed-width numeric element dtype of a WASM `Array` boundary type
+    (M2 array/buffer ABI) — mirror of `pyths_types::types::ArrayDtype`.
+    Widths: `uint8` = 1, `int32`/`float32` = 4, `int64`/`float64` = 8. -/
+inductive WasmArrayDtype where
+  | int32 | int64 | float32 | float64 | uint8
+deriving DecidableEq, Repr
+
 inductive WasmTy where
   | int | float | bool | str | wnone | any | void | named
   | list (inner : WasmTy)
@@ -2598,6 +2605,16 @@ inductive WasmTy where
   | dict (k v : WasmTy)
   | tuple (a b : WasmTy)
   | callable (p r : WasmTy)
+  -- M2a-0 (types foundation): a numeric `Array[dtype, ndim]` boundary type —
+  -- mirror of `Type::Array(ArrayDtype, ndim)`. Representable (lowers to an i32
+  -- pointer, `toWasmType` below). M2a-3b: 1-D arrays are now ADMITTED
+  -- (`isWasmEligible (.array _ 1) = true`, bound in `wasmAdmissionTable`), 2-D
+  -- refused (M2b). The MARSHALLING-table binding (a dedicated value-exact array
+  -- `WasmRepr` + `isNumericKernelParam (.array) = true` + the per-element
+  -- semantic-forcing theorems) is M2a-4 — until then arrays collapse to the
+  -- `.ptr` repr and stay OUT of `marshalAlphabet`, so no marshalling/semantic
+  -- theorem forces their elements here.
+  | array (dtype : WasmArrayDtype) (ndim : Nat)
 deriving DecidableEq, Repr
 
 /-- The WASM value-type lattice at the boundary — mirror of
@@ -2608,7 +2625,33 @@ inductive WasmRepr where
   | ptrDict (k v : WasmRepr)
   | ptrTuple (a b : WasmRepr)
   | ptrClosure (p : WasmRepr) (r : Option WasmRepr)
+  -- M2a-4/M2b: the DEDICATED value-exact array repr — mirror of
+  -- `WasmType::PtrArray { dtype, ndim }`. It carries the `dtype` AND the `ndim`
+  -- (1 or 2). The WASM value type of an array param is a pointer to a typed
+  -- buffer (the Rust `to_val_type`/`size_bytes` for `PtrArray` are
+  -- ndim-independent — always I32/4), so `ndim` is not a value-*type*
+  -- distinction; but it IS part of the MARSHALLING binding — the emitted glue
+  -- call is `__array_to_wasm(x, dtype, ndim)`, so the marshalling conversion
+  -- (`jsToWasmExpr`/`marshalWbRow`) must carry ndim to byte-agree with the
+  -- shipped emitter (`bridge.rs`) for BOTH 1-D and 2-D. `ndim` also governs
+  -- ADMISSION (ndim>2 refused) and codegen INDEXING (row-major `i*ncols+j` for
+  -- 2-D). This repr is VALUE-EXACT (`argValueExact` below): the bulk marshaller
+  -- copies element bytes at the dtype's exact width (or refuses on mismatch) —
+  -- never a silent misread. The per-dtype width is semantically forced by the
+  -- `array…_wrongWidthStub_fails` theorems; the 2-D row-major offset by
+  -- `arrayTranspose_offsetStub_fails`.
+  | ptrArray (dtype : WasmArrayDtype) (ndim : Nat)
 deriving Repr
+
+/-- The canonical annotation spelling of a WASM array dtype — mirror of
+    `ArrayDtype::spelling` (`int32`/`int64`/`float32`/`float64`/`uint8`). The
+    single source of the dtype token in the marshalling conversions/rows. -/
+def WasmArrayDtype.spelling : WasmArrayDtype → String
+  | .int32 => "int32"
+  | .int64 => "int64"
+  | .float32 => "float32"
+  | .float64 => "float64"
+  | .uint8 => "uint8"
 
 def WasmTy.isAny : WasmTy → Bool
   | .any => true
@@ -2631,6 +2674,14 @@ def isWasmEligible : WasmTy → Bool
   | .callable p r =>
       (isWasmEligible p || p.isAny)
         && (r.isNoneOrVoid || isWasmEligible r || r.isAny)
+  -- M2a-3b/M2b: a 1-D OR 2-D numeric `Array[dtype, ndim]` is admitted (codegen
+  -- row-major indexing + server runtime + js+wasm glue landed for both); ndim>2
+  -- is refused. Mirror of the Rust twin `is_wasm_eligible`
+  -- (`Type::Array(_, ndim) => *ndim <= 2`; the parser only builds ndim ∈ {1,2}).
+  -- Representability is unconditional (`toWasmType` is `some (.ptrArray …)` for
+  -- any ndim), so `wasm_admission_sound` holds for admitted and refused arms
+  -- alike.
+  | .array _ ndim => ndim == 1 || ndim == 2
   | _ => false
 
 /-- THE lowering — `to_wasm_type`, arm-for-arm, returning the actual
@@ -2661,6 +2712,12 @@ def toWasmType : WasmTy → Option WasmRepr
           else (if r.isAny then some .ptr else toWasmType r).map
                  (fun rt => .ptrClosure pt (some rt))
       | none => none
+  -- M2a-4/M2b: a numeric array lowers to the DEDICATED value-exact `.ptrArray`
+  -- repr carrying `dtype` AND `ndim`. The Rust twin is
+  -- `WasmType::PtrArray { dtype, ndim }`. Always representable for EVERY ndim
+  -- (so `wasm_admission_sound` holds for the admitted 1-D/2-D and any refused
+  -- arm alike).
+  | .array dtype ndim => some (.ptrArray dtype ndim)
   | _ => none
 
 /-- Element-position helper lemma: if the inner-eligibility flag
@@ -2688,6 +2745,10 @@ theorem wasm_admission_sound (t : WasmTy) :
   induction t with
   | int | float | bool | str => intro _; rfl
   | wnone | any | void | named => intro h; simp [isWasmEligible] at h
+  -- M2a-3b: arrays are representable for EVERY ndim (`toWasmType (.array _ _)
+  -- = some .ptr`), so `.isSome` is `rfl` regardless of the admission verdict —
+  -- the invariant holds for the admitted 1-D arm and the refused 2-D arm alike.
+  | array _ _ => intro _; rfl
   | list i ih | set i ih =>
       intro h
       simp only [isWasmEligible] at h
@@ -2790,6 +2851,13 @@ def wasmAdmissionTable : String := Id.run do
   -- 8. list<list<a>>
   for (an, aTy) in wasmBaseAlpha do
     out := out ++ wasmRow ("list<list<" ++ an ++ ">>") (.list (.list aTy))
+  -- 9. array<dtype,ndim> (M2a-3b) — dtypes in `WasmArrayDtype` declaration order,
+  --    ndim ∈ {1, 2}. Must byte-match `cert::admission_table()`'s section 9:
+  --    1-D `1 1` (eligible + representable), 2-D `0 1` (refused-but-representable).
+  for (dn, dt) in [("int32", WasmArrayDtype.int32), ("int64", .int64),
+                   ("float32", .float32), ("float64", .float64), ("uint8", .uint8)] do
+    for ndim in [1, 2] do
+      out := out ++ wasmRow ("array<" ++ dn ++ "," ++ toString ndim ++ ">") (.array dt ndim)
   return out
 
 -- `Quot.sound` enters via the `Option`/`Bool` `simp` normal forms over the
@@ -18402,10 +18470,16 @@ js+wasm vs CPython over boundary-crossing values).
     REAL pre-fix shipped behavior of the `__list_to_wasm` i64 element path
     (PoC 2026-08-16: `pick([2**63+7])` returned −9223372036854775801; fixed by
     the element RangeError guard, disposition row `list-elem-i64-oob`).
-  * `marshal_exhaustive` — the finite table is exhaustive over the WHOLE
-    (infinite) representable domain: every `WasmRepr`'s conversion equals a
-    table row's, because the conversion depends only on head constructor +
-    element kind, all witnessed in the alphabet.
+  * `marshal_exhaustive` — the finite table is exhaustive over the whole
+    representable domain the compiler can REACH: every `WasmRepr`'s
+    conversion equals a table row's, because the conversion depends only on
+    head constructor + element kind (+ array dtype and ndim ∈ {1, 2}), all
+    witnessed in the alphabet. `ndim` is a verbatim field of the emitted
+    `__array_to_wasm(x, dtype, ndim)` call, so a finite table can only
+    witness finitely many; the premise `ndim ∈ {1, 2}` is exactly what the
+    parser (`Array[dtype, k>2]` → `Any`) and admission guarantee, and
+    `marshal_exhaustive_admitted` discharges it from `isNumericKernelParam`
+    for every ADMITTED boundary type with no side premise at all.
 
 **Trust boundary (stated).** The exactness of `BigInt(Math.trunc(x))` /
 `Number(bigint)` inside their stated ranges and float identity are JS-engine
@@ -18422,13 +18496,21 @@ here. Client↔server (RPC) and JS↔TS
 boundaries are the SAME table shape but 0.3.x scope — NOT built here. -/
 
 /-- #364 boundary admission for parameters — `is_numeric_kernel_param`,
-    arm-for-arm: numeric scalars and FLAT lists of numeric scalars only. -/
+    arm-for-arm: numeric scalars and FLAT lists of numeric scalars only.
+    M2a-4/M2b: `.array` (the `Array[dtype, ndim]` boundary type) is ADMITTED for
+    both 1-D and 2-D (`ndim ∈ {1, 2}`) and refused for ndim>2 — the SAME
+    arm-for-arm shape as the Rust twin `is_numeric_kernel_param`
+    (`Type::Array(_, ndim) => *ndim <= 2`). The codegen (1-D + 2-D row-major
+    indexing) + server runtime + js+wasm glue landed, so both are crossable
+    numeric-kernel params; the dedicated value-exact `.ptrArray` repr (above,
+    now carrying ndim) keeps `marshal_param_admitted_sound` honest. -/
 def isNumericKernelParam : WasmTy → Bool
   | .int | .float | .bool => true
   | .list i =>
     match i with
     | .int | .float | .bool => true
     | _ => false
+  | .array _ ndim => ndim == 1 || ndim == 2
   | _ => false
 
 /-- #364 boundary admission for returns — `is_scalar_wasm_return`,
@@ -18463,6 +18545,14 @@ def jsToWasmExpr : WasmRepr → String
   | .ptrDict _ _ => "__dict_to_wasm(x)"
   | .ptrTuple _ _ => "__tuple_to_wasm(x)"
   | .ptrClosure _ _ => "__closure_to_wasm(x)"
+  -- M2a-4/M2b: the admitted array crossing — `__array_to_wasm(x, "<dtype>",
+  -- <ndim>)`. `__array_to_wasm` runs the TOTAL runtime dtype/ndim/contiguity
+  -- check and bulk-copies at the exact dtype width (1-D flat / 2-D row-major),
+  -- or throws a `RangeError` (→ #364 twin / loud edge error). Never a silent
+  -- misread. Mirror of the Rust `convert_js_to_wasm(PtrArray { dtype, ndim })`;
+  -- ndim (1 or 2) is threaded from the repr. Byte-agrees with `bridge.rs`.
+  | .ptrArray dtype ndim =>
+      "__array_to_wasm(x, \"" ++ dtype.spelling ++ "\", " ++ toString ndim ++ ")"
 
 /-- `convert_wasm_to_js("x", ·)`, arm-for-arm — the conversion for a WASM
     result crossing back to JS. -/
@@ -18481,6 +18571,15 @@ def wasmToJsExpr : WasmRepr → String
   | .ptrDict _ _ => "__dict_from_wasm(x)"
   | .ptrTuple _ _ => "__tuple_from_wasm(x)"
   | .ptrClosure _ _ => "__closure_from_wasm(x)"
+  -- M2a-4: non-scalar array RETURNS are #377/M6 (out of scope); `check_signature`
+  -- refuses an array return from WASM admission, so a well-formed admitted
+  -- function never reaches this arm — the ret bit is 0 for every array shape.
+  -- The expression is the defensive throwing `RangeError` the Rust
+  -- `convert_wasm_to_js(PtrArray)` emits (routed to the JS twin by the #364
+  -- ladder), NOT a silent value. Byte-agrees with `bridge.rs`.
+  | .ptrArray _ _ =>
+      "(()=>{throw new RangeError('pythscribe: Array/f32 return marshalling is out of "
+        ++ "scope (array returns are #377/M6). expr=x')})()"
 
 /-- Whether the bridge embeds exact JS twins (`--target js+wasm`) or not
     (edge targets: workers/wasi/deno). Both ship. -/
@@ -18536,6 +18635,14 @@ def marshalAlphabet : List (String × WasmTy) :=
         ("tuple<int,float>", .tuple .int .float),
         ("callable<int,int>", .callable .int .int),
         ("callable<int,none>", .callable .int .wnone)]
+    -- M2a-4/M2b: the admitted array shapes — BOTH 1-D and 2-D cross now (the
+    -- glue call threads ndim). Dtype order matches `WasmArrayDtype` /
+    -- `bridge::marshalling_alphabet()`; per dtype ndim ascends 1 then 2.
+    ++ [("array<int32,1>", .array .int32 1), ("array<int32,2>", .array .int32 2),
+        ("array<int64,1>", .array .int64 1), ("array<int64,2>", .array .int64 2),
+        ("array<float32,1>", .array .float32 1), ("array<float32,2>", .array .float32 2),
+        ("array<float64,1>", .array .float64 1), ("array<float64,2>", .array .float64 2),
+        ("array<uint8,1>", .array .uint8 1), ("array<uint8,2>", .array .uint8 2)]
 
 /-- One shape's `arg` + `ret` rows. `-` = no WASM representation (nothing to
     marshal); the bits are the #364 admission verdicts. -/
@@ -18549,6 +18656,27 @@ def marshalRow (name : String) (t : WasmTy) : String :=
   "arg " ++ name ++ " -> " ++ wasmBit (isNumericKernelParam t) ++ " ; " ++ argE ++ "\n"
     ++ "ret " ++ name ++ " -> " ++ wasmBit (isScalarWasmReturn t) ++ " ; " ++ retE ++ "\n"
 
+/-- One shape's write-back row (#484) — present iff the shape's WASM
+    representation is a list pointer (the shapes whose `arg` row uses
+    `__list_to_wasm`). SYMMETRIC marshalling: a mutable list param copied IN is
+    copied BACK out via `__list_write_back`, mutating the caller's array in place
+    (the scalar-return out-parameter fill idiom). `x` = the JS array, `p` = the
+    linear-memory pointer; the element kind is the SAME `listElemKind` the
+    `arg`/`ret` list rows use. Must byte-match `bridge::marshalling_table()`'s
+    Section 1b. -/
+def marshalWbRow (name : String) (t : WasmTy) : Option String :=
+  match toWasmType t with
+  | some (.ptrList i) =>
+    some ("wb " ++ name ++ " -> __list_write_back(x, p, \"" ++ listElemKind i ++ "\")\n")
+  -- M2a-4/M2b: the symmetric array out-parameter write-back (the typed-array
+  -- counterpart of the #484 list write-back), for BOTH 1-D and 2-D. ndim is
+  -- threaded from the repr. Byte-mirrors the Rust `marshalling_table()` array
+  -- wb arm.
+  | some (.ptrArray dtype ndim) =>
+    some ("wb " ++ name ++ " -> __array_write_back(x, p, \"" ++ dtype.spelling ++ "\", "
+      ++ toString ndim ++ ")\n")
+  | _ => none
+
 def faultEvents : List FaultEvent :=
   [.i64ArgOob, .listElemI64Oob, .ovfFlag, .wasmTrap, .pyException]
 
@@ -18557,6 +18685,11 @@ def marshallingTable : String := Id.run do
   let mut out := ""
   for (n, t) in marshalAlphabet do
     out := out ++ marshalRow n t
+  -- Section 1b: write-back rows (#484), one per list-pointer shape.
+  for (n, t) in marshalAlphabet do
+    match marshalWbRow n t with
+    | some r => out := out ++ r
+    | none => pure ()
   for e in faultEvents do
     for m in [BridgeMode.twins, BridgeMode.notwins] do
       out := out ++ "fault " ++ faultEventName e ++ " " ++ bridgeModeName m
@@ -18709,6 +18842,125 @@ theorem listInt_i32KindStub_fails :
   rw [this] at hbad
   exact absurd hbad.1 (by decide)
 
+/-! ### M2a-4: per-dtype array element-width semantic forcing
+
+The array crossing (`__array_to_wasm`/`__array_write_back`) copies each element
+as a byte window of width `arrayElemWidth dtype` (= `ArrayDtype::size_bytes`),
+loading/storing at the dtype's WASM width (`i32.load8_u`/`i32.load`/`i64.load`/
+`f32.load`/`f64.load`). The value-exactness of the `.ptrArray` repr
+(`argValueExact (.ptrArray _) = true`) is therefore CONDITIONAL on the width
+being correct — the direct analogue of `listInt_i32KindStub_fails` (a mismatched
+element slot silently wraps). The five theorems below are the paired anti-vacuity
+controls (`d′`): for EACH dtype, a marshaller using the WRONG width garbles a
+discriminating witness, so the per-dtype width is semantically FORCED, not a
+free label. This is the model-level twin of the net's `wrong-dtype-width` mutant. -/
+
+/-- Element WIDTH in bytes each array dtype marshals at — mirror of
+    `ArrayDtype::size_bytes` (uint8=1, int32/float32=4, int64/float64=8). The
+    bulk marshaller copies exactly this many bytes per element; the codegen
+    loads/stores at this width. A wrong width silently garbles values. -/
+def arrayElemWidth : WasmArrayDtype → Nat
+  | .uint8 => 1
+  | .int32 | .float32 => 4
+  | .int64 | .float64 => 8
+
+/-- The element bit-content retained by a store/copy at `w` bytes: the low
+    `8*w` bits (two's-complement `bmod`, the byte window the ABI actually
+    copies). For a SIGNED integer dtype (int32/int64) this is exactly the NumPy
+    fixed-width wrap; for a float dtype it models the raw element bit-pattern the
+    bulk `TypedArray` copy moves (a wrong width truncates/overruns the window).
+    Correct iff `w = arrayElemWidth dtype`. -/
+def storeLowBytes (w : Nat) (n : Int) : Int := Int.bmod n (2 ^ (8 * w))
+
+/-- **int32 element width is load-bearing.** If int32 elements marshalled at
+    uint8's 1-byte width, the in-range witness `256` (a legal int32 value the
+    correct 4-byte store passes exactly) would garble to `0`. So `int32 → 4-byte`
+    is semantically forced. -/
+theorem arrayInt32_wrongWidthStub_fails :
+    ¬ (∀ n : Int, storeLowBytes (arrayElemWidth .uint8) n
+                = storeLowBytes (arrayElemWidth .int32) n) := by
+  intro h
+  exact absurd (h 256) (by decide)
+
+/-- **int64 element width is load-bearing.** If int64 elements marshalled at
+    int32's 4-byte width, the in-range witness `2³²` (a legal int64 value the
+    correct 8-byte store passes exactly) would garble to `0`. So `int64 → 8-byte`
+    is semantically forced. -/
+theorem arrayInt64_wrongWidthStub_fails :
+    ¬ (∀ n : Int, storeLowBytes (arrayElemWidth .int32) n
+                = storeLowBytes (arrayElemWidth .int64) n) := by
+  intro h
+  exact absurd (h (2 ^ 32)) (by decide)
+
+/-- **uint8 element width forces the mod-256 WRAP (the wrap-boundary witness).**
+    NumPy `uint8` is unsigned modular mod-256, stored at 1 byte (`i32.store8`);
+    the boundary witness `256` wraps to `0`. A wrong "no-wrap" store at int32's
+    4-byte width keeps `256` — violating the dtype semantics. So the `uint8 →
+    1-byte` width AND its wrap are forced. (The signed `storeLowBytes` is not the
+    uint8 model — uint8 uses the unsigned `emod`; a WIDER store skips the wrap.) -/
+theorem arrayUint8_noWrapStub_fails :
+    ¬ (∀ n : Int, storeLowBytes (arrayElemWidth .int32) n = Int.emod n (2 ^ 8)) := by
+  intro h
+  exact absurd (h 256) (by decide)
+
+/-- **float32 element width is load-bearing.** An f32 element occupies 4 bytes
+    (`f32.load`); reading it at float64's 8-byte width would pull the neighbour's
+    bytes into the high word. The byte windows disagree at the witness `2³²`
+    (low 4 bytes `0`, low 8 bytes `2³²`), so `float32 → 4-byte` is forced. -/
+theorem arrayFloat32_wrongWidthStub_fails :
+    ¬ (∀ n : Int, storeLowBytes (arrayElemWidth .float64) n
+                = storeLowBytes (arrayElemWidth .float32) n) := by
+  intro h
+  exact absurd (h (2 ^ 32)) (by decide)
+
+/-- **float64 element width is load-bearing.** An f64 element occupies 8 bytes
+    (`f64.load`); reading it at float32's 4-byte width drops the high word. The
+    byte windows disagree at the witness `2³²`, so `float64 → 8-byte` is forced. -/
+theorem arrayFloat64_wrongWidthStub_fails :
+    ¬ (∀ n : Int, storeLowBytes (arrayElemWidth .float32) n
+                = storeLowBytes (arrayElemWidth .float64) n) := by
+  intro h
+  exact absurd (h (2 ^ 32)) (by decide)
+
+-- Positive non-vacuity witnesses: the CORRECT width passes an in-range value
+-- exactly, and pins the signed-wrap / unsigned-wrap boundaries NumPy declares.
+#guard storeLowBytes (arrayElemWidth .int32) 256 = 256          -- int32 4-byte: exact
+#guard storeLowBytes (arrayElemWidth .int32) (2 ^ 31) = -(2 ^ 31) -- int32 wrap boundary
+#guard storeLowBytes (arrayElemWidth .int64) (2 ^ 32) = 2 ^ 32   -- int64 8-byte: exact
+#guard Int.emod (256 : Int) (2 ^ 8) = 0                          -- uint8 wrap: 256 → 0
+#guard Int.emod (255 : Int) (2 ^ 8) = 255                        -- uint8 in-range: exact
+#guard storeLowBytes (arrayElemWidth .float64) (2 ^ 32) = 2 ^ 32 -- f64 8-byte window
+
+/-! ### M2b: 2-D row-major element-offset semantic forcing
+
+The 2-D element access `a[i, j]` / `a[i][j]` lowers to the byte address
+`ptr + 16 + (i*ncols + j)*esize` (row-major, C-contiguous; `ncols = shape1 @+12`).
+`rowMajorOffset` models the linear element index; `transposeOffset` is the WRONG
+stub the net's `--mutant transpose` injects (`i*nrows + j`). They DIVERGE on any
+non-square shape, so the row-major offset is semantically FORCED — the model-level
+twin of the net transpose mutant (the analogue of the per-dtype width forcing). -/
+
+/-- Row-major linear element index of `(i, j)` in an `_ × ncols` array. -/
+def rowMajorOffset (ncols i j : Nat) : Nat := i * ncols + j
+
+/-- The WRONG (transpose) stub: `i*nrows + j` — reads down the wrong stride. -/
+def transposeOffset (nrows i j : Nat) : Nat := i * nrows + j
+
+-- Positive non-vacuity: row-major lands each cell of a rectangular grid.
+#guard rowMajorOffset 3 0 0 = 0
+#guard rowMajorOffset 3 1 0 = 3   -- 2×3 array, element (1,0): row 1 begins at 3
+#guard rowMajorOffset 3 1 2 = 5   -- last element of a 2×3 array
+
+/-- **The 2-D element offset is ROW-MAJOR (`i*ncols + j`), not the transpose
+    (`i*nrows + j`).** They diverge on any non-square shape — the model twin of
+    the net's `--mutant transpose`. Discriminating witness: a 2×3 array
+    (nrows=2, ncols=3), element (1,0): row-major = 3, transpose = 2. -/
+theorem arrayTranspose_offsetStub_fails :
+    ¬ (∀ nrows ncols i j : Nat, rowMajorOffset ncols i j = transposeOffset nrows i j) := by
+  intro h
+  have := h 2 3 1 0   -- nrows=2, ncols=3, (i, j) = (1, 0): 3 ≠ 2
+  simp [rowMajorOffset, transposeOffset] at this
+
 /-- Pointwise relational lifting over two lists (matching the
     Batteries/Mathlib `List.Forall₂` definition — core v4.31 does not ship it
     and this project is dependency-free, so it is restated here as supporting
@@ -18801,6 +19053,21 @@ theorem bool_boundary_roundtrip (b : Bool) :
 def argValueExact : WasmRepr → Bool
   | .i64 | .f64 | .i32 => true
   | .ptrList .i64 | .ptrList .f64 | .ptrList .i32 => true
+  -- M2a-4: the array crossing is value-exact — `__array_to_wasm` copies element
+  -- bytes at the dtype's EXACT width (uint8=1/int32=f32=4/int64=f64=8), and its
+  -- TOTAL runtime check REFUSES a wrong-dtype/ndim/strided buffer (RangeError →
+  -- #364 twin / loud throw) rather than misreading it. This is the width-exact,
+  -- refuse-on-mismatch class — the direct analogue of the i64 exact-or-divert
+  -- discipline, NOT a pointer converter. The width is semantically LOAD-BEARING:
+  -- the `array…_wrongWidthStub_fails` theorems refute the wrong-width marshaller
+  -- at a discriminating per-dtype witness, so this bit is not a free label.
+  -- SCOPE (like the list `argValueExact`, which models only `listElemKind`):
+  -- "value-exact" here is per-ELEMENT width/kind. Element COUNT, byte order, and
+  -- header-offset correctness live in the bulk `.set()`/DataView header (unmodelled
+  -- in Lean) and are shipping-bound separately by the net differential + E2E, and
+  -- the width leg is gate-bound to `ArrayDtype::size_bytes` by the bridge test
+  -- `test_bridge_array_header_layout_byte_agreement` (row-local).
+  | .ptrArray _ _ => true
   | _ => false
 
 /-- The wasm→js return classes that are value-exact: `__i64ToJs`
@@ -18829,6 +19096,13 @@ theorem marshal_param_admitted_sound (t : WasmTy) :
     | float => exact ⟨.ptrList .f64, rfl, rfl⟩
     | bool => exact ⟨.ptrList .i32, rfl, rfl⟩
     | _ => simp [isNumericKernelParam] at h
+  -- M2a-4/M2b: an admitted 1-D OR 2-D array lowers to the dedicated value-exact
+  -- `.ptrArray dtype ndim` repr (`argValueExact = true` for every ndim) — the
+  -- witness is unconditional in ndim (the width-exactness is per-element, ndim
+  -- only affects indexing/offset, not the crossing's value class), so the
+  -- admission hypothesis `h` is not even needed to build it.
+  | array dtype ndim =>
+    exact ⟨.ptrArray dtype ndim, rfl, rfl⟩
   | _ => simp [isNumericKernelParam] at h
 
 /-- **Marshalling soundness (returns).** Every #364-admitted return type is
@@ -18862,31 +19136,81 @@ def tableRetExprs : List String :=
 /-- **Exhaustiveness.** EVERY representable boundary type (the whole infinite
     `WasmRepr` domain, any nesting) marshals by an expression the finite
     table already witnesses: the conversion depends only on the head
-    constructor + element kind, and the alphabet hits them all. So checking
-    the 56 committed rows checks the entire boundary. -/
-theorem marshal_exhaustive (r : WasmRepr) :
+    constructor + element kind (+ array dtype), and the alphabet hits them all.
+    So checking the committed rows checks the entire boundary. -/
+theorem marshal_exhaustive (r : WasmRepr)
+    -- M2b wellformedness premise: the compiler only ever produces array reprs
+    -- with ndim ∈ {1, 2} (the parser maps `Array[dtype, k>2]` to `Any`;
+    -- admission refuses ndim>2). `ndim` is a VERBATIM field of the emitted
+    -- `__array_to_wasm(x, dtype, ndim)` call, so a FINITE table can witness only
+    -- finitely many ndim — exactly the 1-D/2-D the compiler emits. This premise
+    -- scopes exhaustiveness to the reachable domain; it holds for every array
+    -- the compiler builds, and is vacuous for every non-array repr.
+    (harr : ∀ dtype ndim, r = .ptrArray dtype ndim → ndim = 1 ∨ ndim = 2) :
     jsToWasmExpr r ∈ tableArgExprs ∧ wasmToJsExpr r ∈ tableRetExprs := by
   cases r
   case ptrList i =>
     cases i <;> refine ⟨?_, ?_⟩ <;>
       simp only [jsToWasmExpr, wasmToJsExpr, listElemKind] <;> decide
+  -- M2a-4/M2b: the array conversion depends only on the head + dtype (5 finite
+  -- spellings) + ndim (1 or 2 by `harr`), all witnessed by the `array<dtype,1>`
+  -- and `array<dtype,2>` alphabet rows.
+  case ptrArray dtype ndim =>
+    rcases harr dtype ndim rfl with h | h <;> subst h <;>
+      cases dtype <;> refine ⟨?_, ?_⟩ <;>
+        simp only [jsToWasmExpr, wasmToJsExpr, WasmArrayDtype.spelling] <;> decide
   all_goals refine ⟨?_, ?_⟩ <;>
     simp only [jsToWasmExpr, wasmToJsExpr] <;> decide
 
+/-- **Exhaustiveness over the ADMITTED domain, premise-free.** For every
+    boundary type `#364` admission accepts as a parameter, its lowered repr's
+    conversions are witnessed by the finite table — the `ndim ∈ {1, 2}`
+    side-premise of `marshal_exhaustive` is DISCHARGED here from
+    `isNumericKernelParam` (which is exactly `ndim == 1 || ndim == 2` on the
+    array arm), so an admitted 2-D array needs no extra assumption. -/
+theorem marshal_exhaustive_admitted (t : WasmTy) (r : WasmRepr)
+    (hadm : isNumericKernelParam t = true) (hr : toWasmType t = some r) :
+    jsToWasmExpr r ∈ tableArgExprs ∧ wasmToJsExpr r ∈ tableRetExprs := by
+  apply marshal_exhaustive r
+  intro dtype ndim hreq
+  subst hreq
+  cases t with
+  | array dt nd =>
+    simp only [toWasmType, Option.some.injEq, WasmRepr.ptrArray.injEq] at hr
+    obtain ⟨_, rfl⟩ := hr
+    simp only [isNumericKernelParam, Bool.or_eq_true, beq_iff_eq] at hadm
+    exact hadm
+  | int | float | bool => simp [toWasmType] at hr
+  | list i =>
+    cases i <;> simp [isNumericKernelParam] at hadm <;> simp [toWasmType] at hr
+  | _ => simp [isNumericKernelParam] at hadm
+
+-- `Quot.sound` enters via `beq_iff_eq` when extracting `nd = 1 ∨ nd = 2` from the
+-- executable `isNumericKernelParam` — the same standard footprint as the sibling
+-- i64 value lemmas; `marshal_exhaustive` itself stays `[propext]`. Pinned so it
+-- cannot drift (Fable r2 should-fix).
+/-- info: 'PythExpandVerify.marshal_exhaustive_admitted' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms marshal_exhaustive_admitted
+
 /-! ### Non-vacuity + anti-forgery pins -/
 
--- The table is non-empty, has exactly the committed shape (46 conversion
--- rows + 10 fault rows), and every disposition class is witnessed.
-#guard (marshallingTable.splitOn "\n").length = 57  -- 56 rows + trailing newline
-#guard (marshallingTable.splitOn "arg ").length = 24    -- 23 arg rows
-#guard (marshallingTable.splitOn "ret ").length = 24    -- 23 ret rows
+-- The table is non-empty, has exactly the committed shape (66 conversion
+-- rows [33 arg + 33 ret] + 17 write-back rows [7 list #484 + 10 array: 5×1-D +
+-- 5×2-D, M2a-4/M2b] + 10 fault rows), and every disposition class is witnessed.
+#guard (marshallingTable.splitOn "\n").length = 94  -- 93 rows + trailing newline
+#guard (marshallingTable.splitOn "wb ").length = 18     -- 17 write-back rows (7 list + 10 array)
+#guard (marshallingTable.splitOn "__list_write_back").length = 8  -- one per LIST wb row (7)
+#guard (marshallingTable.splitOn "__array_write_back").length = 11 -- one per ARRAY wb row (10: 5×1-D + 5×2-D)
+#guard (marshallingTable.splitOn "__array_to_wasm").length = 11    -- one per ARRAY arg row (10: 5×1-D + 5×2-D)
+#guard (marshallingTable.splitOn "arg ").length = 34    -- 33 arg rows
+#guard (marshallingTable.splitOn "ret ").length = 34    -- 33 ret rows
 #guard (marshallingTable.splitOn "fault ").length = 11  -- 10 fault rows
 #guard (marshallingTable.splitOn "reroute-twin").length = 5   -- 4 twin reroutes
 #guard (marshallingTable.splitOn "throw-range").length = 3
 #guard (marshallingTable.splitOn "throw-overflow").length = 2
 #guard (marshallingTable.splitOn "propagate-trap").length = 2
 #guard (marshallingTable.splitOn "propagate-py").length = 3
-#guard (marshallingTable.splitOn "-> 1 ;").length = 12  -- 11 admitted rows (6 arg + 5 ret)
+#guard (marshallingTable.splitOn "-> 1 ;").length = 22  -- 21 admitted rows (16 arg + 5 ret)
 #guard (marshallingTable.splitOn " ; -").length = 17    -- 16 no-marshal rows (no repr / void ret)
 
 -- Anti-forgery: the byte-equality check REJECTS a single drifted disposition
@@ -18912,6 +19236,25 @@ theorem marshal_exhaustive (r : WasmRepr) :
 example : ∃ r, toWasmType (.list .int) = some r ∧ argValueExact r = true :=
   marshal_param_admitted_sound _ rfl
 
+/-- SPOT (M2a-4, through `marshal_param_admitted_sound`): an admitted 1-D
+    `Array[int32]` boundary lowers to the dedicated VALUE-EXACT `.ptrArray`
+    class — fails if the array arm regresses to the shared `.ptr` repr or if
+    `argValueExact (.ptrArray _ _)` is not `true`. -/
+example : ∃ r, toWasmType (.array .int32 1) = some r ∧ argValueExact r = true :=
+  marshal_param_admitted_sound _ rfl
+
+/-- SPOT (M2b, through `marshal_param_admitted_sound`): an admitted 2-D
+    `Array[int32, 2]` boundary also lowers to the dedicated VALUE-EXACT
+    `.ptrArray` class — the 2-D arm is a real crossing, not a label. -/
+example : ∃ r, toWasmType (.array .int32 2) = some r ∧ argValueExact r = true :=
+  marshal_param_admitted_sound _ rfl
+
+/-- SPOT: 2-D IS admitted (M2b) but ndim>2 is REFUSED — the ndim guard is real,
+    not a label. `isNumericKernelParam (.array _ 2) = true`,
+    `isNumericKernelParam (.array _ 3) = false`. -/
+example : isNumericKernelParam (.array .int32 2) = true := rfl
+example : isNumericKernelParam (.array .int32 3) = false := rfl
+
 /-- SPOT (through `i64ArgMarshal_exact`): a pass at the i64 edge is pinned to
     EXACTLY the value — fails if exactness is weakened to range-only. -/
 example (w : Int) (h : i64ArgMarshal .twins (.big (2 ^ 63 - 1)) = .pass w) :
@@ -18924,6 +19267,10 @@ example (w : Int) (h : i64ArgMarshal .twins (.num 41) = .pass w) :
     (i64RetMarshal w).val = 41 :=
   i64_boundary_roundtrip .twins (.num 41) w rfl h
 
+-- M2b: the array arm now builds its value-exact witness `⟨.ptrArray dtype ndim,
+-- rfl, rfl⟩` unconditionally (ndim-agnostic), which no longer routes through
+-- `beq_iff_eq`/`Quot.sound` — so the footprint SHRANK to `[propext]` (a strictly
+-- smaller TCB, not a weaker statement).
 /-- info: 'PythExpandVerify.marshal_param_admitted_sound' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms marshal_param_admitted_sound
@@ -18967,5 +19314,28 @@ example (w : Int) (h : i64ArgMarshal .twins (.num 41) = .pass w) :
 /-- info: 'PythExpandVerify.marshal_exhaustive' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms marshal_exhaustive
+
+-- M2a-4: the per-dtype array element-width semantic-forcing stubs are all
+-- constructive refutations (`decide`/`absurd`) — axiom-free, like the list
+-- element-kind stub they mirror.
+/-- info: 'PythExpandVerify.arrayInt32_wrongWidthStub_fails' does not depend on any axioms -/
+#guard_msgs in
+#print axioms arrayInt32_wrongWidthStub_fails
+
+/-- info: 'PythExpandVerify.arrayInt64_wrongWidthStub_fails' does not depend on any axioms -/
+#guard_msgs in
+#print axioms arrayInt64_wrongWidthStub_fails
+
+/-- info: 'PythExpandVerify.arrayUint8_noWrapStub_fails' does not depend on any axioms -/
+#guard_msgs in
+#print axioms arrayUint8_noWrapStub_fails
+
+/-- info: 'PythExpandVerify.arrayFloat32_wrongWidthStub_fails' does not depend on any axioms -/
+#guard_msgs in
+#print axioms arrayFloat32_wrongWidthStub_fails
+
+/-- info: 'PythExpandVerify.arrayFloat64_wrongWidthStub_fails' does not depend on any axioms -/
+#guard_msgs in
+#print axioms arrayFloat64_wrongWidthStub_fails
 
 end PythExpandVerify

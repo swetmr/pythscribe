@@ -1,0 +1,35 @@
+{
+  "compiler": {
+    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "name": "pyths",
+    "version": "0.2.5"
+  },
+  "entry": "downscale_nn.js",
+  "files": {
+    "downscale_nn.glue.js": "1dbdb9bd8bf7c379c22445311a91bd74bcb0e0a5b455911c02f3cf0406f5266e",
+    "downscale_nn.js": "5a03e54b9e2dcef22530ff24c999f41cefe1bca5bc8d0800737594bf396e41e7",
+    "downscale_nn.ps": "275bf4455ec69c8a3a739fc00755672d374d011ff358e7767677446fc56d86ac",
+    "downscale_nn.wasm": "86a57a0a411e50be5a68b3a8e21c2896bc8f8a60a02890a5ecbaf07dd7cd9def",
+    "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
+    "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
+    "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
+    "pyths-runtime/react.js": "79c85d9599d3a6b7c813d83d538ab225ac0fd8776857f7fdba1512096099df47",
+    "pyths-runtime/runtime.js": "21a474e1f6aa2f959a2101a46be393190a923576fb67e3e78edba39c7ddd0b78",
+    "pyths-runtime/types.js": "b5af591c394a1984715054cd5c8c100ffdc2ea1c6b85e01bf3ae33e2cf1b265b"
+  },
+  "function": "downscale_nn",
+  "glue": "downscale_nn.glue.js",
+  "manifest_sha256": "bb79a19477490163564d1cd0c6c52fbebbd9f4491d057045620f4b0fadc9a656",
+  "optimizer": {
+    "applied": false,
+    "error": null,
+    "id": "none",
+    "path_sha256": null
+  },
+  "runtime_dir": "pyths-runtime",
+  "schema": 1,
+  "source_file": "kernels.py",
+  "source_sha256": "275bf4455ec69c8a3a739fc00755672d374d011ff358e7767677446fc56d86ac",
+  "target": "js+wasm",
+  "wasm": "downscale_nn.wasm"
+}

@@ -1,0 +1,17 @@
+# repro 8 (fable B3): a WASM-eligible function called at module scope BEFORE the
+# shadowing def must see the builtin for that call (5) and the user fn after (-35).
+# The call-time binding differs across the two calls, so `use_abs` must be DEMOTED
+# to the cell-aware JS path (a WASM body bakes ONE binding).
+# DEMOTE: use_abs
+def use_abs(x: int) -> int:
+    return abs(x)
+
+
+print(use_abs(-5))
+
+
+def abs(x: int) -> int:
+    return x * 7
+
+
+print(use_abs(-5))

@@ -1,0 +1,17 @@
+# the same chain called only AFTER the shadowing def: call-time == final binding,
+# so everything stays WASM and computes the user value.
+# WASM: abs,f,g
+def f(x: int) -> int:
+    return abs(x)
+
+
+def g(x: int) -> int:
+    return f(x) + 1
+
+
+def abs(x: int) -> int:
+    return x * 7
+
+
+print(g(-5))
+print(g(2 ** 62))

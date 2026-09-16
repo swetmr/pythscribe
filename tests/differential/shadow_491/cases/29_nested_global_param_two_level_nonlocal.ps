@@ -1,0 +1,72 @@
+# #491 BLOCKER-3 variants: the colliding enclosing binding is a PARAM (keyword
+# and positional calls must still bind it by its Python name), a TWO-LEVEL
+# nesting where every intervening function local captured in turn, a sibling
+# `nonlocal` that targets the (renamed) enclosing local, `del` + aug-assign on
+# both sides, and a nested def NAMED like the cell.
+def outer_param(abs, y=2):
+    def inner():
+        global abs
+        abs = 7
+    inner()
+    return (abs, y)
+
+
+def two_level():
+    abs = 1
+    def mid():
+        abs = 2
+        def inner():
+            global abs
+            abs = 70
+        inner()
+        return abs
+    return (mid(), abs)
+
+
+def with_nonlocal():
+    abs = 1
+    def inner():
+        global abs
+        abs += 1
+    def sib():
+        nonlocal abs
+        abs = abs + 10
+    inner()
+    sib()
+    return abs
+
+
+def aug_and_del():
+    abs = 1
+    abs += 1
+    def inner():
+        global abs
+        abs = 100
+        abs += 1
+    inner()
+    r = abs
+    del abs
+    return r
+
+
+def nested_def_named():
+    def abs():
+        return "local-def"
+    def inner():
+        global abs
+        abs = 5
+    inner()
+    return abs()
+
+
+print(outer_param(abs=3, y=4))
+print(outer_param(5))
+print(abs)
+print(two_level())
+print(abs)
+print(with_nonlocal())
+print(abs)
+print(aug_and_del())
+print(abs)
+print(nested_def_named())
+print(abs)

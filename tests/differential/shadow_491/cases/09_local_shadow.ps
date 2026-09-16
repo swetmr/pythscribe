@@ -1,0 +1,18 @@
+# repro 9 (fable S1): a function-LOCAL binding (param / local assignment) of a
+# builtin name shadows the builtin INSIDE that function -> CPython TypeError
+# (int object is not callable). Never the builtin value.
+# DEMOTE: g,h
+def g(abs: int) -> int:
+    return abs(2)
+
+
+def h(x: int) -> int:
+    len = 5
+    return len(x)
+
+
+for f in (g, h):
+    try:
+        print(f(3))
+    except TypeError:
+        print("TypeError")

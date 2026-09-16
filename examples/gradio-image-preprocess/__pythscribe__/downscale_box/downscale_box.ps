@@ -1,0 +1,19 @@
+@wasm
+def downscale_box(px: list[int], w: int, h: int, scale: int, out: list[int]) -> int:
+    ow = w // scale
+    oh = h // scale
+    area = scale * scale
+    for oy in range(oh):
+        for ox in range(ow):
+            r = 0
+            g = 0
+            b = 0
+            for dy in range(scale):
+                row = (oy * scale + dy) * w
+                for dx in range(scale):
+                    v = px[row + ox * scale + dx]
+                    r = r + ((v >> 16) & 255)
+                    g = g + ((v >> 8) & 255)
+                    b = b + (v & 255)
+            out[oy * ow + ox] = ((r // area) << 16) | ((g // area) << 8) | (b // area)
+    return ow * oh

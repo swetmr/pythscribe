@@ -1,0 +1,13 @@
+# repro 11 (S4): `import math as abs` binds the module namespace to `abs`.
+# DEMOTE: use
+def use(x: int) -> int:
+    return abs(x)
+
+
+print(use(-5))
+import math as abs
+print(abs.floor(2.5))
+try:
+    print(use(-5))
+except TypeError:
+    print("TypeError")

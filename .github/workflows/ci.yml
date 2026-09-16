@@ -89,17 +89,89 @@ jobs:
           ./target/release/pyths compile examples/cloudflare-bench/large-samples/pythscribe/app_1000.ps -o "${RUNNER_TEMP}/app_1000.js"
         shell: bash
 
+  pythscribe-m0:
+    # v0.2.5 M0 gates: @wasm fallback (U1-U3), the compiled-vs-CPython differential
+    # (D1-D3) and the in-browser Gradio path (E1-E3), each with its paired negative
+    # control. PYTHSCRIBE_REQUIRE_ORACLE=1 turns every prerequisite skip (node /
+    # playwright / component / artifact) into a FAILURE: a run that reports PASS with
+    # the oracle skipped must go RED (review R1/B3, class `vacuous-verification`).
+    # M1 adds the image-preprocessing gates (K1-K8 kernel/shim differential, A1-A4 in-browser
+    # app gates, N1-N3 notebook derivation incl. an end-to-end notebook execution).
+    name: pythscribe M0+M1 gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: "1.94.0"
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build the pinned compiler
+        run: cargo build --release --bin pyths
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install pythscribe + the Gradio component + the browser
+        run: |
+          python -m pip install -e ".[gradio,test]" build
+          python -m pip install -e pythscribe/gradio/wasm_function
+          python -m playwright install --with-deps chromium
+          npm ci --prefix pythscribe/gradio/wasm_function/frontend
+
+      - name: Committed artifact == what the pinned toolchain produces (forced rebuild must be byte-identical)
+        run: |
+          python -m pythscribe.build --force examples/gradio-wasm/kernels.py
+          python -m pythscribe.build --force examples/gradio-image-preprocess/kernels.py
+          python -m pythscribe.build --force examples/wasm-use-cases/kernels.py
+          git status --porcelain -- examples/gradio-wasm/__pythscribe__ examples/gradio-image-preprocess/__pythscribe__ examples/wasm-use-cases/__pythscribe__
+          git diff --exit-code -- examples/gradio-wasm/__pythscribe__ examples/gradio-image-preprocess/__pythscribe__ examples/wasm-use-cases/__pythscribe__
+
+      - name: M0+M1 gates against the COMMITTED component bundle (a skipped prerequisite is a FAILURE)
+        env:
+          PYTHSCRIBE_REQUIRE_ORACLE: "1"
+          # wheel-M0 §D4 (embedded identity): `pyths` was built from THIS checkout above, so the
+          # D4 tests are a REAL gate here -- PYTHSCRIBE_REQUIRE_EMBED=1 makes an unset/invalid
+          # binary a FAILURE (elsewhere, with no binary built, D4 is a plain skip).
+          PYTHSCRIBE_EMBED_BINARY: target/release/pyths
+          PYTHSCRIBE_REQUIRE_EMBED: "1"
+        run: python -m pytest tests/pythscribe -v -ra -p no:cacheprovider
+
+      - name: Component frontend still builds from source (after the gates, so E2E used the committed bundle)
+        run: |
+          cd pythscribe/gradio/wasm_function
+          python -m gradio cc build --no-generate-docs --python-path "$(which python)"
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      # Fails fast (Node preinstalled, no Rust setup) if any package.json /
-      # Cargo.toml / lockfile version disagrees with the Cargo workspace version.
-      # Guards against the platform-template drift that broke the 0.2.1 release.
+      # Fails fast (python3 preinstalled on the runner, no Rust setup) if any package.json /
+      # Cargo.toml / lockfile / _pin.COMPILER_VERSION disagrees with the Cargo workspace version,
+      # or the pip package's pyproject/__version__ disagree with each other. Guards the
+      # platform-template drift that broke the 0.2.1 release + the B1 pip/compiler-pin drift.
       - name: Version-drift check
-        run: node scripts/check-versions.mjs
+        run: python3 scripts/check_versions.py
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # pinned via toolchain input
@@ -258,6 +330,25 @@ jobs:
       # 3 real WASM codegen bugs incl. a silent miscompile.
       - name: Livermore kernel differential (24 x {cpython, js, wasm})
         run: node tests/differential/livermore/run.mjs
+
+      # WASM admitted-shape net (v0.2.5 pre-M5 robustness pass): the ENTIRE
+      # currently-admitted @wasm shape space, generated deterministically and
+      # diffed CPython vs `--target js` vs `--target js+wasm` on two channels
+      # (the glue entry AND the raw export with no JS-twin masking). Two-sided
+      # ratchet against baseline.json (a new RED row fails; a fixed row fails
+      # until removed; the row count is pinned so the corpus cannot shrink).
+      # No skip flag exists. Runs the release binary built above.
+      - name: WASM admitted-shape differential net (two-sided ratchet)
+        run: python tests/differential/wasm_net/wasm_net.py
+
+      # Cluster-A property-based differential (#485/#487): Hypothesis over the
+      # bounds-guard / and-or-value / chained-comparison / list-comparison /
+      # truthiness shapes AND generated boolean-expression trees, CPython vs the
+      # RAW .wasm export (no twin). Batches per example; ~80 batches.
+      - name: Cluster-A PBT (Hypothesis, CPython vs raw WASM export)
+        run: |
+          pip install hypothesis
+          python tests/differential/wasm_net/pbt_cluster_a.py
 
       # Formal Lark grammar corpus gate (grammar/pyths.lark + psc.lark vs all
       # tracked .ps/.psc, the 584-entry differential corpus, and the clone
@@ -566,17 +657,50 @@ jobs:
       - name: Marshalling boundary shipped-binding differential
         run: python verification/marshalling_shipped_binding.py
 
-      - name: Trust-base audit — no sorry/admit/axiom/native_decide
+      # Cluster-A shipped-binding on the WASM path: the Lean `pyBoolM` #guard
+      # pins (+ definition clauses) and the `AOp` C1 value rows must equal what
+      # the real `pyths --target js+wasm` .wasm computes on the RAW export AND
+      # CPython (three-legged; the C4 error-kind boundary is stated, not claimed).
+      - name: Cluster-A truthiness/arith shipped-binding (Lean literal == WASM == CPython)
+        run: python verification/wasm_cluster_a_shipped_binding.py
+
+      # WHOLE-TREE axiom-enforcement gate (verification/AxiomGate.lean, run via
+      # comparator/whole_tree_axiom_gate.py). REPLACES the old bypassable keyword
+      # grep: that grep only matched the literal forms it spelled and could be
+      # evaded by `private axiom`, an `@[simp]`/attribute-decorated `axiom`, a
+      # TAB-indented `axiom`, a term-level `sorryAx`, `native_decide`'s
+      # `ofReduceBool`/`ofReduceNat`, `unsafe`, or `partial`. The new gate re-imports
+      # EVERY shipping verification module into a fresh environment, RE-TYPECHECKS
+      # every declaration through the KERNEL (`Environment.replay` — so the elaborator
+      # is not the TCB and a `set_option debug.skipKernelTC true` `False` is rejected),
+      # and per declaration asserts axiom footprint ⊆ {propext, Classical.choice,
+      # Quot.sound} (via `Lean.collectAxioms` — catches sorryAx/ofReduceBool and any
+      # smuggled axiom a decl depends on), no verification module declares an axiom,
+      # no decl is `unsafe` (keyed on SAFETY, never a name), and every import is within
+      # Init∪covered (`partial`/`implemented_by`/`extern` are inventoried, not failed).
+      # It reads the ENVIRONMENT (not the source text), so it is immune to every
+      # formatting bypass. The covered set is derived from the BUILT `.olean`s and
+      # required to equal the recursive `.lean` set, so no subdirectory / oddly-named /
+      # unbuilt module can silently escape the audit. Covers ALL verification/*.lean,
+      # not just PythExpandVerify's import closure. The completeness meta-check (folded
+      # into `gate`) fails if any source theorem/lemma is not in the checked set or any
+      # shipping module is uncovered.
+      - name: Whole-tree axiom-footprint gate (all verification/*.lean)
         working-directory: verification
-        run: |
-          # F-6: scan EVERY verification/*.lean, not just PythExpandVerify.lean, so a
-          # sorry hidden in a sibling module (generated *Data.lean, Main.lean, future
-          # files) cannot slip past the trust-base audit.
-          if grep -nE '\bsorry\b|\badmit\b|^ *axiom |native_decide' *.lean; then
-            echo "::error::escape hatch found in the Lean development"
-            exit 1
-          fi
-          echo "clean: propext-only trust base preserved (all verification/*.lean)"
+        run: python comparator/whole_tree_axiom_gate.py gate --no-build
+
+      # ANTI-VACUITY paired negative-control self-test for the gate above: plants
+      # each hard bypass form (plain/private/@[simp] axiom, sorryAx, native_decide,
+      # unsafe def, a forged `_unsafe_rec`-named unsafe def, an unsafe opaque), a
+      # `set_option debug.skipKernelTC true` `False` theorem (must fail KERNEL REPLAY),
+      # a planted partial (inventoried), and a prefixed AND a subdirectory shipping
+      # module (must be discovered/audited, not silently excluded), and asserts the
+      # gate/coverage goes RED on each while the clean tree PASSES with KERNEL_REPLAY
+      # ok. An unpaired gate is a blocker; this is the pairing (the false-world /
+      # mutation drill). Temp files are written + removed by the driver.
+      - name: Whole-tree axiom gate — paired negative-control self-test
+        working-directory: verification
+        run: python comparator/whole_tree_axiom_gate.py selftest --no-build
 
       # Comparator axiom-footprint gate (ten-proofs Part B / lean_strategies B1-B3):
       # runs `#print axioms` in the REAL Lean env over every Paper-C headline
@@ -987,3 +1111,111 @@ jobs:
             coverage-summary.txt
             coverage.lcov
           retention-days: 30
+
+  # ===========================================================================
+  # M7.4 (spec 13-09-26-lib-selfcontained-pip-wheel): `web-parity`.
+  # SEPARATE from the M4 node-free acceptance job (release.yml) so the base
+  # node-free proof stays clean. Runner WITH system Node. Proves that
+  #   A  `npm create pyths-app@V`  (the published scaffolder, run here from the
+  #       locally-packed tarball == the bytes M6.2 publishes),
+  #   B  `pyths new`  (base wheel + system Node),
+  #   C  `pyths new`  (venv with [web-bundled], system Node removed from PATH ->
+  #       the vendored Node),
+  # converge to the SAME scaffold byte-for-byte, and that `pyths doctor` tracks
+  # the environment in BOTH the node-present and node-absent states.
+  # ===========================================================================
+  web-parity:
+    name: M7 web-parity (frontend from the base wheel)
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: ${{ runner.os }}-cargo-webparity-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-webparity-
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Build the pinned compiler + stage it
+        run: |
+          cargo build --release --bin pyths
+          mkdir -p pythscribe/_bin
+          cp target/release/pyths pythscribe/_bin/pyths
+
+      - name: Refresh + byte-gate the vendored runtime and scaffolder payloads
+        run: |
+          python scripts/prepare_release_payloads.py --vendor
+          python scripts/verify_runtime_mirror.py
+          python scripts/verify_scaffolder_mirror.py
+          git diff --exit-code -- pythscribe/_web/create-pyths-app pythscribe/_runtime/pyths-runtime
+
+      - name: Build + install the platform wheel (base; system Node)
+        run: |
+          python -m pip install build
+          PYTHSCRIBE_WHEEL_PLATFORM=manylinux_2_28_x86_64 python -m build --wheel --outdir dist_whl .
+          python -m venv .venvB
+          . .venvB/bin/activate
+          pip install --no-index --no-deps dist_whl/*.whl
+
+      - name: M7 gates as REAL oracles (resolver / scaffold / doctor SPOTs; a skip is a FAILURE)
+        env:
+          PYTHSCRIBE_REQUIRE_ORACLE: "1"
+        run: |
+          python -m pip install -e ".[test]"
+          python -m pytest tests/pythscribe/test_wheel_m7.py tests/pythscribe/test_wheel_m7_doctor.py -v -ra -p no:cacheprovider
+
+      - name: A == B == C scaffold parity (byte-for-byte)
+        run: |
+          set -euo pipefail
+          . .venvB/bin/activate
+          ROOT="$(mktemp -d)"
+          # A: the published scaffolder, run from the locally-packed tarball (== M6.2's bytes)
+          ( cd packages/create-pyths-app && npm pack --pack-destination "$ROOT" >/dev/null )
+          TGZ="$(ls "$ROOT"/create-pyths-app-*.tgz)"
+          ( cd "$ROOT" && npx -y "$TGZ" app >/dev/null )
+          mv "$ROOT/app" "$ROOT/A"
+          # B: pyths new (base wheel, system Node)
+          ( cd "$ROOT" && pyths new app >/dev/null ) ; mv "$ROOT/app" "$ROOT/B"
+          # C: pyths new with [web-bundled], system Node removed from PATH -> the vendored Node
+          python -m venv "$ROOT/venvC"
+          "$ROOT/venvC/bin/pip" install --no-index --no-deps dist_whl/*.whl
+          "$ROOT/venvC/bin/pip" install nodejs-wheel-binaries
+          NODE_DIR="$(dirname "$(command -v node)")"
+          ( cd "$ROOT" && PATH="$(echo "$PATH" | tr ':' '\n' | grep -v "^$NODE_DIR$" | paste -sd:)" \
+              "$ROOT/venvC/bin/pyths" new app >/dev/null ) ; mv "$ROOT/app" "$ROOT/C"
+          diff -r "$ROOT/A" "$ROOT/B"
+          diff -r "$ROOT/A" "$ROOT/C"
+          echo "A == B == C : identical"
+
+      - name: doctor tracks the environment (node PRESENT here)
+        run: |
+          . .venvB/bin/activate
+          pyths doctor
+          pyths doctor --strict --require node   # system Node present -> exit 0
+
+      - name: doctor in the NODE-ABSENT state (Node scrubbed from PATH; no [web-bundled])
+        run: |
+          . .venvB/bin/activate
+          NODE_DIR="$(dirname "$(command -v node)")"
+          SCRUBBED="$(echo "$PATH" | tr ':' '\n' | grep -v "^$NODE_DIR$" | paste -sd:)"
+          PATH="$SCRUBBED" pyths doctor | tee /tmp/doc.txt
+          grep -E '^Node: absent' /tmp/doc.txt
+          if PATH="$SCRUBBED" pyths doctor --strict --require node ; then
+            echo "expected non-zero exit for --strict --require node with Node absent" ; exit 1
+          fi
+
+      # NOTE (reviewer): the full install -> `next dev` -> post-hydration DOM parity across A/B/C and
+      # the PYTHS_BIN logging-wrapper marker (M7-4) are load-fragile (Playwright + a running server)
+      # and are NOT implemented in this pass; the compiler-output parity is covered by the byte-for-byte
+      # scaffold tree diff above + the M7-4 env SPOT in the pytest suite. Full DOM parity is a tracked
+      # follow-up (pythscribe-dev#507).

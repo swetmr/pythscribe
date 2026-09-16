@@ -8,6 +8,7 @@
 //!   - `while x < 5: if n > 0: break`  → infinite loop (br targeted the if)
 //!   - `while ...: if x == 2: continue` → no-op continue (15 where CPython
 //!     gives 13)
+//!
 //! Additionally, `continue` in a `for` loop branched to the loop HEADER,
 //! skipping the increment — an infinite loop even in the FLAT case.
 //!

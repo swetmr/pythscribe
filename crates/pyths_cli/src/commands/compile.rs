@@ -836,26 +836,16 @@ pub fn run(
                 // The glue embeds them and re-runs any call whose WASM
                 // result would exceed i64 (`__ovf` flag / boundary guard),
                 // so the fast path can never return a silently wrapped int.
+                // #491: the twin module is built by the ONE shared constructor
+                // (`pyths_codegen_wasm::twin_module`) — imports + compiled defs —
+                // so the twin resolves every free callee exactly like the WASM
+                // body (SHADOW_BINDING_DESIGN.md §4).
                 let twin_js: Option<String> = {
-                    let twin_body: Vec<pyths_syntax::ast::Stmt> = module
-                        .body
-                        .iter()
-                        .filter(|s| {
-                            matches!(
-                                &s.kind,
-                                pyths_syntax::ast::StmtKind::FuncDef { name, .. }
-                                    if wasm_out.compiled_functions.contains(name)
-                            )
-                        })
-                        .cloned()
-                        .collect();
-                    if twin_body.is_empty() {
+                    let twin_module =
+                        pyths_codegen_wasm::twin_module(&module, &wasm_out.compiled_functions);
+                    if wasm_out.compiled_functions.is_empty() {
                         None
                     } else {
-                        let twin_module = pyths_syntax::ast::Module {
-                            body: twin_body,
-                            span: module.span,
-                        };
                         let twin_opts = pyths_codegen_js::CodegenOptions {
                             npm_imports: Some(&config.npm.imports),
                             ..Default::default()

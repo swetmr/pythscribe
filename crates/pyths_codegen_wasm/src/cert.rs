@@ -505,6 +505,26 @@ pub fn admission_table() -> String {
             &Type::List(Box::new(Type::List(Box::new(at.clone())))),
         );
     }
+    // 9. array<dtype,ndim> — the M2 typed-array boundary (M2a-3b binding). dtypes
+    //    in `ArrayDtype` declaration order; ndim ∈ {1, 2}. A 1-D array is eligible
+    //    AND representable (`1 1`); a 2-D array is NOT eligible yet (M2b) but still
+    //    representable (`0 1`) — the two arms that witness `is_wasm_eligible(ty) ⇒
+    //    to_wasm_type(ty).is_some()` holds for arrays with and without admission.
+    for dt in [
+        pyths_types::types::ArrayDtype::Int32,
+        pyths_types::types::ArrayDtype::Int64,
+        pyths_types::types::ArrayDtype::Float32,
+        pyths_types::types::ArrayDtype::Float64,
+        pyths_types::types::ArrayDtype::Uint8,
+    ] {
+        for ndim in [1u32, 2] {
+            row(
+                &mut out,
+                &format!("array<{},{ndim}>", dt.spelling()),
+                &Type::Array(dt, ndim),
+            );
+        }
+    }
 
     out
 }
@@ -644,6 +664,50 @@ mod tests {
                 !(elig == "1" && lower == "0"),
                 "UNSOUND admission row (admitted but unlowerable): {line}"
             );
+        }
+    }
+
+    // ---- M2a-3: array admission flipped ON for 1-D (soundness held) ----
+    //
+    // M2a-0 added `Type::Array` + `WasmType::{F32,PtrArray}` as pure foundation
+    // (non-eligible). M2a-3 flipped admission ON for **1-D** arrays; **M2b**
+    // flips it ON for **2-D** too (row-major indexing + shape marshalling
+    // landed). ndim>2 stays refused (the parser never builds it). The soundness
+    // invariant `is_wasm_eligible(ty) ⇒ to_wasm_type(ty).is_some()` holds for
+    // all: 1-D/2-D are eligible AND representable; ndim>2 is not eligible but
+    // still representable, so the invariant can never be violated.
+    #[test]
+    fn array_1d_2d_admitted_ndim3_refused_soundness_holds() {
+        use pyths_types::types::ArrayDtype;
+        for dt in [
+            ArrayDtype::Int32,
+            ArrayDtype::Int64,
+            ArrayDtype::Float32,
+            ArrayDtype::Float64,
+            ArrayDtype::Uint8,
+        ] {
+            for ndim in [1u32, 2, 3] {
+                let ty = Type::Array(dt, ndim);
+                // 1-D and 2-D admitted; ndim>2 refused.
+                assert_eq!(
+                    is_wasm_eligible(&ty),
+                    ndim <= 2,
+                    "M2b admits 1-D and 2-D arrays and refuses ndim>2: {ty}"
+                );
+                // Representable regardless — soundness holds even for the
+                // not-yet-admitted 2-D case.
+                let lowered = to_wasm_type(&ty);
+                assert!(
+                    lowered.is_some(),
+                    "array must lower to Some(PtrArray): {ty}"
+                );
+                assert_eq!(
+                    lowered.unwrap(),
+                    crate::types::WasmType::PtrArray { dtype: dt, ndim }
+                );
+                // The machine-checked invariant: elig ⇒ some.
+                assert!(!is_wasm_eligible(&ty) || to_wasm_type(&ty).is_some());
+            }
         }
     }
 }

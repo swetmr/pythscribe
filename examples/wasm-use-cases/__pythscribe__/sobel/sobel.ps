@@ -1,0 +1,20 @@
+@wasm
+def sobel(img: Array[uint8, 2], out: Array[uint8, 2], h: int, w: int) -> int:
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            c = x * 3
+            gx = img[y - 1][c + 3] + 2 * img[y][c + 3] + img[y + 1][c + 3] - img[y - 1][c - 3] - 2 * img[y][c - 3] - img[y + 1][c - 3]
+            gy = img[y + 1][c - 3] + 2 * img[y + 1][c] + img[y + 1][c + 3] - img[y - 1][c - 3] - 2 * img[y - 1][c] - img[y - 1][c + 3]
+            m = gx
+            if m < 0:
+                m = -m
+            nn = gy
+            if nn < 0:
+                nn = -nn
+            e = m + nn
+            if e > 255:
+                e = 255
+            out[y][c] = e
+            out[y][c + 1] = e
+            out[y][c + 2] = e
+    return (h - 2) * (w - 2)

@@ -311,6 +311,7 @@ fn behavioral_differential_matches_cpython() {
 ///     (a protocol class, NOT a native async generator — so a sync-lowered
 ///     arm cannot accidentally pass), with the same creation-time probe for
 ///     the genexp cell (GET_AITER).
+///
 /// Every expected string is a live-CPython golden (verified by running the
 /// exact same source under python; see the gen script in the PR).
 #[test]
@@ -923,6 +924,12 @@ fn test_specially_lowered_builtins_shadow_matrix() {
                 "\"\"\"mod doc\"\"\"\ndef f():\n    __doc__ = \"local\"\n    return __doc__\nprint(f(), __doc__)",
                 "local mod doc\n",
             ),
+            "type" => (
+                // local `type` shadow wins inside f; module-level `type(x) == int`
+                // fast path fires only because `type`/`int` are unshadowed there.
+                "def f():\n    type = lambda x: \"T\"\n    return type(3)\nprint(f(), type(3) == int)",
+                "T True\n",
+            ),
             other => panic!(
                 "SPECIALLY_LOWERED_BUILTINS entry {other:?} has no shadow-matrix \
                  row template — add one here (E7 sub-part 3: a special lowering \
@@ -962,4 +969,948 @@ fn test_specially_lowered_builtins_shadow_matrix() {
 #[should_panic(expected = "NOT in SPECIALLY_LOWERED_BUILTINS")]
 fn test_unlisted_fast_path_name_panics() {
     pyths_codegen_js::assert_specially_lowered_manifest("new_fast");
+}
+
+/// #491 CROSS-EMITTER paired control (CELL model): a user `def` shadowing a builtin
+/// is routed to WASM (in `wasm_functions`), while its CALLER is demoted to JS. The
+/// JS module owns a builtin-initialized CELL (`export let abs = pyAbs;`), the def's
+/// source position rebinds it to the hidden glue import (`abs = __wasm$abs;`), and
+/// the demoted caller reads the cell (`abs(x)`) — never a baked `pyAbs(x)` call.
+/// On revert (the base emit-order authority) the caller emits `pyAbs(x)` → RED.
+///
+/// (End-to-end behavioral coverage of the same class is in tests/differential/wasm_net
+/// `shadow_demoted` and tests/differential/shadow_491 — full js+wasm compile + run.)
+#[test]
+fn test_wasm_routed_shadow_wins_in_demoted_js_caller() {
+    use std::collections::HashMap;
+    // (user def name, the runtime builtin value the cell is initialized to).
+    let cases = [
+        (
+            "abs",
+            "pyAbs",
+            "def abs(x: int) -> int:\n    return x * 7\ndef use_it(x: int) -> str:\n    return str(abs(x))\n",
+        ),
+        (
+            "len",
+            "pyLen",
+            "def len(x: int) -> int:\n    return x + 1000\ndef use_it(x: int) -> str:\n    return str(len(x))\n",
+        ),
+        (
+            "sorted",
+            "pySorted",
+            "def sorted(x: int) -> int:\n    return x - 3\ndef use_it(x: int) -> str:\n    return str(sorted(x))\n",
+        ),
+    ];
+    for (name, runtime_builtin, src) in cases {
+        let module = pyths_parser::parse(src).expect("parse");
+        // `name` (abs/len/sorted) is the WASM-eligible scalar def; `use_it` (str
+        // return) stays on JS and calls it.
+        let wasm_functions = vec![name.to_string()];
+        let js = pyths_codegen_js::codegen_with_wasm_bridge(
+            &module,
+            &wasm_functions,
+            "./mod.glue.js",
+            &HashMap::new(),
+        );
+        assert!(
+            !js.contains(&format!("{runtime_builtin}(")),
+            "#491 cross-emitter: demoted JS caller lowered `{name}` to a baked runtime \
+             builtin CALL `{runtime_builtin}(` instead of reading the cell.\nJS:\n{js}"
+        );
+        assert!(
+            js.contains(&format!("export let {name} = {runtime_builtin};")),
+            "expected the builtin-initialized cell for `{name}`.\nJS:\n{js}"
+        );
+        assert!(
+            js.contains(&format!("{name} = __wasm${name};")),
+            "expected the def's source position to rebind the cell to the glue export.\nJS:\n{js}"
+        );
+        assert!(
+            js.contains(&format!("{name} as __wasm${name} }}")),
+            "expected the glue import under the hidden alias.\nJS:\n{js}"
+        );
+        assert!(
+            js.contains(&format!("{name}(x)")),
+            "expected a call to the cell `{name}` in the demoted caller.\nJS:\n{js}"
+        );
+    }
+}
+
+/// #491 (CELL model, js+wasm): a builtin-named call that lexically PRECEDES its
+/// shadowing `def` at module scope reads the cell while it still holds the BUILTIN
+/// (CPython: the def has not bound yet) — the cell is declared at the module top,
+/// initialized to `pyAbs`, and rebound at the def's position; a call AFTER the def
+/// reads the user fn. Mutation: dropping the cell (the base authority) resolves the
+/// preceding call through a hoisted `import { abs }` → the user fn (RED: 5 vs -35 in
+/// the behavioral harness; here the shape assertions fail).
+#[test]
+fn test_order_aware_forward_ref_uses_builtin_before_def() {
+    use std::collections::HashMap;
+    let src = "print(abs(-5))\ndef abs(x: int) -> int:\n    return x * 7\ny = abs(3)\nprint(y)\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen_with_wasm_bridge(
+        &module,
+        &["abs".to_string()],
+        "./mod.glue.js",
+        &HashMap::new(),
+    );
+    let cell = js
+        .find("export let abs = pyAbs;")
+        .expect("the cell is declared");
+    let first_call = js
+        .find("abs((-5))")
+        .expect("the forward-ref call reads the cell");
+    let rebind = js
+        .find("abs = __wasm$abs;")
+        .expect("the def position rebinds the cell");
+    let second = js.find("abs(3)").expect("the post-def call reads the cell");
+    assert!(
+        cell < first_call && first_call < rebind && rebind < second,
+        "cell → forward-ref call → rebind → post-def call, in that order.\nJS:\n{js}"
+    );
+    assert!(
+        !js.contains("pyAbs("),
+        "no baked builtin CALL anywhere — every read goes through the cell.\nJS:\n{js}"
+    );
+}
+
+/// #491 (CELL model, behavioral, js-only): B2 — a function defined BEFORE the
+/// shadowing def resolves at CALL time (user fn, -35); B3 — 5 then -35 across a
+/// def; `global` write, `del`, a never-executed conditional def, a late lambda
+/// rebind, a for-target rebind, and a class rebind all follow CPython. Each row's
+/// expected output is CPython's (tests/differential/shadow_491/cases).
+#[test]
+fn test_call_time_shadow_resolution_matches_cpython() {
+    let rows = vec![
+        (
+            "b2_after_def".to_string(),
+            "def use(x):\n    return abs(x)\ndef abs(x):\n    return x * 7\nprint(use(-5))".to_string(),
+            "-35\n".to_string(),
+        ),
+        (
+            "b3_before_and_after".to_string(),
+            "def use(x):\n    return abs(x)\nprint(use(-5))\ndef abs(x):\n    return x * 7\nprint(use(-5))".to_string(),
+            "5\n-35\n".to_string(),
+        ),
+        (
+            "global_write".to_string(),
+            "def use(x):\n    return abs(x)\ndef rebind():\n    global abs\n    abs = lambda z: z * 2\nprint(use(-5))\nrebind()\nprint(use(-5))".to_string(),
+            "5\n-10\n".to_string(),
+        ),
+        (
+            "del_restores".to_string(),
+            "def abs(x):\n    return x * 7\nprint(abs(-5))\ndel abs\nprint(abs(-5))".to_string(),
+            "-35\n5\n".to_string(),
+        ),
+        (
+            "conditional_def_never_runs".to_string(),
+            "def use(x):\n    return abs(x)\nif len('') > 0:\n    def abs(x):\n        return 0\nprint(abs(-5))\nprint(use(-5))".to_string(),
+            "5\n5\n".to_string(),
+        ),
+        (
+            "late_lambda_len".to_string(),
+            "def f():\n    return len('abc')\nprint(f())\nlen = lambda s: 99\nprint(f())".to_string(),
+            "3\n99\n".to_string(),
+        ),
+        (
+            "for_target_rebind".to_string(),
+            "def use(x):\n    return abs(x)\nprint(use(-5))\nfor abs in [lambda z: z + 1]:\n    pass\nprint(use(-5))".to_string(),
+            "5\n-4\n".to_string(),
+        ),
+        (
+            "class_rebind_call_time_new".to_string(),
+            "def use(x):\n    return abs(x)\nprint(use(-5))\nclass abs:\n    def __init__(self, v):\n        self.v = v\nprint(type(use(-5)).__name__)\nprint(abs(4).v)".to_string(),
+            "5\nabs\n4\n".to_string(),
+        ),
+        (
+            "def_then_import_wins".to_string(),
+            "def use(x):\n    return abs(x)\ndef abs(x):\n    return x * 7\nprint(use(-5))\nfrom math import fabs as abs\nprint(use(-5))".to_string(),
+            "-35\n5.0\n".to_string(),
+        ),
+        (
+            "type_eq_user_int_call_time".to_string(),
+            "def is_int(x):\n    return type(x) == int\nprint(is_int(3))\ndef int(x):\n    return 99\nprint(is_int(3))\nprint(type(3) == int)".to_string(),
+            "True\nFalse\nFalse\n".to_string(),
+        ),
+        (
+            "str_float_fast_path_yields".to_string(),
+            "def show(x):\n    return str(x)\nprint(show(2.5))\ndef str(x):\n    return 'S'\nprint(show(2.5))\nprint(str(2.0))".to_string(),
+            "2.5\nS\nS\n".to_string(),
+        ),
+        (
+            "forward_ref_float_repr_through_cell".to_string(),
+            "print(str(2.0))\nprint(2.0)\ndef str(x):\n    return 'S'\nprint(str(2.0))".to_string(),
+            "2.0\n2.0\nS\n".to_string(),
+        ),
+    ];
+    let failures = run_rows("shadow_cell", &rows);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #491 BLOCKER-1 (js, behavioral): a `global N` WRITE inside a class METHOD (instance /
+/// `@staticmethod` / `@classmethod`) rebinds the MODULE cell — for a builtin-shadow name
+/// (`abs`, `len`: a silent wrong value before the fix, the stale builtin) AND a non-builtin
+/// module global (`counter`: a TDZ ReferenceError before the fix). Root fix: the method
+/// emitter opens its scope through the SAME `open_function_scope` prologue as
+/// `emit_func_def`, which carries the #199 `global`/`nonlocal` pre-declare. Mutation M9
+/// (drop the pre-declare from the method path) → `let abs = 7` again → every row differs
+/// from CPython. Each row's expected output is CPython 3.12's.
+#[test]
+fn test_method_global_write_rebinds_module_cell_matches_cpython() {
+    let rows = vec![
+        (
+            "method_global_write_builtin_shadow".to_string(),
+            "def peek():\n    return abs(-9)\nclass C:\n    def m(self):\n        global abs\n        abs = 7\nprint(peek())\nC().m()\nprint(abs)".to_string(),
+            "9\n7\n".to_string(),
+        ),
+        (
+            "method_global_write_nonbuiltin_twin".to_string(),
+            "counter = 0\nclass C:\n    def m(self):\n        global counter\n        counter = counter + 10\nC().m()\nprint(counter)\nC().m()\nprint(counter)".to_string(),
+            "10\n20\n".to_string(),
+        ),
+        (
+            "staticmethod_global_write_builtin_shadow".to_string(),
+            "def size(xs):\n    return len(xs)\nclass K:\n    @staticmethod\n    def s():\n        global len\n        len = lambda xs: 42\nprint(size([1, 2, 3]))\nK.s()\nprint(size([1, 2, 3]))".to_string(),
+            "3\n42\n".to_string(),
+        ),
+        (
+            "classmethod_global_write_nonbuiltin".to_string(),
+            "total = 1\nclass K:\n    @classmethod\n    def c(cls):\n        global total\n        total = total * 5\nK.c()\nK().c()\nprint(total)".to_string(),
+            "25\n".to_string(),
+        ),
+        (
+            "plain_def_global_write_unchanged".to_string(),
+            "def use(x):\n    return abs(x)\ndef rebind():\n    global abs\n    abs = lambda z: z * 2\nprint(use(-5))\nrebind()\nprint(use(-5))".to_string(),
+            "5\n-10\n".to_string(),
+        ),
+    ];
+    let failures = run_rows("shadow_method_global", &rows);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #491 BLOCKER-1 (shape): the method-local `let` is GONE — the write is a bare
+/// assignment to the module cell. Pinned on the emitted text so the property does
+/// not depend on node being present.
+#[test]
+fn test_method_global_write_emits_bare_cell_write_not_local_let() {
+    let src = "def peek():\n    return abs(-9)\nclass C:\n    def m(self):\n        global abs\n        abs = 7\n    @staticmethod\n    def s():\n        global abs\n        abs = 8\nprint(peek())\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen_inline(&module);
+    assert!(
+        !js.contains("let abs = 7") && !js.contains("let abs = 8"),
+        "a `global abs` write in a method must NOT emit a method-local `let abs`.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("abs = 7;") && js.contains("abs = 8;"),
+        "the method `global abs` write must be a bare assignment to the module cell.\nJS:\n{js}"
+    );
+}
+
+/// #491 BLOCKER-2 (js, behavioral): a `global N` WRITE directly in a CLASS BODY rebinds the
+/// MODULE cell at class-definition time — CPython: `global` in a class block binds the module,
+/// never the class namespace. Every value-binding form (plain / augmented / tuple / mixed
+/// tuple / `del` / inside an `if` block) and every nesting of the class (module, function,
+/// class) — each row's expected output is CPython 3.12's. Before the fix the class-body
+/// assignment installer emitted `__pyClassAttr(C, "abs", 7)` and the module builtin stayed
+/// (a SILENT stale value); mutation M10 (the installer's global-write dispatch OFF) → every
+/// row differs again.
+#[test]
+fn test_class_body_global_write_rebinds_module_cell_matches_cpython() {
+    let rows = vec![
+        (
+            "classbody_global_write_builtin_shadow".to_string(),
+            "def peek():\n    return abs(-9)\nprint(peek())\nclass C:\n    global abs\n    abs = 7\n    y = abs\nprint(abs)\nprint(C.y)\nprint(hasattr(C, 'abs'))".to_string(),
+            "9\n7\n7\nFalse\n".to_string(),
+        ),
+        (
+            "classbody_global_write_nonbuiltin_no_other_binder".to_string(),
+            "class C:\n    global g\n    g = 5\nprint(g)".to_string(),
+            "5\n".to_string(),
+        ),
+        (
+            "classbody_global_augassign".to_string(),
+            "x = 1\nclass C:\n    global x\n    x += 5\nprint(x)".to_string(),
+            "6\n".to_string(),
+        ),
+        (
+            "classbody_global_mixed_tuple_target".to_string(),
+            "class C:\n    global abs\n    abs, k = 7, 1\nprint(abs)\nprint(C.k)\nprint(hasattr(C, 'abs'))".to_string(),
+            "7\n1\nFalse\n".to_string(),
+        ),
+        (
+            "classbody_global_del_restores_builtin".to_string(),
+            "abs = 7\nclass C:\n    global abs\n    del abs\nprint(abs(-2))".to_string(),
+            "2\n".to_string(),
+        ),
+        (
+            "classbody_global_write_inside_if_block".to_string(),
+            "class C:\n    global abs\n    if True:\n        abs = 7\nprint(abs)".to_string(),
+            "7\n".to_string(),
+        ),
+        (
+            "classbody_global_write_class_in_function".to_string(),
+            "def f():\n    class C:\n        global abs\n        abs = 7\nf()\nprint(abs)".to_string(),
+            "7\n".to_string(),
+        ),
+        (
+            "classbody_global_write_class_in_class".to_string(),
+            "class O:\n    class I:\n        global abs\n        abs = lambda z: 100\nprint(abs(-9))".to_string(),
+            "100\n".to_string(),
+        ),
+        (
+            "classbody_global_decl_method_local_write_unchanged".to_string(),
+            "class C:\n    global abs\n    def m(self):\n        abs = 7\n        return abs\nprint(C().m())\nprint(abs(-3))".to_string(),
+            "7\n3\n".to_string(),
+        ),
+    ];
+    let failures = run_rows("shadow_classbody_global", &rows);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #491 BLOCKER-2 (shape): the class-body `global abs` write is a bare assignment to the
+/// module cell — NOT a `__pyClassAttr(C, "abs", …)` install, and the cell exists. Pinned on
+/// the emitted text so the property does not depend on node being present.
+#[test]
+fn test_class_body_global_write_emits_module_cell_write_not_class_attr() {
+    let src = "def peek():\n    return abs(-9)\nclass C:\n    global abs\n    abs = 7\n    k = 1\nprint(peek())\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen_inline(&module);
+    assert!(
+        !js.contains("__pyClassAttr(C, \"abs\""),
+        "a class-body `global abs` write must NOT install a class attribute.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("export let abs = pyAbs;") && js.contains("\nabs = 7;"),
+        "the class-body `global abs` write must be a bare write to the module cell.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("__pyClassAttr(C, \"k\", 1)"),
+        "the non-global sibling stays a class attribute.\nJS:\n{js}"
+    );
+}
+
+/// #491 BLOCKER-3 (item 3, root): a nested scope's `global N` access is NEVER captured by an
+/// ENCLOSING function's lexical local of the same name. CPython resolves `global N` at module
+/// scope through any number of enclosing locals; emitted JS is lexical, so before the fix
+/// `outer`'s `let abs` captured `inner`'s bare `abs = 7` — corrupting the enclosing local
+/// (7, not 1) AND leaving the module cell unwritten (`print(abs)` printed the builtin). Every
+/// row's expected output is CPython 3.12's; rows cover the write, the READ-only twin, a
+/// PARAM (keyword AND positional binding by the Python name), two-level nesting, a sibling
+/// `nonlocal`, `del`/aug-assign, a nested def NAMED like the cell, the non-builtin twin, a
+/// class body nested in the function (binding the name / declaring it global — its method
+/// still sees the enclosing local), comprehensions / f-strings / lambdas, and an inner-inner
+/// scope. Mutation M11 (the pre-pass returns None) → the rows differ again.
+#[test]
+fn test_nested_global_captured_by_enclosing_local_matches_cpython() {
+    let rows = vec![
+        (
+            "nested_global_write_item3".to_string(),
+            "def outer():\n    abs = 1\n    def inner():\n        global abs\n        abs = 7\n    inner()\n    return abs\nprint(outer())\nprint(abs)".to_string(),
+            "1\n7\n".to_string(),
+        ),
+        (
+            "nested_global_read_only".to_string(),
+            "def outer():\n    abs = 1\n    def inner():\n        global abs\n        return abs(-5)\n    return (inner(), abs)\nprint(outer())".to_string(),
+            "(5, 1)\n".to_string(),
+        ),
+        (
+            "nested_global_enclosing_param_kw_and_positional".to_string(),
+            "def kw(abs, y=2):\n    def inner():\n        global abs\n        abs = 7\n    inner()\n    return (abs, y)\nprint(kw(abs=3, y=4))\nprint(kw(5))\nprint(abs)".to_string(),
+            "(3, 4)\n(5, 2)\n7\n".to_string(),
+        ),
+        (
+            "nested_global_two_level".to_string(),
+            "def outer():\n    abs = 1\n    def mid():\n        abs = 2\n        def inner():\n            global abs\n            abs = 7\n        inner()\n        return abs\n    return (mid(), abs)\nprint(outer())\nprint(abs)".to_string(),
+            "(2, 1)\n7\n".to_string(),
+        ),
+        (
+            "nested_global_sibling_nonlocal".to_string(),
+            "def outer():\n    abs = 1\n    def inner():\n        global abs\n        abs = 7\n    def other():\n        nonlocal abs\n        abs = abs + 10\n    inner(); other()\n    return abs\nprint(outer())\nprint(abs)".to_string(),
+            "11\n7\n".to_string(),
+        ),
+        (
+            "nested_global_del_and_aug".to_string(),
+            "def outer():\n    abs = 1\n    abs += 1\n    def inner():\n        global abs\n        abs = 7\n        abs += 1\n    inner()\n    r = abs\n    del abs\n    return r\nprint(outer())\nprint(abs)".to_string(),
+            "2\n8\n".to_string(),
+        ),
+        (
+            "nested_global_def_named_like_cell".to_string(),
+            "def outer():\n    def abs():\n        return \"local-def\"\n    def inner():\n        global abs\n        abs = 7\n    inner()\n    return abs()\nprint(outer())\nprint(abs)".to_string(),
+            "local-def\n7\n".to_string(),
+        ),
+        (
+            "nested_global_nonbuiltin_twin".to_string(),
+            "g = 0\ndef outer():\n    g = 1\n    def inner():\n        global g\n        g = 7\n    inner()\n    return g\nprint(outer())\nprint(g)".to_string(),
+            "1\n7\n".to_string(),
+        ),
+        (
+            "nested_global_class_body_binds_method_sees_local".to_string(),
+            "def outer():\n    abs = 1\n    class C:\n        abs = 2\n        def m(self):\n            return abs\n    def inner():\n        global abs\n        abs = 7\n    inner()\n    return (C.abs, C().m(), abs)\nprint(outer())\nprint(abs)".to_string(),
+            "(2, 1, 1)\n7\n".to_string(),
+        ),
+        (
+            "nested_global_class_body_global_method_sees_local".to_string(),
+            "def outer():\n    abs = 1\n    class C:\n        global abs\n        abs = 8\n        def m(self):\n            return abs\n    return (C().m(), abs)\nprint(outer())\nprint(abs)".to_string(),
+            "(1, 1)\n8\n".to_string(),
+        ),
+        (
+            "nested_global_comprehension_fstring_lambda".to_string(),
+            "def outer():\n    abs = 1\n    def inner():\n        global abs\n        abs = 7\n    inner()\n    return (f\"{abs}\", [abs for _ in range(2)], [abs for abs in (5,)], (lambda: abs)(), (lambda abs: abs)(6))\nprint(outer())\nprint(abs)".to_string(),
+            "('1', [1, 1], [5], 1, 6)\n7\n".to_string(),
+        ),
+        (
+            "nested_global_propagates_to_inner_inner".to_string(),
+            "def outer():\n    abs = 1\n    def inner():\n        global abs\n        def ii():\n            return abs\n        abs = 7\n        return ii()\n    return (inner(), abs)\nprint(outer())\nprint(abs)".to_string(),
+            "(7, 1)\n7\n".to_string(),
+        ),
+        (
+            "genuine_local_no_nested_global_still_shadows".to_string(),
+            "def outer():\n    abs = 1\n    def inner():\n        return abs + 1\n    def bump():\n        nonlocal abs\n        abs = abs + 10\n    bump()\n    return (inner(), abs)\nprint(outer())\nprint(abs(-4))".to_string(),
+            "(12, 11)\n4\n".to_string(),
+        ),
+    ];
+    let failures = run_rows("shadow_nested_global_capture", &rows);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #491 BLOCKER-3 (shape): the ENCLOSING local is renamed (`let abs$l0`), the nested
+/// `global abs` write stays a BARE write to the module cell (`abs = 7;`), the cell exists, a
+/// renamed PARAM keeps its Python name in the keyword-binding metadata, and — the OVER-FIX
+/// guard — a genuine local with no nested `global` is emitted under its own name (no rename).
+/// Pinned on the emitted text so the property does not depend on node being present.
+#[test]
+fn test_nested_global_capture_emits_renamed_local_and_bare_cell_write() {
+    let src = "def outer():\n    abs = 1\n    def inner():\n        global abs\n        abs = 7\n    inner()\n    return abs\ndef kw(abs, y=2):\n    def inner():\n        global abs\n        abs = 7\n    inner()\n    return (abs, y)\nprint(outer())\nprint(abs)\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen_inline(&module);
+    assert!(
+        js.contains("let abs$l0 = 1;") && js.contains("return abs$l0;"),
+        "the enclosing local must be renamed throughout `outer`.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("    function inner() {\n        abs = 7;\n    }"),
+        "the nested `global abs` write must stay a BARE module-cell write.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("let abs = pyAbs;"),
+        "the module cell must exist under the user name.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("function kw(abs$l1, y") && js.contains("kw.__pyparams__ = [\"abs\", \"y\"];"),
+        "a renamed PARAM keeps its Python name in __pyparams__.\nJS:\n{js}"
+    );
+    // OVER-FIX guard: no nested `global` → no rename at all.
+    let src = "def outer():\n    abs = 1\n    def inner():\n        return abs + 1\n    return inner()\nprint(outer())\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen_inline(&module);
+    assert!(
+        js.contains("let abs = 1;") && !js.contains("$l"),
+        "a genuine local with no colliding nested `global` must keep its name.\nJS:\n{js}"
+    );
+}
+
+/// #491 SF1: the JS MODULE census matches the HIR authority on annotation-only —
+/// a bare `len: int` at module scope binds NOTHING (PEP 526), so `len` keeps the
+/// plain builtin lowering (no `export let len = pyLen` cell), while the valued
+/// `abs: int = 5` IS a binder and gets its cell. (Function scope is unchanged:
+/// an annotation-only local is still a static local.)
+#[test]
+fn test_module_annotation_only_is_not_a_binder() {
+    let src = "len: int\nabs: int = 5\ndef f(xs):\n    return len(xs)\nprint(f([1]))\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen_inline(&module);
+    assert!(
+        !js.contains("let len"),
+        "module annotation-only `len: int` must not create a binder cell.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("let abs"),
+        "the valued `abs: int = 5` IS a module binder (cell/let expected).\nJS:\n{js}"
+    );
+}
+
+/// #491 blocker 3 (js): `isinstance(x, int)` with a user `def int` must pass the USER
+/// binding as the class operand, NOT the `"int"` string sentinel. Mutation: drop the
+/// shadow check in the sentinel lowering → the `"int"` sentinel returns → assert fails.
+/// (codegen_inline inlines the runtime — whose dispatch contains "int"/"list" literals —
+/// so assert on the precise CALL FORM, not a bare `contains`.)
+#[test]
+fn test_isinstance_type_operand_respects_user_shadow() {
+    let src = "def int(x: int) -> int:\n    return 99\nr = isinstance(3, int)\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen_inline(&module);
+    assert!(
+        !js.contains("__pyIsInstance(3, \"int\")"),
+        "isinstance with a user `def int` must NOT emit the `\"int\"` builtin sentinel.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("__pyIsInstance(3, int)"),
+        "isinstance must pass the user `int` binding as the class operand.\nJS:\n{js}"
+    );
+}
+
+/// #491 blocker 2 (js, behavioral): `type(x) == int` with a user `def int` compares
+/// against the user function (never a type), so it is False — NOT the fast
+/// `pyType(x).__name__ === "int"` (which would be True). Mutation: drop the
+/// `type_identity_unshadowed` guard → the fast path returns True → differs from CPython.
+#[test]
+fn test_type_eq_builtin_respects_user_shadow() {
+    let rows = vec![(
+        "shadow_type_eq_int".to_string(),
+        "def int(x: int) -> int:\n    return 99\nprint(type(3) == int)".to_string(),
+        "False\n".to_string(),
+    )];
+    let failures = run_rows("shadow_type_eq", &rows);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #491 BLOCKER-B1 (class closure, behavioral): EVERY target-lowering arm routes a
+/// function-scope `global`/`nonlocal` write to the OUTER binding through the ONE
+/// authority (`predeclare_outer_binding`: declared + hoisted) — for-target (Name,
+/// all-global tuple, MIXED tuple, range fast path), `nonlocal` for-target, match
+/// capture / star, `except … as N` (module reader sees the exception; a builtin alias
+/// is restored on exit), a class-body `global` for-target nested in a function — plus
+/// SF1 (a `global N` write with no module binder CREATES the module global; a read
+/// before it raises NameError) and the over-fix guards (plain for-target stays a
+/// local; comprehension target is the comprehension's own; SF1 does not fire when a
+/// module binder exists). Mutation M12 (prologue `mark_hoisted` off) → the for /
+/// match / except rows differ again; M13 (SF1 hoist off) → the SF1 rows crash.
+#[test]
+fn test_function_scope_global_target_arms_match_cpython() {
+    let rows = vec![
+        (
+            "b1_for_name_builtin".to_string(),
+            "def peek(): return abs(-9)\ndef f():\n    global abs\n    for abs in [11, 22]:\n        pass\nprint(peek())\nf()\nprint(abs)".to_string(),
+            "9\n22\n".to_string(),
+        ),
+        (
+            "b1_for_name_nonbuiltin".to_string(),
+            "y = 0\ndef f():\n    global y\n    for y in [1, 2, 3]:\n        pass\nf()\nprint(y)".to_string(),
+            "3\n".to_string(),
+        ),
+        (
+            "b1_for_tuple_all_global".to_string(),
+            "a = 0\nb = 0\ndef f():\n    global a, b\n    for a, b in [(1, 2), (3, 4)]:\n        pass\nf()\nprint(a, b)".to_string(),
+            "3 4\n".to_string(),
+        ),
+        (
+            "b1_for_tuple_mixed_global_local".to_string(),
+            "c = 0\ndef f():\n    global c\n    for c, d in [(1, 2), (3, 4)]:\n        print(d)\nf()\nprint(c)".to_string(),
+            "2\n4\n3\n".to_string(),
+        ),
+        (
+            "b1_for_range_fastpath".to_string(),
+            "i = -1\ndef f():\n    global i\n    for i in range(3):\n        pass\nf()\nprint(i)".to_string(),
+            "2\n".to_string(),
+        ),
+        (
+            "b1_nonlocal_for_target".to_string(),
+            "def outer():\n    y = 0\n    def inner():\n        nonlocal y\n        for y in [1, 2]:\n            pass\n    inner()\n    return y\nprint(outer())".to_string(),
+            "2\n".to_string(),
+        ),
+        (
+            "b1_match_capture_and_star_global".to_string(),
+            "r = 0\ns = 0\ndef cap(v):\n    global r\n    match v:\n        case [1, r]:\n            pass\ndef star(v):\n    global s\n    match v:\n        case [1, *s]:\n            pass\ncap([1, 8])\nstar([1, 2, 3])\nprint(r, s)".to_string(),
+            "8 [2, 3]\n".to_string(),
+        ),
+        (
+            "b1_match_capture_builtin".to_string(),
+            "def peek(): return abs(-3)\ndef cap(v):\n    global abs\n    match v:\n        case [1, abs]:\n            pass\nprint(peek())\ncap([1, 8])\nprint(abs)".to_string(),
+            "3\n8\n".to_string(),
+        ),
+        (
+            "b1_except_as_global_reader_and_builtin_restore".to_string(),
+            "def peek(): return abs(-3)\ne = 0\ndef reader():\n    return type(e).__name__\ndef f():\n    global e\n    try:\n        raise ValueError('boom')\n    except ValueError as e:\n        print(reader())\n    return 'done'\ndef g():\n    global abs\n    try:\n        raise ValueError('boom')\n    except ValueError as abs:\n        print(type(abs).__name__)\n    return peek()\nprint(f())\nprint(g())".to_string(),
+            "ValueError\ndone\nValueError\n3\n".to_string(),
+        ),
+        (
+            "b1_classbody_global_for_target_in_function".to_string(),
+            "z = 0\ndef f():\n    class C:\n        global z\n        for z in [11, 22]:\n            pass\nf()\nprint(z)".to_string(),
+            "22\n".to_string(),
+        ),
+        (
+            "sf1_assign_for_import_create_module_global".to_string(),
+            "def f():\n    global y\n    y = 1\ndef g():\n    global w\n    for w in [1, 2]:\n        pass\ndef h():\n    global m\n    import math as m\ndef reads_w():\n    return w\ntry:\n    print(y)\nexcept NameError:\n    print('NameError')\nf()\nprint(y)\ntry:\n    print(reads_w())\nexcept NameError:\n    print('NameError')\ng()\nprint(w, reads_w())\nh()\nprint(m.floor(2.5))".to_string(),
+            "NameError\n1\nNameError\n2 2\n2\n".to_string(),
+        ),
+        (
+            "overfix_plain_for_local_comprehension_sf1_binder_exists".to_string(),
+            "i = 100\ndef plain():\n    for i in [1, 2]:\n        pass\n    return i\ny = 0\ndef comp():\n    global y\n    return [y for y in (5, 6)]\nk = 0\ndef bump():\n    global k\n    k = k + 1\nprint(plain(), i)\nprint(comp(), y)\nprint(k)\nbump()\nprint(k)".to_string(),
+            "2 100\n[5, 6] 0\n0\n1\n".to_string(),
+        ),
+    ];
+    let failures = run_rows("shadow_global_target_arms", &rows);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #491 BLOCKER-B1 (shape): pinned on the emitted text so the property does not depend
+/// on node — the function-scope `global abs` for-target is a BARE write of the module
+/// cell (`for (abs of …)`, never `const abs`); a MIXED tuple target declares only its
+/// fresh element inside the wrapper block and writes the pattern bare; the range fast
+/// path writes the global bare; `except … as e` under `global e` is a bare write with
+/// the CPython handler-exit unbind in a `finally`; SF1 hoists `let y = __UNBOUND;` for a
+/// binder-less `global y` write and does NOT for a name with a module binder; and an
+/// annotated `global` name is a loud diagnostic (CPython: SyntaxError). OVER-FIX guard:
+/// a plain for-target keeps its per-iteration `const`.
+#[test]
+fn test_global_target_arms_emit_bare_outer_writes() {
+    let src = "def peek(): return abs(-9)\ndef f():\n    global abs\n    for abs in [11, 22]:\n        pass\nc = 0\ndef mixed():\n    global c\n    for c, d in [(1, 2), (3, 4)]:\n        print(d)\ni = -1\ndef rng():\n    global i\n    for i in range(3):\n        pass\ne = 0\ndef exc():\n    global e\n    try:\n        raise ValueError('x')\n    except ValueError as e:\n        pass\ndef sf1():\n    global y\n    y = 1\nk = 0\ndef bump():\n    global k\n    k = k + 1\ndef plain():\n    for j in [1, 2]:\n        print(j)\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen_inline(&module);
+    assert!(
+        js.contains("for (abs of [11, 22]) {") && !js.contains("const abs of"),
+        "the global for-target must be a BARE write of the module cell.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("let d;") && js.contains("for ([c, d] of ") && !js.contains("const [c, d]"),
+        "a MIXED tuple target declares the fresh element and writes the pattern bare.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("i = __ri_") && !js.contains("let i = __ri_"),
+        "the range fast path must write the global bare.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("e = __exc;")
+            && !js.contains("let e = __exc;")
+            && js.contains("} finally {")
+            && js.contains("e = undefined;"),
+        "`except … as e` under `global e` is a bare write + handler-exit unbind.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("let y = __UNBOUND;"),
+        "SF1: a binder-less `global y` write must hoist the module cell.\nJS:\n{js}"
+    );
+    assert!(
+        !js.contains("let k = __UNBOUND;") && js.contains("let k = 0;"),
+        "SF1 must NOT fire for a name with a module binder.\nJS:\n{js}"
+    );
+    assert!(
+        js.contains("for (const j of [1, 2]) {"),
+        "OVER-FIX guard: a plain for-target keeps its per-iteration const.\nJS:\n{js}"
+    );
+    // Annotated `global` name: CPython SyntaxError → a loud codegen diagnostic here.
+    let module =
+        pyths_parser::parse("y = 0\ndef f():\n    global y\n    y: int = 5\n").expect("parse");
+    let mut gen = pyths_codegen_js::JsCodegen::new();
+    gen.emit_module(&module);
+    let errors = gen.take_errors();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("annotated name `y` can't be global")),
+        "annotated global must be a loud diagnostic: {errors:?}"
+    );
+}
+
+/// #491 SF2 (codegen level): the unrenamable dotted-import shape is a HARD compile
+/// diagnostic — `codegen_errors` non-empty (fails `pyths compile`) — never a silent
+/// `let os = {}` capture of the nested `global os` write. The aliased twin compiles
+/// clean (over-fix guard). Mutation M14 (the refusal scan off) → no diagnostic → fails.
+#[test]
+fn test_dotted_import_head_collision_is_refused_loudly() {
+    let src = "def outer():\n    import os.path\n    def inner():\n        global os\n        os = 7\n    inner()\n    return type(os).__name__\nprint(outer())\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let mut gen = pyths_codegen_js::JsCodegen::new();
+    gen.emit_module(&module);
+    let errors = gen.take_errors();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("`import os.path` inside `outer`") && e.contains("global os")),
+        "the dotted-import head collision must be refused: {errors:?}"
+    );
+    let src = "def outer():\n    import os.path as p\n    def inner():\n        global os\n        os = 7\n    inner()\n    return p\nprint(outer())\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let mut gen = pyths_codegen_js::JsCodegen::new();
+    gen.emit_module(&module);
+    let errors = gen.take_errors();
+    assert!(
+        errors.is_empty(),
+        "the aliased twin must compile clean: {errors:?}"
+    );
+}
+
+/// #500: a match case is pattern-test → BIND captures → guard → body. The old lowering
+/// folded the guard into the pattern `if`, so a guard that read a capture saw the
+/// PRE-match value (`case [1, r] if r > 5` with the module `global r` cell read the
+/// old `r`; the plain-local twin shadowed the function-scope `r` with a case-block
+/// `let` and returned the stale outer value). Every row is a live-CPython-3.12
+/// golden (the same source run under `python`). The capture-first / fall-through
+/// arms: headline global + local, guard-false → the NEXT case rebinds the same name
+/// and the rebind persists past the match, a walrus/side-effecting guard evaluated
+/// exactly ONCE after the bind, OR-pattern + guard, nested-capture read by the
+/// guard, class/mapping guarded captures, multi-capture guards, a wildcard guard
+/// with `continue`/`break` inside a loop (the labeled-block `break` must not eat
+/// the loop's), and an unguarded / `global`-capture (#491) regression twin.
+#[test]
+fn test_match_guard_binds_before_guard_matches_cpython() {
+    let rows = vec![
+        (
+            "guard_capture_global".to_string(),
+            "r = 0\ndef cap(v):\n    global r\n    match v:\n        case [1, r] if r > 5:\n            pass\n        case [1, r]:\n            r = r + 1000\ncap([1, 8]); print(r)\ncap([1, 2]); print(r)".to_string(),
+            "8\n1002\n".to_string(),
+        ),
+        (
+            "guard_capture_local".to_string(),
+            "def cap(v):\n    r = 0\n    match v:\n        case [1, r] if r > 5:\n            pass\n        case [1, r]:\n            r = r + 1000\n    return r\nprint(cap([1, 8]))\nprint(cap([1, 2]))".to_string(),
+            "8\n1002\n".to_string(),
+        ),
+        (
+            "guard_false_then_rebind_persists".to_string(),
+            "def f(v):\n    r = -1\n    match v:\n        case [1, r] if r > 5:\n            tag = \"big\"\n        case [1, r]:\n            tag = \"small\"\n            r = r + 1000\n        case _:\n            tag = \"none\"\n    return tag, r\nprint(f([1, 8]))\nprint(f([1, 2]))\nprint(f([2, 2]))".to_string(),
+            "('big', 8)\n('small', 1002)\n('none', -1)\n".to_string(),
+        ),
+        (
+            "walrus_guard_once_after_bind".to_string(),
+            "calls = 0\ndef probe(x):\n    global calls\n    calls += 1\n    return x\ndef g(v):\n    match v:\n        case [x] if (y := probe(x)) > 0:\n            return (\"pos\", x, y)\n        case [x]:\n            return (\"nonpos\", x, y)\n        case _:\n            return (\"other\",)\nprint(g([5]), calls)\nprint(g([-3]), calls)\nprint(g(\"no\"), calls)".to_string(),
+            "('pos', 5, 5) 1\n('nonpos', -3, -3) 2\n('other',) 2\n".to_string(),
+        ),
+        (
+            "or_pattern_guard".to_string(),
+            "def h(v):\n    match v:\n        case [1, x] | [2, x] if x > 10:\n            return (\"big\", x)\n        case [1, x] | [2, x]:\n            return (\"small\", x)\n        case 3 | 4 if v == 4:\n            return \"four\"\n        case 3 | 4:\n            return \"three\"\n        case _:\n            return \"none\"\nprint(h([1, 20]), h([2, 20]), h([1, 5]), h([2, 5]))\nprint(h(4), h(3), h(9))".to_string(),
+            "('big', 20) ('big', 20) ('small', 5) ('small', 5)\nfour three none\n".to_string(),
+        ),
+        (
+            "nested_capture_read_by_guard".to_string(),
+            "def n(v):\n    match v:\n        case [1, [a, b]] if a + b > 5:\n            return (\"sum-big\", a, b)\n        case [1, [a, b]]:\n            return (\"sum-small\", a, b)\n        case [1, [a, *rest]] if len(rest) > 2:\n            return (\"long\", a, rest)\n        case _:\n            return \"none\"\nprint(n([1, [3, 4]]), n([1, [1, 2]]), n([1, [1, 2, 3, 4]]), n([1, [9]]))".to_string(),
+            "('sum-big', 3, 4) ('sum-small', 1, 2) ('long', 1, [2, 3, 4]) none\n".to_string(),
+        ),
+        (
+            "class_mapping_guarded_capture".to_string(),
+            "class Pt:\n    __match_args__ = (\"x\", \"y\")\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\ndef cm(v):\n    match v:\n        case Pt(x, y) if x == y:\n            return (\"diag\", x)\n        case Pt(x, y):\n            return (\"pt\", x, y)\n        case {\"k\": k, \"w\": w} if k > w:\n            return (\"k>w\", k, w)\n        case {\"k\": k}:\n            return (\"k\", k)\n        case _:\n            return \"none\"\nprint(cm(Pt(2, 2)), cm(Pt(1, 3)))\nprint(cm({\"k\": 5, \"w\": 1}), cm({\"k\": 1, \"w\": 5}), cm({\"z\": 1}))".to_string(),
+            "('diag', 2) ('pt', 1, 3)\n('k>w', 5, 1) ('k', 1) none\n".to_string(),
+        ),
+        (
+            "multi_capture_guard_chain".to_string(),
+            "def mc(v):\n    match v:\n        case [a, b] if a < b:\n            return (\"asc\", a, b)\n        case [a, b] if a == b:\n            return (\"eq\", a)\n        case [a, b]:\n            return (\"desc\", a, b)\n        case [a, b, c] if a + b == c:\n            return (\"sum\", c)\n        case _:\n            return \"none\"\nprint(mc([1, 2]), mc([2, 2]), mc([3, 1]), mc([1, 2, 3]), mc([1, 2, 4]))".to_string(),
+            "('asc', 1, 2) ('eq', 2) ('desc', 3, 1) ('sum', 3) none\n".to_string(),
+        ),
+        (
+            "wildcard_guard_loop_break_continue".to_string(),
+            "def wg(xs):\n    out = []\n    for x in xs:\n        match x:\n            case _ if x < 0:\n                continue\n            case 0:\n                break\n            case n if n % 2 == 0:\n                out.append((\"even\", n))\n            case n:\n                out.append((\"odd\", n))\n    return out\nprint(wg([1, -1, 2, 3, -5, 4, 0, 7]))\ndef top(v):\n    match v:\n        case int() if v > 100:\n            return \"huge\"\n        case int():\n            return \"int\"\n        case str() as s if len(s) > 3:\n            return \"long-str\"\n        case str() as s:\n            return s\n        case _:\n            return \"other\"\nprint(top(500), top(5), top(\"hello\"), top(\"hi\"), top(2.5))".to_string(),
+            "[('odd', 1), ('even', 2), ('odd', 3), ('even', 4)]\nhuge int long-str hi other\n".to_string(),
+        ),
+        (
+            "unguarded_and_491_global_capture_unregressed".to_string(),
+            "def u(v):\n    match v:\n        case [1, *rest]:\n            return (\"one\", rest)\n        case [first, *_, last]:\n            return (\"ends\", first, last)\n        case {\"a\": a}:\n            return (\"a\", a)\n        case \"quit\" | \"exit\":\n            return \"bye\"\n        case _:\n            return \"none\"\nprint(u([1, 2, 3]), u([4, 5, 6, 7]), u({\"a\": 9}), u(\"exit\"), u(3))\nr = 0\ndef cap(v):\n    global r\n    match v:\n        case [1, r]:\n            pass\ncap([1, 8]); print(r)\ndef loc(v):\n    r = 0\n    match v:\n        case [1, r]:\n            pass\n    return r\nprint(loc([1, 8]), loc([2, 2]))".to_string(),
+            "('one', [2, 3]) ('ends', 4, 7) ('a', 9) bye none\n8\n8 0\n".to_string(),
+        ),
+    ];
+    let failures = run_rows("match_guard_bind_order", &rows);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #500 (shape control, node-independent): in a guarded match the capture WRITE
+/// precedes the guard test, the guard is NOT folded into the pattern `if`, the
+/// `global r` capture (#491) stays a BARE module-cell write, a guard-false case
+/// falls through inside ONE labeled block (no `else if` chain), and a guard-free
+/// match keeps its byte-shape `if / else if` chain (OVER-FIX guard). PAIRED
+/// NEGATIVE CONTROL (verified by hand at the landing commit): putting the guard
+/// back into the pattern condition (`<pat> && (<guard>)`) turns this RED and
+/// makes `guard_capture_global` above read the pre-match `r` (1008 / 2).
+#[test]
+fn test_match_guard_emits_bind_then_guard_shape() {
+    let src = "r = 0\ndef cap(v):\n    global r\n    match v:\n        case [1, r] if r > 5:\n            pass\n        case [1, r]:\n            r = r + 1000\n";
+    let module = pyths_parser::parse(src).expect("parse");
+    let js = pyths_codegen_js::codegen(&module);
+    let bind = js.find("r = __match0[1];").expect("capture write present");
+    let guard = js.find("if ((r > 5))").expect("guard test present");
+    assert!(
+        bind < guard,
+        "the capture must be bound BEFORE the guard is evaluated:\n{js}"
+    );
+    assert!(
+        !js.contains("&& ((r > 5))") && !js.contains("&& (r > 5)"),
+        "the guard must not be folded into the pattern condition:\n{js}"
+    );
+    assert!(
+        js.contains("__match0_done: {")
+            && js.contains("break __match0_done;")
+            && !js.contains("} else if ("),
+        "a guarded match is a fall-through labeled block, not an else-if chain:\n{js}"
+    );
+    assert!(
+        !js.contains("let r = __match0[1];"),
+        "#491: the `global r` capture must stay a bare module-cell write:\n{js}"
+    );
+    // OVER-FIX guard: a guard-free match keeps the byte-shape chain.
+    let module = pyths_parser::parse("match v:\n    case 1:\n        print(1)\n    case [a, b]:\n        print(a, b)\n    case _:\n        print(0)\n").expect("parse");
+    let js = pyths_codegen_js::codegen(&module);
+    assert!(
+        js.contains("} else if ((Array.isArray(__match0)")
+            && js.contains("} else if (true) {")
+            && !js.contains("__match0_done"),
+        "a guard-free match keeps the if / else-if chain:\n{js}"
+    );
+}
+
+/// #501 + #502 (behavioral, live-CPython-3.12 goldens; the same rows run as
+/// `tests/differential/match_501_502/` on BOTH `--target js` and `js+wasm`).
+///
+/// #501: an OR-pattern bound its captures from the FIRST alternative's structure
+/// whatever alternative matched — `case [x, 1] | [1, x]` on `[1, 7]` bound
+/// `x = __match[0]` = 1 (CPython 7). Now each alternative re-tests and binds its
+/// OWN captures; the shared guard/body run once after (bind→guard→body, #500).
+/// Rows: same-name-different-position (both alternatives), a guard reading the
+/// capture, 3 alternatives, a NESTED OR inside an alternative, star / mapping
+/// alternatives, and the hoisted-local + `nonlocal` (#491) write-target twins.
+///
+/// #502: a capture whose name is a function PARAMETER emitted a case-block
+/// `let x` that shadowed the param — `def f(v, x): … case [1, x]` then `return x`
+/// returned the argument 100 (CPython 8). Now the capture bare-writes the param.
+/// Rows: the headline read-after, NOT read after (observed through a closure —
+/// the rebind happens regardless), a sibling `global x` capture (module cell,
+/// not the param), a METHOD param + OR, a guarded param capture, and the
+/// never-reused capture (block `let`, no churn).
+#[test]
+fn test_match_or_alternative_and_param_capture_match_cpython() {
+    let rows = vec![
+        (
+            "or_same_name_different_position".to_string(),
+            "def f(v):\n    match v:\n        case [x, 1] | [1, x]:\n            return x\n        case _:\n            return -1\nprint(f([5, 1]), f([1, 7]), f([2, 2]))\n".to_string(),
+            "5 7 -1\n".to_string(),
+        ),
+        (
+            "or_guard_reads_capture".to_string(),
+            "def g(v):\n    match v:\n        case [x, 1] | [1, x] if x > 3:\n            return (\"big\", x)\n        case [x, 1] | [1, x]:\n            return (\"small\", x)\n        case _:\n            return \"none\"\nprint(g([9, 1]), g([1, 9]), g([2, 1]), g([1, 2]), g([3, 3]))\n".to_string(),
+            "('big', 9) ('big', 9) ('small', 2) ('small', 2) none\n".to_string(),
+        ),
+        (
+            "or_three_alternatives".to_string(),
+            "def h(v):\n    match v:\n        case [x, 0, 0] | [0, x, 0] | [0, 0, x]:\n            return x\n        case _:\n            return -1\nprint(h([4, 0, 0]), h([0, 5, 0]), h([0, 0, 6]), h([1, 1, 1]))\n".to_string(),
+            "4 5 6 -1\n".to_string(),
+        ),
+        (
+            "or_nested".to_string(),
+            "def n(v):\n    match v:\n        case [1, ([y, 2] | [2, y])] | [y, 3]:\n            return y\n        case _:\n            return -1\nprint(n([1, [7, 2]]), n([1, [2, 8]]), n([9, 3]), n([1, [3, 3]]))\n".to_string(),
+            "7 8 9 -1\n".to_string(),
+        ),
+        (
+            "or_star_and_mapping_alternatives".to_string(),
+            "def s(v):\n    match v:\n        case [1, *rest] | [*rest, 1]:\n            return rest\n        case _:\n            return None\nprint(s([1, 2, 3]), s([4, 5, 1]), s([2, 2]))\ndef m(v):\n    match v:\n        case {\"a\": a} | {\"b\": a}:\n            return a\n        case _:\n            return -1\nprint(m({\"a\": 1}), m({\"b\": 2}), m({\"c\": 3}))\n".to_string(),
+            "[2, 3] [4, 5] None\n1 2 -1\n".to_string(),
+        ),
+        (
+            "or_hoisted_local_and_nonlocal".to_string(),
+            "def loc(v):\n    x = -1\n    match v:\n        case [x, 1] | [1, x]:\n            pass\n    return x\nprint(loc([5, 1]), loc([1, 7]), loc([2, 2]))\ndef outer():\n    x = 1\n    def inner(v):\n        nonlocal x\n        match v:\n            case [1, x] | [x, 1]:\n                pass\n    inner([2, 1]); return x\nprint(outer())\n".to_string(),
+            "5 7 -1\n2\n".to_string(),
+        ),
+        (
+            "param_capture_read_after".to_string(),
+            "def p(v, x):\n    match v:\n        case [1, x]:\n            pass\n    return x\nprint(p([1, 8], 100), p([2, 8], 100))\n".to_string(),
+            "8 100\n".to_string(),
+        ),
+        (
+            "param_capture_not_read_after_still_rebinds".to_string(),
+            "def q(v, x):\n    def peek():\n        return x\n    match v:\n        case [1, x]:\n            print(\"hit\")\n    return peek()\nprint(q([1, 8], 100), q([2, 8], 100))\n".to_string(),
+            "hit\n8 100\n".to_string(),
+        ),
+        (
+            "param_capture_global_interaction".to_string(),
+            "x = 0\ndef g(v, x):\n    match v:\n        case [1, x]:\n            pass\n    return x\ndef h(v):\n    global x\n    match v:\n        case [1, x]:\n            pass\nprint(g([1, 8], 100), x)\nh([1, 9]); print(x, g([1, 5], 100), x)\n".to_string(),
+            "8 0\n9 5 9\n".to_string(),
+        ),
+        (
+            "param_capture_method_and_or".to_string(),
+            "class C:\n    def m(self, v, x):\n        match v:\n            case [1, x] | [x, 1]:\n                pass\n        return x\nprint(C().m([1, 8], 100), C().m([6, 1], 100), C().m([2, 2], 100))\n".to_string(),
+            "8 6 100\n".to_string(),
+        ),
+        (
+            "never_reused_capture_and_guard_on_param".to_string(),
+            "def never(v):\n    match v:\n        case [1, z]:\n            return z\n    return \"no\"\nprint(never([1, 5]), never([3]))\ndef pg(v, x):\n    match v:\n        case [1, x] if x > 5:\n            return (\"big\", x)\n        case [1, x]:\n            return (\"small\", x)\n    return (\"none\", x)\nprint(pg([1, 8], 100), pg([1, 2], 100), pg([3], 100))\n".to_string(),
+            "5 no\n('big', 8) ('small', 2) ('none', 100)\n".to_string(),
+        ),
+    ];
+    let failures = run_rows("match_or_param_501_502", &rows);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #501 + #502 shape controls (node-independent), each with its PAIRED NEGATIVE
+/// CONTROL verified by hand at the landing commit:
+///
+/// * #501 — an OR that binds pre-declares `let x;` ONCE at the case-block level,
+///   then every alternative re-tests and bare-writes its OWN slot (`if (<A>) {
+///   x = __match0[0]; } else { x = __match0[1]; }`); the old first-alternative
+///   `let x = __match0[0];` is gone. MUTANT (bind from `alternatives.first()`
+///   again) → this is RED and `or_same_name_different_position` prints `5 1 -1`.
+/// * #502 — a capture of a PARAM name is a bare write of the param (no `let x`
+///   anywhere in the function). MUTANT (drop `|| ctx.params.contains(&n)` in
+///   `collect_hoisted_names`' Match arm) → RED and `param_capture_read_after`
+///   prints `100 100`. Same for a METHOD param (the second `emit_hoisted_local_decls`
+///   caller).
+/// * OVER-FIX guards — a non-binding OR (`case 200 | 201`) is byte-identical (no
+///   `let`, no inner dispatch), and a never-reused capture keeps its case-block
+///   `let z = …` (PBT-2 const-only contract).
+#[test]
+fn test_match_or_and_param_capture_emit_shape() {
+    // #501
+    let module = pyths_parser::parse("def f(v):\n    match v:\n        case [x, 1] | [1, x]:\n            return x\n        case _:\n            return -1\n").expect("parse");
+    let js = pyths_codegen_js::codegen(&module);
+    // The case condition is `if (((<A>) || (<B>)))`; the inner dispatch re-tests
+    // `if ((<A>))` — so A's structural test appears exactly twice.
+    let alt_a = "(Array.isArray(__match0) && __match0.length === 2 && __match0[1] === 1)";
+    assert_eq!(
+        js.matches(alt_a).count(),
+        2,
+        "alternative A is tested by the case condition AND re-tested for its own bind:\n{js}"
+    );
+    assert!(
+        js.contains(&format!(
+            "        if ({alt_a}) {{\n            x = __match0[0];"
+        )),
+        "alternative A's re-test guards A's own bind:\n{js}"
+    );
+    let decl = js
+        .find("let x;")
+        .expect("the OR pre-declares `let x;` once");
+    let bind_a = js
+        .find("x = __match0[0];")
+        .expect("alternative A binds its slot");
+    let bind_b = js
+        .find("x = __match0[1];")
+        .expect("alternative B binds its slot");
+    assert!(
+        decl < bind_a && bind_a < bind_b,
+        "declare, then A's bind, then B's bind:\n{js}"
+    );
+    assert!(
+        js.contains("} else {\n            x = __match0[1];"),
+        "the last alternative binds under a plain else:\n{js}"
+    );
+    assert!(
+        !js.contains("let x = __match0[0];") && js.matches("let x").count() == 1,
+        "no first-alternative `let x = …` bind remains:\n{js}"
+    );
+    // #502 — function param and method param.
+    let module = pyths_parser::parse(
+        "def f(v, x):\n    match v:\n        case [1, x]:\n            pass\n    return x\n",
+    )
+    .expect("parse");
+    let js = pyths_codegen_js::codegen(&module);
+    assert!(
+        js.contains("x = __match0[1];") && !js.contains("let x"),
+        "a param-name capture is a bare write of the param, never a shadowing `let`:\n{js}"
+    );
+    let module = pyths_parser::parse("class C:\n    def m(self, v, x):\n        match v:\n            case [1, x]:\n                pass\n        return x\n").expect("parse");
+    let js = pyths_codegen_js::codegen(&module);
+    assert!(
+        js.contains("x = __match0[1];") && !js.contains("let x"),
+        "a METHOD param-name capture is a bare write of the param:\n{js}"
+    );
+    // OVER-FIX guards.
+    let module = pyths_parser::parse("match status:\n    case 200 | 201:\n        print(\"ok\")\n")
+        .expect("parse");
+    let js = pyths_codegen_js::codegen(&module);
+    assert!(
+        js.contains("__match0 === 200 || __match0 === 201")
+            && !js.contains("let ")
+            && js.matches("if (").count() == 1,
+        "a non-binding OR is byte-identical (no pre-declare, no inner dispatch):\n{js}"
+    );
+    let module = pyths_parser::parse("def never(v):\n    match v:\n        case [1, z]:\n            return z\n    return \"no\"\n").expect("parse");
+    let js = pyths_codegen_js::codegen(&module);
+    assert!(
+        js.contains("let z = __match0[1];"),
+        "a never-reused capture keeps its case-block `let`:\n{js}"
+    );
 }

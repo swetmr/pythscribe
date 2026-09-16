@@ -1,0 +1,57 @@
+# #491 BLOCKER-3 scope rules (CPython symtable): a class body nested in the
+# function — binding `abs` itself (LOAD_NAME: never the enclosing local; its
+# METHOD still sees the enclosing local), or declaring `global abs` (the write is
+# the module's; the method still sees the enclosing local); comprehensions
+# (target `abs` is the comprehension's; leftmost iterable / free reads are the
+# enclosing local), f-strings, lambdas, and a `global` in an inner-inner scope.
+def class_binds():
+    abs = 1
+    class C:
+        abs = 2
+        def m(self):
+            return abs
+    def inner():
+        global abs
+        abs = 7
+    inner()
+    return (C.abs, C().m(), abs)
+
+
+def class_global():
+    abs = 1
+    class C:
+        global abs
+        abs = 8
+        def m(self):
+            return abs
+    return (C().m(), abs)
+
+
+def comp_fstring_lambda():
+    abs = 1
+    def inner():
+        global abs
+        abs = 9
+    inner()
+    return (f"{abs}", [abs for _ in range(2)], [abs for abs in (5,)], (lambda: abs)(), (lambda abs: abs)(6))
+
+
+def inner_inner():
+    abs = 1
+    def inner():
+        global abs
+        def ii():
+            return abs
+        abs = 11
+        return ii()
+    return (inner(), abs)
+
+
+print(class_binds())
+print(abs)
+print(class_global())
+print(abs)
+print(comp_fstring_lambda())
+print(abs)
+print(inner_inner())
+print(abs)

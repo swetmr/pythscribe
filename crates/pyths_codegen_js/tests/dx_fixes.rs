@@ -38,9 +38,15 @@ fn breakpoint_lowers_to_debugger() {
 fn shadowed_breakpoint_is_not_debugger() {
     // A user-defined `breakpoint` must call the user function, not `debugger`.
     let js = compile("def breakpoint():\n    return 5\ndef g():\n    breakpoint()\n");
+    // #491: `breakpoint` is a module binding CELL (`export let breakpoint =
+    // (() => { debugger; });` — the builtin's value form — rebound by the def),
+    // so the WORD `debugger` legitimately appears in the cell initializer. The
+    // property is that g's BODY calls the binding, never lowers to a `debugger;`
+    // statement.
+    let g_body = js.split("function g").nth(1).expect("g emitted");
     assert!(
-        !js.contains("debugger;"),
-        "shadowed breakpoint must not lower to debugger:\n{js}"
+        !g_body.contains("debugger;") && g_body.contains("breakpoint();"),
+        "shadowed breakpoint must call the user binding, not lower to debugger:\n{js}"
     );
 }
 

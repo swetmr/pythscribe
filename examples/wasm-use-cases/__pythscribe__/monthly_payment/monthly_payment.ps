@@ -1,0 +1,23 @@
+@wasm
+def monthly_payment(principal: float, annual_rate_pct: float, months: int) -> float:
+    if months <= 0:
+        return 0.0          # degenerate term: a bare `principal / months` (or `/(factor-1)`) is
+                            # ZeroDivisionError in CPython but +inf on the WASM float path -- guard
+                            # it so both agree (float `/` does NOT trap; see README #496 note)
+    r = annual_rate_pct / 1200.0
+    if r == 0.0:
+        return principal / months
+    factor = 1.0
+    base = 1.0 + r
+    i = 0
+    while i < months:
+        factor = factor * base
+        i = i + 1
+    if factor == 1.0:
+        return principal / months   # `factor - 1.0` is exactly 0.0 here (r so tiny that `1.0 + r`
+                                    # rounded back to 1.0, e.g. rate 1e-300; or a negative rate whose
+                                    # powers cycle back to 1.0, e.g. rate -2400%): a bare
+                                    # `... / (factor - 1.0)` is ZeroDivisionError in CPython but
+                                    # +/-inf on the non-trapping WASM float path. months > 0 here
+                                    # (guarded above), so principal/months agrees on both paths.
+    return principal * r * factor / (factor - 1.0)

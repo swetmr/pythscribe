@@ -1,0 +1,35 @@
+{
+  "compiler": {
+    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "name": "pyths",
+    "version": "0.2.5"
+  },
+  "entry": "edit_distance.js",
+  "files": {
+    "edit_distance.glue.js": "3984a2c754f10b15676095c4279fe1f8076a67d57a3776f25b2ccad0e0d26308",
+    "edit_distance.js": "c9d266fa46aa483baff51191a30f2f39264aaeba94e1e8f2d9bb051ae52f89b3",
+    "edit_distance.ps": "f6185bb8b43bc5e1360c282677cf6029e7cede5c9e2ccb470399f0accffa9b4c",
+    "edit_distance.wasm": "4fa12c4a9fe79b5fb220e03179e8adb2a813c593184b107ceb3b000e1bf303f8",
+    "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
+    "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
+    "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
+    "pyths-runtime/react.js": "79c85d9599d3a6b7c813d83d538ab225ac0fd8776857f7fdba1512096099df47",
+    "pyths-runtime/runtime.js": "21a474e1f6aa2f959a2101a46be393190a923576fb67e3e78edba39c7ddd0b78",
+    "pyths-runtime/types.js": "b5af591c394a1984715054cd5c8c100ffdc2ea1c6b85e01bf3ae33e2cf1b265b"
+  },
+  "function": "edit_distance",
+  "glue": "edit_distance.glue.js",
+  "manifest_sha256": "9e4b71144df8dbeaff90bf590d219c8bc8a2e386e1b84bd7e4043b395b2b0a1a",
+  "optimizer": {
+    "applied": false,
+    "error": null,
+    "id": "none",
+    "path_sha256": null
+  },
+  "runtime_dir": "pyths-runtime",
+  "schema": 1,
+  "source_file": "kernels.py",
+  "source_sha256": "f6185bb8b43bc5e1360c282677cf6029e7cede5c9e2ccb470399f0accffa9b4c",
+  "target": "js+wasm",
+  "wasm": "edit_distance.wasm"
+}

@@ -14,17 +14,86 @@ on:
   push:
     tags:
       - 'v*'
-  # Manual re-run (e.g. to publish a package that was missing from a prior release).
-  # Version comes from the wrapper package.json on a branch ref; publish.mjs is
-  # idempotent, so it only publishes what is not already on the registry.
+  # Manual re-run (e.g. to publish a package missing from a prior release). B1: npm-publish carries
+  # `if: startsWith(github.ref,'refs/tags/')`, so a dispatch that should reach npm MUST be run against
+  # the release TAG ref (vX.Y.Z) -- a branch dispatch never publishes to npm. publish.mjs is idempotent
+  # (skips what is already on the registry); npm-identity re-checks every package against the manifest.
   workflow_dispatch: {}
 
 permissions:
   contents: write
+  # NEW (codex pass-4): once permissions are EXPLICITLY declared, unspecified ones are unavailable.
+  # Every job that runs require_evidence.py / require_ci_success.py queries the Actions API
+  # (runs + jobs, and during promotion the artifact ZIPs), so it needs `actions: read` -- otherwise
+  # an HONEST release gets 403 before verification. Granted at the workflow level so the jobs WITHOUT
+  # their own permissions block (manifest, node-free-acceptance, node-free-evidence) inherit it; jobs
+  # that DECLARE their own block (npm-publish, npm-identity) list it there too (a job block fully
+  # replaces the workflow default). scripts/lint_release_workflows.py asserts effective actions:read
+  # for every evidence/CI-consuming job.
+  actions: read
+
+# JOB GRAPH (spec 13-09-26, plan M6.1 + M4; rev-4 B2 -- the manifest PRECEDES acceptance, never the reverse;
+# codex-final B1/B2 -- npm publication FOLLOWS node-free acceptance and is tag-gated, never concurrent):
+#   prepare -> build(5) -> wheel(5) -> wheel-set -> manifest -> node-free-acceptance(5) -> node-free-evidence (R-BA)
+#                                                            \-> release (GitHub Release assets: the B_t archives)
+#   ... -> node-free-evidence (R-BA) -> npm-publish [tag ref only; consumes+validates R-BA; verifies exact-SHA CI
+#                                                    green] -> npm-identity (R-NI)
+# Same-run consumers of the manifest verify it with `require_evidence.py --role release-run` -- the `--role`
+# literal is written INTO the step (trusted job role; argparse-required, no default); it enforces run identity
+# (build_run_id == GITHUB_RUN_ID, source_sha == GITHUB_SHA), the re-run-tolerant attempt rule and the FIXED
+# prerequisite set {prepare, Build x5, manifest} on each job's latest execution -- never the run's own conclusion.
+# scripts/lint_release_workflows.py (+ tests/pythscribe/test_wheel_m4_acceptance.py / test_wheel_m6_evidence.py)
+# lints this graph: no cycle, roles, no `uses:` in the scrubbed window, the M6 producers + gates in place.
+#
+# The GitHub RELEASE (decision, M6.1): the `manifest` job CREATES the Release for the tag (it is the first job that
+# holds the complete, bound distribution) and attaches `evidence/release_manifest.json`; `release` (the B_t archives)
+# `needs: manifest`, so binaries never reach the Release without a manifest. It is deliberately NOT gated behind
+# acceptance / npm-identity: every evidence record is UPLOADED TO that Release (`gh release upload`), so the Release
+# must exist before R-BA / R-NI can be attached -- gating it behind them is the same cycle as rev-3. The Release's
+# binary archives are a loud, non-pip/non-npm channel; the two package channels (PyPI via publish-pypi.yml, npm via
+# npm-identity) are the evidence-gated ones.
+env:
+  PLAYWRIGHT_VERSION: "1.55.0"   # the controller (pip package == the mcr.microsoft.com/playwright image tag)
 
 jobs:
+  # M0.1 (spec 13-09-26): the ONE prepared runtime/scaffolder payload, produced on the checkout of S BEFORE any
+  # compiler build, wheel build or npm publish (requirements §5.4). The manifest (M6.1) hashes its files.
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      # M6.1 / requirements §5.4 (stamp idempotence, not stamping): on a TAG ref the committed package.json files
+      # must ALREADY be in the form stampVersion emits -- if stamping would change any byte, the release stops here
+      # (`python scripts/set_version.py <V>` + commit is the fix). publish.mjs re-checks on the tag ref at publish.
+      - name: Stamp idempotence (tag refs) -- package.json files already in stamped form, or RED
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node npm/publish.mjs --check
+      - name: Prepare release payloads (npm pack runtime/ + create-pyths-app/, membership gate)
+        run: python3 scripts/prepare_release_payloads.py
+      - name: Runtime mirror gate (vendored wheel copy == prepared payload, raw bytes)
+        run: python3 scripts/verify_runtime_mirror.py
+      - name: "Scaffolder mirror gate (B5 -- vendored create-pyths-app == prepared payload, raw bytes, LF)"
+        run: python3 scripts/verify_scaffolder_mirror.py
+      - name: Upload the prepared payloads (the .tgz + files.json AND the extracted trees the mirror gates need)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-payloads
+          path: |
+            dist/runtime-payload.tgz
+            dist/scaffolder-payload.tgz
+            dist/runtime-payload.files.json
+            dist/scaffolder-payload.files.json
+            dist/runtime-payload/
+            dist/scaffolder-payload/
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.target }}
+    needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -35,8 +104,6 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: pyths
-            cross_linker: aarch64-linux-gnu-gcc
-            apt: gcc-aarch64-linux-gnu
           - target: x86_64-apple-darwin
             os: macos-latest
             artifact: pyths
@@ -55,12 +122,31 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross linker
-        if: matrix.apt != ''
-        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
-      - name: Build release
+      # FINALIZE step (spec 13-09-26, requirements §5.3 + plan M1.3): the bytes this step emits are
+      # the release binary B_t that BOTH channels ship (npm platform packages, the pip wheel), so the
+      # compatibility floors the wheel tags promise must hold BY CONSTRUCTION here, and nothing after
+      # this step may rewrite the binary (the wheel gate hashes it against this output):
+      #   * Linux: `cargo zigbuild --target <triple>.2.28` links against glibc 2.28 symbol versions
+      #     on any host (the manylinux_2_28 floor; ubuntu-latest's own glibc is 2.39, which would
+      #     make the wheel tag a lie -- scripts/wheel_passthrough.py would RED it);
+      #   * macOS: MACOSX_DEPLOYMENT_TARGET=11.0 (the macosx_11_0 floor) + an EXPLICIT ad-hoc
+      #     codesign as part of finalization (rev-4 S1: never a later re-sign);
+      #   * strip: [profile.release] strip = "symbols" in Cargo.toml (no separate strip step).
+      - name: "Install cargo-zigbuild (Linux: glibc 2.28 floor by construction)"
+        if: runner.os == 'Linux'
+        run: pip install cargo-zigbuild==0.23.4
+      - name: Build release (Linux, glibc 2.28 floor)
+        if: runner.os == 'Linux'
+        run: cargo zigbuild --release --target ${{ matrix.target }}.2.28
+      - name: Build release (macOS, deployment target 11.0 + ad-hoc codesign = finalization)
+        if: runner.os == 'macOS'
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross_linker }}
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+          codesign -s - --force target/${{ matrix.target }}/release/${{ matrix.artifact }}
+      - name: Build release (Windows)
+        if: runner.os == 'Windows'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
@@ -81,20 +167,513 @@ jobs:
           name: pyths-${{ matrix.target }}
           path: pyths-${{ matrix.target }}.*
 
+  # ── pip platform wheels (spec 13-09-26, plan M1.3; cibuildwheel is the LOCKED packaging tool) ──
+  # Each leg PACKAGES the finalized B_t from the build job's artifact (never rebuilds Rust): stage it
+  # at pythscribe/_bin/, then cibuildwheel drives ONE interpreter-independent `py3-none-<platform>`
+  # build (CIBW_BUILD pinned to one CPython -- the multi-Python machinery is a documented no-op; the
+  # tag comes from setup.py's cmdclass hook via PYTHSCRIBE_WHEEL_PLATFORM), the REPAIR hook is the
+  # passthrough gate (floor + identity checks, then a byte-for-byte copy -- never `auditwheel repair`
+  # / `delocate-wheel`, which would rewrite the binary), and CIBW_TEST_COMMAND runs the M1 exit
+  # SPOTs against the installed wheel. Linux legs run inside the manylinux_2_28 container (aarch64
+  # under QEMU); `auditwheel show` / `delocate-listdeps` run as CHECKS and the passthrough parses
+  # `auditwheel show` / `otool -l` as corroboration of its own header-level floor read.
+  wheel:
+    name: Wheel ${{ matrix.tag }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            tag: manylinux_2_28_x86_64
+            archs: x86_64
+            binary: pyths
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            tag: manylinux_2_28_aarch64
+            archs: aarch64
+            binary: pyths
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            tag: macosx_11_0_x86_64
+            archs: x86_64
+            binary: pyths
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            tag: macosx_11_0_arm64
+            archs: arm64
+            binary: pyths
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            tag: win_amd64
+            archs: AMD64
+            binary: pyths.exe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the finalized binary B_t
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pyths-${{ matrix.target }}
+          path: artifacts/pyths-${{ matrix.target }}
+      - name: Stage B_t at pythscribe/_bin/ (byte-for-byte; the identity the passthrough re-checks)
+        shell: bash
+        run: |
+          set -eux
+          d="artifacts/pyths-${{ matrix.target }}"
+          f="$(ls "$d"/pyths-*.*)"
+          case "$f" in
+            *.tar.gz) tar xzf "$f" -C "$d" ;;
+            *.zip)    unzip -o "$f" -d "$d" ;;
+          esac
+          mkdir -p pythscribe/_bin
+          cp "$d/${{ matrix.binary }}" "pythscribe/_bin/${{ matrix.binary }}"
+          chmod +x "pythscribe/_bin/${{ matrix.binary }}" || true
+          python - <<'EOF' >> "$GITHUB_ENV"
+          import hashlib, os
+          p = "artifacts/pyths-${{ matrix.target }}/${{ matrix.binary }}"
+          print("PYTHSCRIBE_RELEASE_BINARY_SHA256=" + hashlib.sha256(open(p, "rb").read()).hexdigest())
+          EOF
+      - name: Set up QEMU (aarch64 container)
+        if: matrix.archs == 'aarch64'
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3
+      - name: Build the platform wheel (cibuildwheel; passthrough repair hook; M1 exit SPOTs as the test)
+        run: pipx run cibuildwheel==4.2.1 --output-dir wheelhouse
+        env:
+          CIBW_BUILD: cp312-*
+          CIBW_ARCHS: ${{ matrix.archs }}
+          CIBW_BUILD_FRONTEND: build
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_ENVIRONMENT: PYTHSCRIBE_WHEEL_PLATFORM=${{ matrix.tag }} PYTHSCRIBE_RELEASE_BINARY_SHA256=${{ env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }}
+          CIBW_ENVIRONMENT_PASS_LINUX: PYTHSCRIBE_WHEEL_PLATFORM PYTHSCRIBE_RELEASE_BINARY_SHA256
+          # The repair hook MUST emit the wheel into {dest_dir} (a check-only command produces none and
+          # cibuildwheel fails the leg); the passthrough emits it only after the floor + identity checks.
+          # Linux runs inside the container (project mounted at /project; B_t reachable there too);
+          # macOS/Windows run on the host with the project as cwd.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
+            auditwheel show {wheel} && python /project/scripts/wheel_passthrough.py {wheel} {dest_dir} --binary /project/artifacts/pyths-${{ matrix.target }}/pyths --binary-sha256 ${{ env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }} --tag ${{ matrix.tag }} --require-auditwheel
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
+            delocate-listdeps {wheel} && python scripts/wheel_passthrough.py {wheel} {dest_dir} --binary artifacts/pyths-${{ matrix.target }}/pyths --binary-sha256 ${{ env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }} --tag ${{ matrix.tag }} --require-otool
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
+            python scripts/wheel_passthrough.py {wheel} {dest_dir} --binary artifacts/pyths-${{ matrix.target }}/pyths.exe --binary-sha256 ${{ env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }} --tag ${{ matrix.tag }}
+          # M6.4 (validation §K): the README's `<!-- spot -->` install/usage blocks RUN against the installed wheel
+          # in cibuildwheel's fresh test venv (pip lines bound to the shipped wheel via pip's direct_url.json; node-free
+          # PATH; Node-tagged blocks are deferred to M7's web-parity job, never counted as passed).
+          CIBW_TEST_COMMAND: python {project}/scripts/wheel_m1_spots.py {project} && python {project}/scripts/readme_spots.py --readme {project}/README.md --run
+      - name: Verify the leg's wheel (tag == this leg; all-wheels clean gate; M5 licence gate bound to Cargo.lock)
+        run: |
+          python scripts/verify_wheel_set.py --dist wheelhouse --no-sdist --expect ${{ matrix.tag }}
+          python scripts/verify_wheel_clean.py --dist wheelhouse
+          python scripts/verify_wheel_license.py --dist wheelhouse --cargo-lock Cargo.lock
+      - name: Upload wheel
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wheel-${{ matrix.tag }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  # The complete distribution set: 5 wheels + the sdist (source-install policy, requirements §6).
+  wheel-set:
+    name: Wheel set + sdist
+    needs: wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download every platform wheel
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: dist
+      - name: Build the sdist (no binary staged here -> setup.py verifies the tarball carries none)
+        run: |
+          python -m pip install --upgrade build
+          test ! -e pythscribe/_bin
+          python -m build --sdist --outdir dist
+      - name: Complete-set + all-wheels gates (a missing target or an extra none-any wheel is RED)
+        run: |
+          python scripts/verify_wheel_set.py --dist dist
+          python scripts/verify_wheel_clean.py --dist dist
+      # M5 (validation §H1): EVERY wheel's METADATA + .dist-info/licenses/ -- the mixed expression, the MIT /
+      # FSL / runtime notices, the per-path map and the third-party inventory of the bundled compiler, bound
+      # to THIS Cargo.lock (sha) and, via --check-closure, to the live `cargo metadata` closure per target
+      # (the independent source: a crate dropped from the inventory AND its notice is RED here). Then the
+      # release-time freshness gate: the committed third_party/ must be a byte-identical regeneration.
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Licence + third-party notices gate (all wheels; inventory bound to Cargo.lock + the live closure)
+        run: |
+          cargo fetch --locked
+          python scripts/verify_wheel_license.py --dist dist --cargo-lock Cargo.lock --check-closure
+      - name: Third-party inventory freshness (cargo-about regeneration == committed third_party/, byte-for-byte)
+        run: |
+          cargo install cargo-about@0.9.2 --locked --features cli
+          python scripts/gen_third_party_notices.py --check
+      - name: Source-install SPOT (validation §B4 -- binary-less success with the visible notice; the gap is named)
+        run: |
+          set -eux
+          python -m venv /tmp/src-venv
+          /tmp/src-venv/bin/pip install -v --no-deps dist/pythscribe-*.tar.gz 2>&1 | tee /tmp/src-install.log
+          grep -F "pythscribe: NOTICE -- no prebuilt compiler" /tmp/src-install.log
+          cd /tmp
+          if /tmp/src-venv/bin/python -c "from pythscribe.build import find_pyths; find_pyths()"; then echo "::error::find_pyths() found a compiler in a binary-less source install"; exit 1; fi
+          /tmp/src-venv/bin/python -c "from pythscribe.build import find_pyths, BuildError
+          try:
+              find_pyths(); raise SystemExit('found')
+          except BuildError as e:
+              assert 'no prebuilt compiler for this platform / source install' in str(e), e"
+          if /tmp/src-venv/bin/pyths --version; then echo "::error::the launcher must fail without a compiler"; exit 1; fi
+          /tmp/src-venv/bin/pyths doctor | grep -F "Compiler: not bundled (source install"
+      - name: Upload the distribution set
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pythscribe-dist
+          path: dist/*
+          if-no-files-found: error
+
+  # M6.1 (spec 13-09-26, requirements §5.1): the POST-BUILD release manifest -- `needs` the build outputs ONLY,
+  # NEVER node-free-acceptance (acceptance binds to the manifest; the reverse edge was the rev-3 deadlock).
+  # scripts/assemble_manifest.py binds the finalized artifacts BEFORE recording them: the binary inside wheel t
+  # == B_t, the vendored runtime inside every wheel == the prepared payload, one compiler pin across the 5 wheels
+  # (== V at a final tag), the sdist, the payload hashes; `manifest_sha256` == pythscribe.artifacts.manifest_self_hash.
+  # Circularity guard: it refuses to emit a manifest that is a TRACKED file of the checkout. Stored as (1) the
+  # `release-manifest` workflow artifact and (2) the Release asset evidence/release_manifest.json (tag refs; the
+  # Release is created HERE, by the first job holding the complete bound distribution -- see the header note).
+  manifest:
+    name: manifest
+    needs: [prepare, wheel-set]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the prepared payloads + the complete distribution set
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: '{release-payloads,pythscribe-dist}'
+          merge-multiple: true
+          path: dist
+      - name: Download every finalized binary B_t
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: pyths-*
+          path: artifacts
+      - name: Assemble release_manifest.json (binds wheel <-> B_t <-> payload; refuses a tracked manifest)
+        run: |
+          set -eux
+          TAG_ARG=""
+          case "${GITHUB_REF}" in refs/tags/*) TAG_ARG="--tag ${GITHUB_REF_NAME}" ;; esac
+          python scripts/assemble_manifest.py --dist dist --binaries artifacts --out release_manifest.json $TAG_ARG
+          python scripts/require_evidence.py --role release-run --manifest release_manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload the release manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-manifest
+          path: release_manifest.json
+          if-no-files-found: error
+      - name: Create the GitHub Release (tag refs) + attach evidence/release_manifest.json
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eux
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --verify-tag --title "${GITHUB_REF_NAME}" --notes "PythScribe ${GITHUB_REF_NAME}. Evidence: evidence/release_manifest.json + R-BA / R-NI (release.yml), R-TP / R-TV (publish-pypi.yml)."
+          mkdir -p upload/evidence && cp release_manifest.json upload/evidence/release_manifest.json
+          gh release upload "${GITHUB_REF_NAME}" "upload/evidence/release_manifest.json#evidence/release_manifest.json" --clobber
+
+  # M4 (spec 13-09-26, plan M4; validation §A): candidate-bound, node-free acceptance -- one leg per wheel target,
+  # on that target's topology. Linux x86_64/aarch64: APP container (no node anywhere; internal network only) +
+  # CONTROLLER container (Playwright/Chromium, no egress). macOS/Windows: NATIVE runner with an ENFORCEABLE
+  # OS-user boundary (app unprivileged; the controller's Node under user ctl, 0700 / deny-ACL, probed as app
+  # with the platform-correct probe -- rev-6/7/8). The native legs' shell-only window runs between the steps
+  # `scrub` and `restore`: NO `uses:` (JS action) step may sit inside it, and `restore` re-provisions the
+  # runner's own externals/ BEFORE the first post-window `uses:` step (the R-BA leg upload) -- workflow-linted.
+  node-free-acceptance:
+    name: node-free-acceptance ${{ matrix.target }}
+    needs: manifest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            tag: manylinux_2_28_x86_64
+            topology: container
+            platform: linux/amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            tag: manylinux_2_28_aarch64
+            topology: container
+            platform: linux/arm64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            tag: macosx_11_0_x86_64
+            topology: native
+            platform: ''
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            tag: macosx_11_0_arm64
+            topology: native
+            platform: ''
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            tag: win_amd64
+            topology: native
+            platform: ''
+    env:
+      ACC_TARGET: ${{ matrix.target }}
+      ACC_PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the release manifest FIRST (A0b needs it; a leg without a manifest is RED by construction)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-manifest
+          path: .
+      - name: Download this target's wheel
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: wheel-${{ matrix.tag }}
+          path: dist
+      - name: Verify the manifest -- same-run identity + prerequisite jobs (role literal; never a manifest field)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/require_evidence.py --role release-run --manifest release_manifest.json
+      - name: Candidate binding (A0b) -- W = the manifest-named wheel; sha256(W) == manifest BEFORE anything is installed
+        id: bind
+        shell: bash
+        run: |
+          set -eux
+          W="$(python -c "import json,sys; print(json.load(open('release_manifest.json'))['targets'][sys.argv[1]]['wheel_filename'])" "$ACC_TARGET")"
+          test -f "dist/$W"
+          echo "ACC_WHEEL=$W" >> "$GITHUB_ENV"
+          python scripts/wheel_acceptance.py bind --wheel "dist/$W" --manifest release_manifest.json --target "$ACC_TARGET" --out bind.json
+      - name: Offline wheelhouse (native legs, online stage) -- deps bound to W's metadata; no other pythscribe-*
+        if: matrix.topology == 'native'
+        shell: bash
+        run: |
+          set -eux
+          pip download "$(pwd)/dist/${ACC_WHEEL}[server,gradio]" --dest wheelhouse
+          python scripts/wheel_acceptance.py bind --wheel "dist/$ACC_WHEEL" --manifest release_manifest.json --target "$ACC_TARGET" --wheelhouse wheelhouse --out bind.json
+      - name: Set up QEMU (aarch64 app container)
+        if: matrix.platform == 'linux/arm64'
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3
+
+      # ---------------------------------------------------------------- Linux: two containers
+      - name: "[container] acquire -- images + offline wheelhouse built inside the app image (network on)"
+        if: matrix.topology == 'container'
+        shell: bash
+        run: bash scripts/acceptance/linux_containers.sh acquire
+      - name: "[container] start -- internal-only network; app container (no node; stage read-only)"
+        if: matrix.topology == 'container'
+        shell: bash
+        run: bash scripts/acceptance/linux_containers.sh start
+      - name: "[container] A0 -- explicit node/npm exit + find / for node files"
+        if: matrix.topology == 'container'
+        shell: bash
+        run: bash scripts/acceptance/linux_containers.sh a0
+      - name: "[container] A1..A4 -- fresh venv; install by absolute path with extras; build / wasmtime / first-call witness"
+        if: matrix.topology == 'container'
+        shell: bash
+        run: bash scripts/acceptance/linux_containers.sh app
+      - name: "[container] A4b -- pre-A5 filesystem re-check"
+        if: matrix.topology == 'container'
+        shell: bash
+        run: bash scripts/acceptance/linux_containers.sh a4b
+      - name: "[container] A5 app side -- [gradio,server]; serve on the internal net"
+        if: matrix.topology == 'container'
+        shell: bash
+        run: bash scripts/acceptance/linux_containers.sh a5-app
+      - name: "[container] A5 controller -- Chromium loads http://app:7860 (no egress)"
+        if: matrix.topology == 'container'
+        shell: bash
+        run: bash scripts/acceptance/linux_containers.sh a5-ctl
+      - name: "[container] A5b -- post-A5: no node file, sampler saw no node process"
+        if: matrix.topology == 'container'
+        shell: bash
+        run: bash scripts/acceptance/linux_containers.sh a5b
+      - name: "[container] stop -- collect legs/<triple>/"
+        if: always() && matrix.topology == 'container'
+        shell: bash
+        run: bash scripts/acceptance/linux_containers.sh stop
+
+      # ---------------------------------------------------------------- macOS / Windows: native runner, OS-user boundary
+      # ORDERED (rev-8): acquire (network on) -> scrub (window opens) -> A0 -> A1..A4 as app -> A4b -> A5 -> A5b ->
+      # stop -> restore (window closes) -> upload. Every step in the window is a `run:` shell step.
+      - name: "[native] ACQUIRE -- users app/ctl; controller as ctl (0700 / deny-ACL); externals backup"
+        if: matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh acquire
+      - name: "[native] ACQUIRE -- users app/ctl; controller as ctl (deny-ACL for app); externals backup"
+        if: matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase acquire
+      - name: "[native] SCRUB -- hosted/system Node removed from app's reach; runner externals by permission; egress blocked"
+        id: scrub
+        if: matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh scrub
+      - name: "[native] SCRUB -- hosted/system Node removed from app's reach; runner externals by deny-ACL; egress blocked"
+        id: scrub-windows
+        if: matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase scrub
+      - name: "[native] A0 -- PATH check; every node file under ~ctl/externals AND refused by the app probe"
+        if: matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh a0
+      - name: "[native] A0 -- PATH check; every node.exe under ctl/externals AND refused by the app probe (real exec)"
+        if: matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase a0
+      - name: "[native] A1..A4 as app -- offline venv; native pyths; build / wasmtime / first-call witness"
+        if: matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh app
+      - name: "[native] A1..A4 as app -- offline venv; native pyths; build / wasmtime / first-call witness"
+        if: matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase app
+      - name: "[native] A4b -- fail-closed boundary check (open EACCES + access X_OK False as app) + shared temp"
+        if: matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh a4b
+      - name: "[native] A4b -- fail-closed boundary check (CreateProcessWithLogonW exec as app must fail WinError 5) + shared temp"
+        if: matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase a4b
+      - name: "[native] A5 app side -- [gradio,server]; serve on loopback as app"
+        if: matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh a5-app
+      - name: "[native] A5 app side -- [gradio,server]; serve on loopback as app"
+        if: matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase a5-app
+      - name: "[native] A5 controller -- Chromium as ctl over loopback TCP only"
+        if: matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh a5-ctl
+      - name: "[native] A5 controller -- Chromium as ctl over loopback TCP only"
+        if: matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase a5-ctl
+      - name: "[native] A5b -- boundary re-check after A5 (permission drift) + sampler log"
+        if: matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh a5b
+      - name: "[native] A5b -- boundary re-check after A5 (permission drift) + sampler log"
+        if: matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase a5b
+      - name: "[native] STOP -- stop the app; the leg's node_free verdict is fixed from A0/A4b/A5b"
+        if: always() && matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh stop
+      - name: "[native] STOP -- stop the app; the leg's node_free verdict is fixed from A0/A4b/A5b"
+        if: always() && matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase stop
+      - name: "[native] RESTORE the runner runtime (externals/ from the backup) BEFORE the first post-window uses: step"
+        id: restore
+        if: always() && matrix.topology == 'native' && runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/acceptance/native_macos.sh restore
+      - name: "[native] RESTORE the runner runtime (externals/ from the backup; deny-ACL removed) BEFORE the first post-window uses: step"
+        id: restore-windows
+        if: always() && matrix.topology == 'native' && runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase restore
+
+      # First `uses:` step after the window: a JS action -- it needs the runner's externals/node, so a forgotten
+      # restore fails HERE, loudly (fail-safe operability; it cannot alter the leg's already-fixed node_free verdict).
+      - name: Upload the leg's outputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: acceptance-leg-${{ matrix.target }}
+          path: legs/${{ matrix.target }}/
+          if-no-files-found: error
+
+  # A6: assemble R-BA from the 5 legs (per-target verdicts + installed hashes), bound to this run's manifest.
+  node-free-evidence:
+    name: node-free-evidence
+    needs: [manifest, node-free-acceptance]
+    if: always() && needs.manifest.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-manifest
+          path: .
+      - name: Download every leg
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: acceptance-leg-*
+          path: legs-dl
+      - name: Verify the manifest -- same-run identity + prerequisite jobs (role literal)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/require_evidence.py --role release-run --manifest release_manifest.json
+      - name: Assemble R-BA (a missing leg or any failed step -> verdict fail; node_free from A0/A4b/A5b only)
+        run: |
+          set -eux
+          mkdir -p legs
+          for d in legs-dl/acceptance-leg-*; do mv "$d" "legs/$(basename "$d" | sed 's/^acceptance-leg-//')"; done
+          python scripts/assemble_rba.py --manifest release_manifest.json --legs legs --out evidence/R-BA.json
+      - name: Upload R-BA
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-R-BA-${{ github.run_attempt }}
+          path: evidence/R-BA.json
+          if-no-files-found: error
+      - name: Attach R-BA to the GitHub Release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p upload/evidence && cp evidence/R-BA.json upload/evidence/R-BA.json
+          gh release upload "${GITHUB_REF_NAME}" "upload/evidence/R-BA.json#evidence/R-BA.json" --clobber
+
+  # The B_t archives on the GitHub Release (a loud, non-pip/non-npm channel). `needs: manifest`: the Release exists
+  # and carries evidence/release_manifest.json before any binary is attached (M6.1 decision, header note). Only
+  # the `pyths-*` archives are attached -- never the wheels/sdist (PyPI is the evidence-gated pip channel).
   release:
     name: Create Release
-    needs: build
+    needs: manifest
     if: startsWith(github.ref, 'refs/tags/')   # GitHub Release only on a tag push, not workflow_dispatch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Download artifacts
+      - name: Download the finalized binaries
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          pattern: pyths-*
           path: artifacts
 
-      - name: Create release
+      - name: Attach the binaries to the Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: artifacts/**/*
@@ -102,13 +681,67 @@ jobs:
 
   npm-publish:
     name: Publish to npm
-    needs: build
+    # B2: DAG manifest -> node-free-acceptance -> node-free-evidence (R-BA) -> npm-publish -> npm-identity.
+    # npm publication is irreversible, so it must follow node-free acceptance -- `needs: node-free-evidence`
+    # (which fails if any leg failed) plus the R-BA consume+validate step below. B1: `if:` on a tag ref only.
+    needs: [manifest, node-free-evidence]
+    if: startsWith(github.ref, 'refs/tags/')   # B1: npm is reachable ONLY from an exact vX.Y.Z tag build
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write   # npm provenance (--provenance)
+      actions: read     # require_ci_success.py / require_evidence.py query the Actions API
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Guard -- an exact vX.Y.Z tag ref == pyproject == pin (B1)
+        run: |
+          set -eu
+          case "${GITHUB_REF_NAME}" in v*) ;; *) echo "::error::npm publish requires a release tag (vX.Y.Z), got '${GITHUB_REF_NAME}'"; exit 1 ;; esac
+          python3 scripts/guard_tag_version.py "${GITHUB_REF_NAME}"
+      - name: Download the release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-manifest
+          path: .
+      - name: Verify the manifest -- same-run identity + prerequisite jobs (role literal)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/require_evidence.py --role release-run --manifest release_manifest.json
+      - name: Verify the required CI run is GREEN at the exact tagged commit (B6)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/require_ci_success.py --sha "${GITHUB_SHA}" --workflow ci.yml
+      # B4 (codex pass-4): R-BA is uploaded PER PRODUCER ATTEMPT (`evidence-R-BA-<node-free-evidence
+      # attempt>`). A partial rerun of ONLY this job bumps `github.run_attempt` WITHOUT rerunning the
+      # (already-successful) producer, so downloading `evidence-R-BA-${{ github.run_attempt }}` requested a
+      # nonexistent artifact and broke the honest rerun. Resolve the LATEST SUCCESSFUL producer
+      # (`node-free-evidence`) attempt in THIS run and download exactly that artifact. `needs:
+      # node-free-evidence` guarantees a successful producer attempt exists, so `max` is well-defined.
+      - name: "Consume R-BA from the latest successful producer attempt (B2/B4 -- partial-rerun safe)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eux
+          ATT="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=all&per_page=100" \
+                 --jq '[.jobs[] | select(.name=="node-free-evidence" and .conclusion=="success") | .run_attempt] | max')"
+          case "$ATT" in ''|null) echo "::error::no successful node-free-evidence attempt produced an R-BA artifact"; exit 1 ;; esac
+          gh run download "${GITHUB_RUN_ID}" -n "evidence-R-BA-${ATT}" -D evidence
+      - name: Validate R-BA (verdict pass, bound to this manifest + S)
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, "scripts")
+          import require_evidence as re_
+          m = json.load(open("release_manifest.json"))
+          r = json.load(open("evidence/R-BA.json"))
+          p = re_.check_record("R-BA", r, m, source_sha=os.environ["GITHUB_SHA"])
+          if p:
+              print("R-BA validation RED:"); [print("  " + x) for x in p]; sys.exit(1)
+          print("R-BA validated: node-free acceptance passed for this run before npm publish")
+          EOF
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -137,8 +770,29 @@ jobs:
       - name: Populate platform packages + SHASUMS
         run: node npm/build-platform-packages.mjs
 
-      - name: Publish (platform packages first, wrapper last; refuses if any binary missing)
-        run: node npm/publish.mjs --yes
+      # M0.1 / B5: publish.mjs publishes THE ONE prepared payload the `prepare` job produced --
+      # DOWNLOAD it (never regenerate here, which could pack a different `npm pack` output than the
+      # one the manifest bound and the wheel vendored). publish.mjs publishes dist/runtime-payload.tgz
+      # + dist/scaffolder-payload.tgz; the mirror gates below re-check the committed vendored copies
+      # against the downloaded payload trees (raw bytes, LF).
+      - name: Download the ORIGINAL prepared payloads (the release-payloads artifact from `prepare`)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payloads
+          path: dist
+
+      - name: Runtime mirror gate (vendored wheel copy == the prepared payload, raw bytes)
+        run: python3 scripts/verify_runtime_mirror.py
+
+      - name: "Scaffolder mirror gate (B5 -- vendored create-pyths-app == the prepared payload, raw bytes, LF)"
+        run: python3 scripts/verify_scaffolder_mirror.py
+
+      # B1: on a TAG ref publish.mjs is check-only (never rewrites a package.json byte; RED if stamping
+      # would change one) and REFUSES to publish unless (a) GITHUB_REF is a tag ref and (b) its version
+      # equals release_manifest.json's version (--manifest). It may SKIP already-published packages --
+      # which is why npm-identity (below) downloads every package back and compares it to the manifest.
+      - name: Publish (tag-ref only; version == manifest; platform packages first, wrapper last)
+        run: node npm/publish.mjs --yes --manifest release_manifest.json
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           CI: 'true'
@@ -167,3 +821,69 @@ jobs:
           printf 'print("smoke " + str(2**60))\n' > s.ps
           ./node_modules/.bin/pyths compile s.ps -o s.js
           node s.js | grep -F 'smoke 1152921504606846976'   # assert real output, not just a zero exit
+
+  # M6.2 (spec 13-09-26, requirements §5.3 identity gate; validation §E1): EVERY package published at V is
+  # downloaded back from the registry and compared -- runtime/scaffolder payload files == manifest == the wheels'
+  # vendored copy; each @pythscribe/cli-<plat> `bin/pyths[.exe]` sha256 == manifest native_sha256[triple] == the
+  # binary inside that target's wheel (E1b: a binary A already on npm at V while the wheel + manifest carry B is RED
+  # even though publish.mjs "succeeded" by skipping it). Emits R-NI; attached to the Release as evidence/R-NI.json.
+  npm-identity:
+    name: npm-identity
+    needs: [manifest, npm-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release upload evidence/R-NI.json
+      actions: read      # require_evidence.py queries the Actions API (runs/jobs + artifact ZIPs)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - name: Download the release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-manifest
+          path: .
+      - name: Download the manifest-bound distribution set (the wheels the identity is compared against)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pythscribe-dist
+          path: dist
+      - name: Verify the manifest -- same-run identity + prerequisite jobs (role literal)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/require_evidence.py --role release-run --manifest release_manifest.json
+      - name: Wait for registry propagation of EVERY package at V
+        run: |
+          set -eu
+          V="$(python -c "import json; print(json.load(open('release_manifest.json'))['version'])")"
+          for i in $(seq 1 18); do
+            ok=1
+            for p in pythscribe pyths-runtime create-pyths-app @pythscribe/cli-linux-x64 @pythscribe/cli-linux-arm64 @pythscribe/cli-darwin-x64 @pythscribe/cli-darwin-arm64 @pythscribe/cli-win32-x64; do
+              npm view "$p@$V" version >/dev/null 2>&1 || { ok=0; echo "waiting for $p@$V ($i)"; break; }
+            done
+            [ "$ok" = 1 ] && break
+            sleep 10
+          done
+      - name: Identity gate over every published package -> R-NI (any mismatch fails the release)
+        # S9/NEW-wrapper: --checkout binds the plugin/wrapper published CONTENT (membership + per-file
+        # sha256) to `npm pack` of the checkout of S -- stale/malicious bytes at the same name@version
+        # (the immutable-registry hole) are RED, not just a wrong version.
+        run: python scripts/verify_npm_identity.py --manifest release_manifest.json --dist dist --out evidence/R-NI.json --checkout .
+      - name: Upload R-NI
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-R-NI-${{ github.run_attempt }}
+          path: evidence/R-NI.json
+          if-no-files-found: error
+      - name: Attach R-NI to the GitHub Release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p upload/evidence && cp evidence/R-NI.json upload/evidence/R-NI.json
+          gh release upload "${GITHUB_REF_NAME}" "upload/evidence/R-NI.json#evidence/R-NI.json" --clobber

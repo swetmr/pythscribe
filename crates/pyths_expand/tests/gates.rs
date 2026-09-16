@@ -135,7 +135,7 @@ fn zone_classifier_property_sigils_in_literals_never_expand() {
     let idioms: HashMap<String, String> =
         [("card".to_string(), "div(cls=\"card\")".to_string())].into();
     let sigils = ["$pad", "$c1", "$p1", "$fs", "$bg", "%card", "$brr", "$mar"];
-    let mut rng = Rng(0x_5EED_2026_07_10);
+    let mut rng = Rng(0x5EED_2026_0710);
 
     for case in 0..300 {
         let s1 = *rng.pick(&sigils);

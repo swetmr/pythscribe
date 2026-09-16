@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
 // Read VERSION from the canonical wrapper package.json — NOT a hardcoded constant.
-// A hardcoded "0.2.0" here is invisible to set-version.mjs/check-versions.mjs (which
+// A hardcoded "0.2.0" here is invisible to set_version.py/check_versions.py (which
 // only manage the enumerated package.json "version" fields), so it silently drifted
 // and, though publish.mjs's tag-derivation overrode it at publish time, it stood as a
 // smell (issue #1). Single source of truth = one fewer thing to keep in lockstep.

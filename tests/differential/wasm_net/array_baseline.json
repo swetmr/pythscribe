@@ -1,0 +1,479 @@
+{
+ "_note": "array_net standing ratchet -- see array_net.py",
+ "rows": 36,
+ "calls": 22,
+ "state": {
+  "arr_i32::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr_i32::add1_i32": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_i32::scale_i32": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_i32::cube_i32": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_i64::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr_i64::add1_i64": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_i64::total_i64": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_u8::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr_u8::add1_u8": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_f64::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr_f64::scale_f64": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_f64::neg_f64": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_f32::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr_f32::madd_f32": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr2d_i32::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr2d_i32::scale_i32_2d": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr2d_nested::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr2d_nested::nested_i64_2d": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr2d_u8_img::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr2d_u8_img::threshold_u8_2d": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr2d_f64::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr2d_f64::neg_f64_2d": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr2d_i64::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr2d_i64::total_i64_2d": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr2d_f32::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr2d_f32::madd_f32_2d": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_wrap::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr_wrap::add1_i32": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_wrap::scale_i32": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_wrap::add1_i64": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_wrap::add1_u8": {
+   "arms": {
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "arr_refuse::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr_refuse::bare_row_2d": {
+   "arms": {
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    },
+    "glue": {
+     "status": "twin",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr_refuse::foriter": {
+   "arms": {
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    },
+    "glue": {
+     "status": "twin",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arr_refuse::u8avg": {
+   "arms": {
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    },
+    "glue": {
+     "status": "twin",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "wasi::__arm": {
+   "arms": {
+    "wasi": {
+     "status": "wired",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  }
+ }
+}

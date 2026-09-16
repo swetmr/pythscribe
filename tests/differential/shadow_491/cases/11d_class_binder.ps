@@ -1,0 +1,16 @@
+# repro 11 (S4): a CLASS named like a builtin rebinds it; `abs(x)` constructs.
+# DEMOTE: use
+def use(x: int) -> int:
+    return abs(x)
+
+
+print(use(-5))
+
+
+class abs:
+    def __init__(self, v):
+        self.v = v
+
+
+print(type(use(-5)).__name__)
+print(abs(4).v)

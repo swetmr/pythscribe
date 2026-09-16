@@ -782,6 +782,90 @@ fn test_compile_wasm_decorator_conflicts_with_explicit_target_js() {
 }
 
 #[test]
+fn test_compile_wasm_strict_per_reason_spots() {
+    // §4.7.3 / #357 strict-mode: an INELIGIBLE user-written @wasm is a hard
+    // compile error carrying the SPECIFIC eligibility-rejection reason — a SPOT
+    // per rejection reason, all driven through the shipped `pyths compile`
+    // (js+wasm auto). Paired negative control: the eligible @wasm at the end
+    // MUST compile — if strict-mode were reverted to a silent JS fallback, every
+    // ineligible case below would compile (no error) and this test would go RED.
+    let uniq = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp_dir = std::env::temp_dir().join(format!("pyths_wasm_strict_reasons_{}", uniq));
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    // (source, a substring the rejection reason must contain)
+    let cases: &[(&str, &str)] = &[
+        // str parameter — signature-ineligible (numeric-kernel only).
+        (
+            "@wasm\ndef f(s: str) -> str:\n    return s\n",
+            "numeric-kernel",
+        ),
+        // non-scalar (list) return — #364 scalar-return restriction.
+        ("@wasm\ndef f(n: int) -> list:\n    return [n]\n", "scalar"),
+        // unsupported body form — a list comprehension stays JS.
+        (
+            "@wasm\ndef f(n: int) -> int:\n    return len([i for i in range(n)])\n",
+            "comprehension",
+        ),
+        // #486 arity: a wrong-arity builtin (len with 2 args) refuses the
+        // function; the strict @wasm then surfaces the arity reason.
+        (
+            "@wasm\ndef f(xs: list[int]) -> int:\n    return len(xs, xs)\n",
+            "argument",
+        ),
+    ];
+
+    for (i, (src, needle)) in cases.iter().enumerate() {
+        let ps = tmp_dir.join(format!("inelig_{i}.ps"));
+        std::fs::write(&ps, src).unwrap();
+        let out = pyths_bin()
+            .args(["compile", ps.to_str().unwrap(), "--target", "js+wasm"])
+            .output()
+            .expect("Failed to run pyths");
+        assert!(
+            !out.status.success(),
+            "ineligible @wasm case {i} must be a hard error (silent-fallback mutant would pass): {src:?}"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("@wasm") && stderr.contains("cannot be honored"),
+            "case {i}: error must name the @wasm assertion: {stderr}"
+        );
+        assert!(
+            stderr.contains(needle),
+            "case {i}: rejection reason must contain {needle:?}: {stderr}"
+        );
+        assert!(
+            !tmp_dir.join(format!("inelig_{i}.js")).exists(),
+            "case {i}: nothing must be written on a strict @wasm error"
+        );
+    }
+
+    // Negative-control anchor: an ELIGIBLE @wasm compiles (proves the errors
+    // above are about eligibility, not that @wasm is rejected wholesale).
+    let ok_ps = tmp_dir.join("elig.ps");
+    std::fs::write(
+        &ok_ps,
+        "@wasm\ndef g(a: int, b: int) -> int:\n    return a + b\n",
+    )
+    .unwrap();
+    let ok = pyths_bin()
+        .args(["compile", ok_ps.to_str().unwrap(), "--target", "js+wasm"])
+        .output()
+        .expect("Failed to run pyths");
+    assert!(
+        ok.status.success(),
+        "eligible @wasm must compile: {}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
 fn test_compile_target_js_wasm() {
     let fixture = fixtures_dir().join("wasm_numeric.ps");
     let tmp_dir = std::env::temp_dir();
@@ -853,7 +937,7 @@ fn test_compile_js_wasm_glue_content() {
         glue
     );
     assert!(
-        glue.contains("instantiateStreaming"),
+        glue.contains("compileStreaming"),
         "Glue has streaming: {}",
         glue
     );
@@ -1238,9 +1322,9 @@ fn test_compile_target_wasm_edge_cf_workers() {
         glue
     );
     assert!(glue.contains("async fetch(request)"), "Has fetch: {}", glue);
-    // No instantiateStreaming (CF Workers doesn't fetch sibling files)
+    // No streaming (CF Workers doesn't fetch sibling files)
     assert!(
-        !glue.contains("instantiateStreaming"),
+        !glue.contains("instantiateStreaming") && !glue.contains("compileStreaming"),
         "No streaming for Workers: {}",
         glue
     );

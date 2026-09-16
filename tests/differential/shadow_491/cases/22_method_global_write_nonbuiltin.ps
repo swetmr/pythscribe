@@ -1,0 +1,16 @@
+# #491 BLOCKER-1 (the non-builtin twin, w05d): `global counter; counter = counter + 10`
+# inside a METHOD must read+write the module binding — a method-local `let counter =
+# pyAdd(counter, 10)` is a TDZ ReferenceError (CPython prints 10, then 20).
+counter = 0
+
+
+class C:
+    def m(self):
+        global counter
+        counter = counter + 10
+
+
+C().m()
+print(counter)
+C().m()
+print(counter)

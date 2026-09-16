@@ -1,0 +1,83 @@
+# #491 BLOCKER-B1: a function-scope `global N; for N in ...` writes the MODULE binding
+# (the ONE write-target authority: `predeclare_outer_binding` marks a global/nonlocal
+# name declared AND hoisted, so `emit_for` writes it bare exactly like `global N; N = v`).
+# Arms: a Name target (builtin cell -> `peek` demotes to call-time resolution; plain
+# name), a tuple target whose names are all global, a MIXED tuple (`c` global, `d` a
+# local read only inside the loop -> the wrapper-block path), a global beside a rebound
+# PARAM, and the range() fast path. Before the fix each emitted `for (const N of ...)`:
+# a fresh block-local -- `print(abs)` printed the builtin where CPython prints 22 (silent).
+# DEMOTE: peek
+def peek() -> int:
+    return abs(-9)
+
+
+def f():
+    global abs
+    for abs in [11, 22]:
+        pass
+
+
+y = 0
+
+
+def g():
+    global y
+    for y in [1, 2, 3]:
+        pass
+
+
+a = 0
+b = 0
+
+
+def h():
+    global a, b
+    for a, b in [(1, 2), (3, 4)]:
+        pass
+
+
+c = 0
+
+
+def mixed():
+    global c
+    for c, d in [(1, 2), (3, 4)]:
+        print(d)
+
+
+e = 0
+
+
+def with_param(p):
+    global e
+    for e, p in [(1, 2), (3, 4)]:
+        print(p)
+    return p
+
+
+i = -1
+
+
+def rng():
+    global i
+    for i in range(3):
+        pass
+
+
+print(peek())
+f()
+print(abs)
+g()
+print(y)
+h()
+print(a, b)
+mixed()
+print(c)
+print(with_param(9))
+print(e)
+rng()
+print(i)
+try:
+    print(peek())
+except TypeError:
+    print("TypeError")

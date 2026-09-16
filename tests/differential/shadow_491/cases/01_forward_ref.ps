@@ -1,0 +1,10 @@
+# repro 1 (opus B1): a module-scope call BEFORE the shadowing def is the BUILTIN.
+# WASM: abs
+print(abs(-5))
+
+
+def abs(x: int) -> int:
+    return x * 7
+
+
+print(abs(-5))

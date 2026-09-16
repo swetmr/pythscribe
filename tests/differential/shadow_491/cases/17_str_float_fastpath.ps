@@ -1,0 +1,15 @@
+# the str()/repr()/print float fast paths yield to a user `def str` at CALL time.
+def show(x: float) -> str:
+    return str(x)
+
+
+print(show(2.5))
+print(str(2.5))
+
+
+def str(x: float) -> str:
+    return "S"
+
+
+print(show(2.5))
+print(str(2.5))

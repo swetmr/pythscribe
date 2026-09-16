@@ -1,0 +1,7 @@
+{
+  "_comment": "M2.1 (spec 13-09-26 §5.6): the committed pin of crates/pyths_codegen_wasm/src/abi.rs::ABI_HISTORY, as the shipped compiler exposes it in the `pyths.abi` section's `history`. Rows are IMMUTABLE history: a layout string changes ONLY by appending a new row with a new major (and updating this file with that same appended row). Editing a past row, or changing a string without a row, is RED in tests/pythscribe/test_abi_binding.py.",
+  "supported_abi_major": 1,
+  "history": [
+    [1, "pyths-0.2.4-list-v1", "pyths-0.2.5-array-v2"]
+  ]
+}

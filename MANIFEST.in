@@ -1,0 +1,6 @@
+# sdist composition (spec 13-09-26, M1.3 sdist / source-install policy, requirements §6).
+# The sdist is SOURCE: it must build on any platform and never carries the native compiler
+# (the wheel legs stage it at pythscribe/_bin/ from the finalized release binary). setup.py
+# (auto-included) carries the tag hook and VERIFIES the produced tarball has no binary -- a
+# removed prune line here is RED there, not silently a 7 MB "source" tarball.
+prune pythscribe/_bin

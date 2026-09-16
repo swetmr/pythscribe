@@ -58,3 +58,36 @@ tests/differential/.xengine_scratch/
 npm/pythscribe/skills/
 packages/create-pyths-app/skills/
 
+
+# pythscribe (v0.2.5) test scratch
+examples/gradio-wasm/_app.log
+.hypothesis/
+*.egg-info/
+examples/**/_app.log
+
+# M1.5 use-case notebooks: scratch dirs the cells write (sandbox / single-artifact / fallback work)
+examples/wasm-use-cases/_*_work/
+
+# python -m build (tests/pythscribe/test_packaging.py) drops its intermediate tree here
+/build/
+
+# Python package build outputs (release workflow builds these; /build/ is already ignored above)
+/dist/
+# M1 (spec 13-09-26): the native compiler staged into the wheel by the cibuildwheel leg -- a BUILD
+# OUTPUT (copied from target/<triple>/release or the release artifact), never a source file
+pythscribe/_bin/
+
+# #491 shadow differential scratch
+tests/differential/shadow_491/.scratch/
+
+# #501/#502 match differential scratch
+tests/differential/match_501_502/.scratch/
+
+# M6 (spec 13-09-26): release evidence is POST-BUILD, never a source file (the manifest circularity guard
+# refuses a tracked release_manifest.json); legs/ + evidence/ are CI job outputs
+/release_manifest.json
+/evidence/
+/legs/
+/legs-dl/
+/wheelhouse/
+.ipynb_checkpoints/

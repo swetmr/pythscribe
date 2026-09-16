@@ -1,0 +1,9 @@
+# EXPECT: match
+# #501: three alternatives, each binding x from its own slot
+def h(v):
+    match v:
+        case [x, 0, 0] | [0, x, 0] | [0, 0, x]:
+            return x
+        case _:
+            return -1
+print(h([4, 0, 0]), h([0, 5, 0]), h([0, 0, 6]), h([1, 1, 1]))

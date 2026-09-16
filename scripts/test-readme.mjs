@@ -51,7 +51,13 @@ const PYTHS = process.env.PYTHS_BIN || join(ROOT, "target", "release", `pyths${E
 // (Empty since the Sweep-A fix batch: #99 chained assignment, #100 raw
 // strings, and #101 del attr/subscript are fixed — those doc blocks
 // execute verbatim again.)
-const EXCLUDED_BLOCKS = [];
+const EXCLUDED_BLOCKS = [
+    // README "Installation" `# kernels.py`: a CPython module for the PIP runtime (`@wasm` compile-on-first-call
+    // under wasmtime), not a `.ps` module -- `pyths compile --stdout` rightly refuses `@wasm` in stdout mode. It is
+    // EXECUTED for real, against the shipped wheel, by scripts/readme_spots.py (spec 13-09-26 M6.4, validation §K:
+    // `python kernels.py` -> `14.0`, `pyths build kernels.py`), so the claim is bound there, not here.
+    { match: "# kernels.py\nfrom pythscribe import wasm", reason: "pip-runtime CPython module; bound by scripts/readme_spots.py (M6.4 §K), not a .ps module" },
+];
 
 // Output assertions (`# → ...`) waived — the command must still exit 0.
 // (Empty since the Sweep-A fix batch: #97 __str__ dispatch is fixed, so

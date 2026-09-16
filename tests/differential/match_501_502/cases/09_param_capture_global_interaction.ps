@@ -1,0 +1,15 @@
+# EXPECT: match
+# #502 x #491: a sibling `global x` capture writes the module cell, the param capture writes the param
+x = 0
+def g(v, x):
+    match v:
+        case [1, x]:
+            pass
+    return x
+def h(v):
+    global x
+    match v:
+        case [1, x]:
+            pass
+print(g([1, 8], 100), x)
+h([1, 9]); print(x, g([1, 5], 100), x)

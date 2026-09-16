@@ -49,6 +49,10 @@ const FLOAT_MSG = (t) =>
     `float() argument must be a string or a real number, not '${t}'`;
 
 test("int() rejects non-(str|bytes|number) receivers like CPython", () => {
+    // #490: an explicit None (null) OR an optional-chain short-circuit
+    // (undefined) passed as the ONE argument raises — both are Python None.
+    // A NO-argument `int()` is 0 (asserted below); these are distinct cases,
+    // discriminated by argument count, not by `x === undefined`.
     const rows = [
         ["NoneType", null],
         ["NoneType", undefined],
@@ -61,6 +65,8 @@ test("int() rejects non-(str|bytes|number) receivers like CPython", () => {
 });
 
 test("float() rejects non-(str|bytes|number) receivers like CPython", () => {
+    // #490: float(None) (null) and float(x?.m()) (undefined) both raise;
+    // nullary float() is 0.0. Discriminated by argument count.
     const rows = [
         ["NoneType", null],
         ["NoneType", undefined],
@@ -70,6 +76,14 @@ test("float() rejects non-(str|bytes|number) receivers like CPython", () => {
         ["set", new Set([1])],
     ];
     for (const [t, v] of rows) raises(() => pyFloat(v), "TypeError", FLOAT_MSG(t));
+});
+
+// #490: nullary constructors take CPython's default (int()→0, float()→0.0),
+// distinct from the one-undefined-argument (Python None) case above.
+test("int()/float() nullary return CPython's default (#490)", () => {
+    assert.equal(pyInt(), 0);
+    assert.strictEqual(pyFloat().valueOf(), 0);
+    assert.equal(pyFloat().__pyfloat__, true);
 });
 
 // ── bytes-like receivers are accepted (new arm) ──────────────────────────

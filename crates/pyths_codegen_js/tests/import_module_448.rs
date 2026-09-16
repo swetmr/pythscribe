@@ -5,6 +5,7 @@
 //!   * bare `import_module(...)` (a pyths builtin, no import statement);
 //!   * `from importlib import import_module` (unaliased);
 //!   * `from importlib import import_module as im` (aliased).
+//!
 //! Documented deviation: importlib.import_module is synchronous; ES `import()`
 //! returns a Promise → the `.ps` form must be `await`ed.
 //!

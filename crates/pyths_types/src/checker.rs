@@ -1223,14 +1223,14 @@ mod tests {
         std::fs::write(tmp.join("my_lib.pyi"), stub).unwrap();
 
         let module = parse_module(user);
-        let errors = TypeChecker::check_with_stub_paths(&module, &[tmp.clone()]);
+        let errors = TypeChecker::check_with_stub_paths(&module, std::slice::from_ref(&tmp));
         assert!(errors.is_empty(), "generic resolves: {:?}", errors);
 
         // Now verify type-mismatch is caught: `result: str = g(1)` should
         // complain that int is not str.
         let bad = "from my_lib import g\nresult: str = g(1)\n";
         let module2 = parse_module(bad);
-        let errors2 = TypeChecker::check_with_stub_paths(&module2, &[tmp.clone()]);
+        let errors2 = TypeChecker::check_with_stub_paths(&module2, std::slice::from_ref(&tmp));
         assert!(
             !errors2.is_empty(),
             "generic should catch int-vs-str mismatch: {:?}",
@@ -1262,7 +1262,7 @@ mod tests {
         std::fs::write(tmp.join("hooks.pyi"), stub).unwrap();
 
         let module = parse_module(user);
-        let errors = TypeChecker::check_with_stub_paths(&module, &[tmp.clone()]);
+        let errors = TypeChecker::check_with_stub_paths(&module, std::slice::from_ref(&tmp));
         // The current checker doesn't yet destructure tuple-typed
         // bindings into their elements (separate gap), so we can't yet
         // assert `count: int` is enforced. What we CAN assert: the call

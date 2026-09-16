@@ -1,0 +1,12 @@
+# repro 2 (fable B2): a function defined BEFORE the shadowing def resolves at CALL
+# time -> the user fn (CPython -35), never the emit-order builtin (5).
+# WASM: abs,use
+def use(x: int) -> int:
+    return abs(x)
+
+
+def abs(x: int) -> int:
+    return x * 7
+
+
+print(use(-5))

@@ -1,0 +1,11 @@
+@wasm
+def response(x: float) -> float:
+    # f(x) = x**3 - 2*x + 3, computed the hard way: a bounded recurrence whose fixed point is x,
+    # summed over a million iterations so the work (and the timer) is real. The value tracks the
+    # cubic as you drag the slider.
+    total = 0.0
+    t = x
+    for _ in range(10000000):
+        t = t * 0.9999 + 0.0001 * x
+        total = total + (t * t * t - 2.0 * t + 3.0)
+    return total / 10000000.0

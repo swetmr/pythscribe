@@ -1433,7 +1433,7 @@ mod tests {
         assert_eq!(std::fs::read(&wasm).unwrap(), b" asm   ");
         // An unplanned destination is refused outright.
         let rogue = d.join("rogue.wasm");
-        std::fs::write(&rogue, &marked_wasm()).unwrap();
+        std::fs::write(&rogue, marked_wasm()).unwrap();
         let err2 = plan.rewrite(&rogue, &optimized).unwrap_err();
         assert!(err2.to_string().contains("unplanned"), "err2: {}", err2);
         let _ = std::fs::remove_dir_all(&d);

@@ -1,0 +1,38 @@
+# repro 10 (fable S3): import -> def -> import, and def -> import -> def of the SAME
+# name must produce a LOADABLE module (no `Identifier already declared`) with
+# last-binder-wins at every point. (`* 1.0` keeps `use_floor`'s `-> float` contract
+# honest for the math.floor binding — #136's annotation-trust formatting is a separate,
+# shadow-independent heuristic.)
+from math import sqrt
+
+
+def sqrt(x: int) -> int:
+    return x * x
+
+
+print(sqrt(3))
+from math import sqrt
+print(sqrt(16.0))
+
+
+def use_floor(x: float) -> float:
+    return floor(x) * 1.0
+
+
+def floor(x: float) -> float:
+    return x + 100.0
+
+
+print(floor(2.5))
+print(use_floor(2.5))
+from math import floor
+print(floor(2.5))
+print(use_floor(2.5))
+
+
+def floor(x: float) -> float:
+    return x - 100.0
+
+
+print(floor(2.5))
+print(use_floor(2.5))

@@ -1,17 +1,18 @@
-use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use pyths_hir::{class_registry, exception_code, WasmAnalysis, WasmFuncInfo};
 use pyths_syntax::ast::{ExceptHandler, Expr, ExprKind, FStringPart, Module, Stmt, StmtKind};
 use pyths_syntax::operators::{AugAssignOp, BinOp, UnaryOp};
-use pyths_types::types::{resolve_type, Type};
+use pyths_types::types::{resolve_type, ArrayDtype, Type};
 use wasm_encoder::{
-    CodeSection, ConstExpr, DataCountSection, DataSection, ElementSection, Elements, ExportKind,
-    ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
+    CodeSection, ConstExpr, CustomSection, DataCountSection, DataSection, ElementSection, Elements,
+    ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
     Instruction, MemArg, MemorySection, MemoryType, Module as WasmModule, RefType, TableSection,
     TableType, TypeSection, ValType,
 };
 
+use crate::abi;
 use crate::types::{to_wasm_type, WasmType};
 
 /// Math.* functions that map to JS imports.
@@ -63,8 +64,21 @@ pub fn math_constant_value(name: &str) -> Option<f64> {
 pub struct WasmEmitter {
     /// Map function name â†’ WASM function index (accounting for imports)
     func_indices: HashMap<String, u32>,
-    /// Info about each eligible function
-    func_info: HashMap<String, WasmFuncInfo>,
+    /// Info about each eligible function. #474: a `BTreeMap` mirroring
+    /// `WasmAnalysis.eligible` (set from `analysis.eligible.clone()`), so any
+    /// iteration of it is name-ordered and deterministic.
+    func_info: BTreeMap<String, WasmFuncInfo>,
+    /// #491 name-binding soundness — the ONE authority (mirrors the same-named set
+    /// in `wasm_analysis`). ALL user `def` names in the module, REGARDLESS of
+    /// WASM-eligibility. A name here is a user binding that SHADOWS any builtin /
+    /// math-import of the same name, so it must never be lowered as the builtin in
+    /// ANY call-classification path (`emit_call`, the math-alias lookup, the for-loop
+    /// range dispatch, and both return-type inference paths). Admission guarantees an
+    /// EMITTED call to such a name resolves to an eligible user function; using the
+    /// full set (not just `func_indices`) keeps emit sound even if that ever slips
+    /// (a missing index emits no builtin — an invalid module caught at build, never a
+    /// silent wrong value). Populated in `emit_module`.
+    user_def_names: HashSet<String>,
     /// Sorted set of math.* functions to import (e.g. "pow", "sqrt", "atan2").
     /// Replaces the old needs_pow boolean â€” pow is just one entry here.
     math_imports: BTreeSet<String>,
@@ -104,6 +118,14 @@ pub struct WasmEmitter {
     /// checks it after every call and transparently re-runs the call on the
     /// exact JS (BigInt) twin — or throws where no twin is available.
     ovf_global_idx: u32,
+    /// M2a-3: when >0, `emit_set_ovf` is a no-op — i64 arithmetic still leaves
+    /// its WRAPPING result but does NOT flag `__ovf`. Set while emitting the
+    /// value expression stored into a NumPy-dtyped **array element slot**, whose
+    /// dtype dictates fixed-width WRAP semantics (int64 wraps mod-2⁶⁴ at ±2⁶³,
+    /// not refuse — the settled array-wrap decision). Python `int` slots keep
+    /// the refuse-on-overflow guard (this counter stays 0 there). A counter (not
+    /// a bool) so nested array stores restore correctly.
+    suppress_ovf: Cell<u32>,
     /// User-defined exception classes → assigned error codes (Step 5: custom
     /// exceptions). Codes start at 100; built-ins occupy 1-7. The bridge
     /// surfaces these as `Error.name` exactly matching the class name.
@@ -122,6 +144,14 @@ pub struct WasmEmitter {
     /// the AST in the same order as the lambda-collection pass, so the
     /// counter values match `self.lambdas` indices.
     next_lambda_emit_idx: Cell<u32>,
+    /// v0.2.5 Cluster A (opus r2/NEW-1, NEW-2, NEW-7): functions the TYPED
+    /// pre-check (`cluster_a_typed_check`, run at the top of `emit_function`
+    /// with every local's type known) refuses, with the reason. `codegen_wasm`
+    /// moves them from `eligible` to `rejected` (they stay on the correct JS
+    /// path) BEFORE the validity pass — the same #364 compile-time-fallback
+    /// channel, but with a reason instead of an invalid module. Decided at the
+    /// type layer (`logic_join` / `expr_type`), never by syntax.
+    typed_rejections: RefCell<Vec<(String, String)>>,
 }
 
 /// Compile-time info about a synthesized lambda function.
@@ -211,6 +241,14 @@ struct FuncContext {
     /// nested reads each take their own pair for the same reason `sub_scratch`
     /// is per-depth.
     sub_scratch_i64: Vec<(u32, u32)>,
+    /// M2b: pre-allocated scratch for a 2-D array element access `a[i, j]` /
+    /// `a[i][j]`, indexed by `sub_depth` in lockstep with `sub_scratch`. Each
+    /// slot is `[arr:i32, iidx:i32, jidx:i32, oob:i32, n0:i64, l0:i64, n1:i64,
+    /// l1:i64]` — the pointer, the two narrowed axis indices, the combined
+    /// out-of-bounds flag, and the two `emit_index_check_at` i64 (index,length)
+    /// pairs (rows @+8, cols @+12). A 2-D access at depth D emits its
+    /// sub-expressions at depth D+1, so nested 2-D reads never collide.
+    sub_scratch_2d: Vec<[u32; 8]>,
     /// Current list-subscript-read nesting depth.
     sub_depth: usize,
     /// Nesting depth of `try` blocks. When > 0, `raise` only sets __err_code
@@ -232,9 +270,277 @@ struct FuncContext {
     /// #358: pre-allocated f64 scratch locals (2) for on-stack float
     /// mod/floordiv (removes the old re-emit-the-operand double-eval).
     ck_f64: Vec<u32>,
+    /// Cluster-A value-semantics pools (v0.2.5 #485/#487: `emit_logic`,
+    /// `emit_compare`, `emit_list_compare`), ONE slot per value KIND
+    /// (index = `val_kind`: 0 = i32, 1 = i64, 2 = f64). One slot per kind is
+    /// non-interfering BY CONSTRUCTION: `and`/`or` read the slot back only in
+    /// the `else` arm, mutually exclusive with any nested re-use in the `then`
+    /// arm; the chain / list-compare emitters evaluate BOTH operands before
+    /// storing either, so an operand that itself contains a chain or a list
+    /// comparison has finished with the slots before they are written.
+    lg_tmp: [u32; 3],
+    ch_l: [u32; 3],
+    ch_r: [u32; 3],
+    /// Element-wise list comparison: [ptr a, ptr b, len a, len b, index] (i32)
+    /// plus one element pair per kind.
+    lc_i32: [u32; 5],
+    lc_elem: [(u32, u32); 3],
+}
+
+/// The function's local declarations: every `ctx.locals` entry at or past
+/// `param_count`, sorted by index and run-length grouped by value type (the
+/// one place both the function and the lambda emitter declare locals).
+fn local_declarations_from(ctx: &FuncContext, param_count: u32) -> Vec<(u32, ValType)> {
+    let mut extra: Vec<(u32, WasmType)> = ctx
+        .locals
+        .values()
+        .filter(|(idx, _)| *idx >= param_count)
+        .cloned()
+        .collect();
+    extra.sort_by_key(|(idx, _)| *idx);
+    let mut decls: Vec<(u32, ValType)> = Vec::new();
+    for (_, wt) in extra {
+        let vt = wt.to_val_type();
+        if let Some(last) = decls.last_mut() {
+            if last.1 == vt {
+                last.0 += 1;
+                continue;
+            }
+        }
+        decls.push((1, vt));
+    }
+    decls
+}
+
+/// Index into the Cluster-A per-kind pools.
+/// W1 (M2a-0 review, re-confirmed M2a-3b): `WasmType::F32` falls to the `_ => 0`
+/// wildcard here — and stays UNREACHABLE for a bare F32. F32 is only an array
+/// ELEMENT load/store width; `array_elem_compute_type(Float32) = F64` promotes
+/// every f32 element to f64 on load (option (b)), so no bare F32 ever sits on the
+/// compute stack this `val_kind` / `logic_join` classify, and a bare F32 is not a
+/// boundary type (`bridge.rs` gives it a defensive throw). The js+wasm array glue
+/// (M2a-3b) does NOT introduce an F32 compute path. If a future chunk emits true
+/// f32 arithmetic, add explicit `WasmType::F32` arms here + in `logic_join`.
+fn val_kind(ty: &WasmType) -> usize {
+    match ty {
+        WasmType::I64 => 1,
+        WasmType::F64 => 2,
+        _ => 0,
+    }
+}
+
+/// Python `and` / `or` return the DECIDING OPERAND (`pyAnd` / `pyOr` in the JS
+/// runtime — the reference contract, #273). The WASM result type is the
+/// operands' join when one exists: equal types, or the arithmetic promotion of
+/// two numeric kinds (bool ⊂ int ⊂ float, so `False and 2.5` is `0.0`: value-
+/// equal, repr-widened — and an int operand above 2^53 joined with a float is
+/// ROUNDED to f64, the same C2 caveat as any int→float promotion on this
+/// backend). `None` = no single WASM type can carry both operands
+/// (a list and a scalar): the expression then lowers to its TRUTH value (i32),
+/// which is exact in every condition context (`if` / `while` / `assert` /
+/// `not` / `IfExp` test) and is the only place a repr is dropped.
+fn logic_join(lt: &WasmType, rt: &WasmType) -> Option<WasmType> {
+    if lt == rt {
+        return Some(lt.clone());
+    }
+    let numeric = |t: &WasmType| matches!(t, WasmType::I32 | WasmType::I64 | WasmType::F64);
+    if numeric(lt) && numeric(rt) {
+        if *lt == WasmType::F64 || *rt == WasmType::F64 {
+            Some(WasmType::F64)
+        } else {
+            Some(WasmType::I64)
+        }
+    } else {
+        None
+    }
+}
+
+/// The static type of `a and b` / `a or b` (see `logic_join`).
+fn logic_result_type(lt: &WasmType, rt: &WasmType) -> WasmType {
+    logic_join(lt, rt).unwrap_or(WasmType::I32)
+}
+
+/// M2a-3 array element ABI. Header offset 16 is the element region (see
+/// `pythscribe/runtime/array_buffer.py`); the length (`shape0`) is at offset 8.
+const ARRAY_ELEM_OFFSET: u32 = 16;
+const ARRAY_LEN_OFFSET: u32 = 8;
+/// M2b: the header `ndim` slot @4, checked at kernel entry against the
+/// compiled-for ndim of every array param (the kernel-side shape guard).
+const ARRAY_NDIM_OFFSET: u32 = 4;
+/// M2b: shape1 (columns) of a 2-D array header — the M2a `pad` slot @12
+/// repurposed for the second dimension. shape0 (rows) stays @8
+/// (`ARRAY_LEN_OFFSET`); the row-major element offset is `i*shape1 + j`.
+const ARRAY_COLS_OFFSET: u32 = 12;
+
+/// The SCALAR compute type an `Array[dtype]` element participates in once
+/// loaded: floats promote to the f64 stack, integers sign/zero-extend to the
+/// i64 stack. This keeps the ordinary i64/f64 arithmetic machinery untouched —
+/// the dtype width only matters at the load (extend) and store (WRAP/narrow).
+fn array_elem_compute_type(dtype: ArrayDtype) -> WasmType {
+    if dtype.is_float() {
+        WasmType::F64
+    } else {
+        WasmType::I64
+    }
+}
+
+/// Emit the width-correct LOAD of one array element. The element BYTE address
+/// must already be on the stack; leaves the element on the i64 (int) or f64
+/// (float) compute stack. `int32` sign-extends, `uint8` zero-extends, `float32`
+/// promotes to f64 (option (b): compute in f64, narrow on store).
+fn emit_array_elem_load(dtype: ArrayDtype, func: &mut Function) {
+    match dtype {
+        ArrayDtype::Int32 => {
+            func.instruction(&Instruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&Instruction::I64ExtendI32S);
+        }
+        ArrayDtype::Int64 => {
+            func.instruction(&Instruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+        }
+        ArrayDtype::Uint8 => {
+            func.instruction(&Instruction::I32Load8U(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&Instruction::I64ExtendI32U);
+        }
+        ArrayDtype::Float32 => {
+            func.instruction(&Instruction::F32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&Instruction::F64PromoteF32);
+        }
+        ArrayDtype::Float64 => {
+            func.instruction(&Instruction::F64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+        }
+    }
+}
+
+/// Emit the width-correct STORE of one array element. The element BYTE address
+/// and then the value (on the i64/f64 compute stack, per `array_elem_compute_
+/// type`) must already be on the stack. This is where NumPy fixed-width **wrap**
+/// falls out: a narrowing integer store (`i32.wrap_i64` → `i32.store`/
+/// `i32.store8`) truncates mod-2³²/mod-256 exactly as NumPy's dtype does, with
+/// NO `__ovf` overflow check (arrays wrap; Python `int` refuses). `float32`
+/// demotes f64→f32 on store (narrow-on-store, option (b)).
+fn emit_array_elem_store(dtype: ArrayDtype, func: &mut Function) {
+    match dtype {
+        ArrayDtype::Int32 => {
+            func.instruction(&Instruction::I32WrapI64);
+            func.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+        }
+        ArrayDtype::Int64 => {
+            func.instruction(&Instruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+        }
+        ArrayDtype::Uint8 => {
+            func.instruction(&Instruction::I32WrapI64);
+            func.instruction(&Instruction::I32Store8(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+        }
+        ArrayDtype::Float32 => {
+            func.instruction(&Instruction::F32DemoteF64);
+            func.instruction(&Instruction::F32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+        }
+        ArrayDtype::Float64 => {
+            func.instruction(&Instruction::F64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+        }
+    }
+}
+
+/// A chained-comparison operand that may be re-emitted without observable
+/// effect (the JS backend's `comparison_operand_trivial`): everything else is
+/// captured into a scratch slot so it is evaluated exactly once.
+fn chain_operand_trivial(e: &Expr) -> bool {
+    matches!(
+        &e.kind,
+        ExprKind::Name(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+    )
 }
 
 impl FuncContext {
+    /// Allocate the Cluster-A scratch pools under names (so the injectivity
+    /// check sees them). The names carry a `$` — NOT a Python identifier
+    /// character — so no user local can ever collide with (and silently
+    /// rebind to) a slot; the chain slots are re-tagged with an operand's
+    /// precise `WasmType` at emit time under the SAME name — never aliased.
+    fn alloc_cluster_a_pools(&mut self) {
+        let kinds = [
+            ("i32", WasmType::I32),
+            ("i64", WasmType::I64),
+            ("f64", WasmType::F64),
+        ];
+        for (k, (n, ty)) in kinds.iter().enumerate() {
+            self.lg_tmp[k] = self.alloc_named(&format!("$lg_{n}"), ty.clone());
+            self.ch_l[k] = self.alloc_named(&format!("$chl_{n}"), ty.clone());
+            self.ch_r[k] = self.alloc_named(&format!("$chr_{n}"), ty.clone());
+            let a = self.alloc_named(&format!("$lca_{n}"), ty.clone());
+            let b = self.alloc_named(&format!("$lcb_{n}"), ty.clone());
+            self.lc_elem[k] = (a, b);
+        }
+        for (k, n) in ["pa", "pb", "la", "lb", "ix"].iter().enumerate() {
+            self.lc_i32[k] = self.alloc_named(&format!("$lc_{n}"), WasmType::I32);
+        }
+    }
+
+    fn alloc_named(&mut self, name: &str, ty: WasmType) -> u32 {
+        let idx = self.next_local;
+        self.next_local += 1;
+        self.locals.insert(name.to_string(), (idx, ty));
+        idx
+    }
+
+    /// The name of a chain capture slot (`side` = "l" | "r"); its `ctx.locals`
+    /// entry is re-tagged to the captured operand's precise type.
+    fn chain_slot(&mut self, side: &str, ty: &WasmType) -> String {
+        let k = val_kind(ty);
+        let n = ["i32", "i64", "f64"][k];
+        let name = format!("$ch{side}_{n}");
+        let idx = if side == "l" {
+            self.ch_l[k]
+        } else {
+            self.ch_r[k]
+        };
+        self.locals.insert(name.clone(), (idx, ty.clone()));
+        name
+    }
+
     /// B1: record that a structured label (block/loop/if) is being opened.
     /// Returns the label's ABSOLUTE index, to be stored and later resolved
     /// against the current depth via `br_depth_to`.
@@ -294,6 +600,14 @@ impl FuncContext {
         s.extend(self.ck_i64.iter().copied());
         s.extend(self.pw_i64.iter().copied());
         s.extend(self.ck_f64.iter().copied());
+        s.extend(self.lg_tmp.iter().copied());
+        s.extend(self.ch_l.iter().copied());
+        s.extend(self.ch_r.iter().copied());
+        s.extend(self.lc_i32.iter().copied());
+        for (a, b) in &self.lc_elem {
+            s.push(*a);
+            s.push(*b);
+        }
         s
     }
 
@@ -348,7 +662,8 @@ impl WasmEmitter {
     pub fn new() -> Self {
         Self {
             func_indices: HashMap::new(),
-            func_info: HashMap::new(),
+            func_info: BTreeMap::new(),
+            user_def_names: HashSet::new(),
             math_imports: BTreeSet::new(),
             math_aliases: HashMap::new(),
             import_indices: HashMap::new(),
@@ -361,11 +676,13 @@ impl WasmEmitter {
             err_code_global_idx: 0,
             err_msg_global_idx: 0,
             ovf_global_idx: 0,
+            suppress_ovf: Cell::new(0),
             custom_exceptions: BTreeMap::new(),
             needs_dicts: false,
             lambdas: Vec::new(),
             closure_type_indices: HashMap::new(),
             next_lambda_emit_idx: Cell::new(0),
+            typed_rejections: RefCell::new(Vec::new()),
         }
     }
 
@@ -997,6 +1314,9 @@ impl WasmEmitter {
             ExprKind::BinOp { left, op, right } => {
                 let lt = Self::infer_lambda_return_type(left, params).unwrap_or(WasmType::I64);
                 let rt = Self::infer_lambda_return_type(right, params).unwrap_or(WasmType::I64);
+                if matches!(op, BinOp::And | BinOp::Or) {
+                    return Some(logic_result_type(&lt, &rt));
+                }
                 match op {
                     BinOp::Div => WasmType::F64,
                     // #358: int ** int is exact i64; float operands → f64.
@@ -1012,9 +1332,8 @@ impl WasmEmitter {
                     | BinOp::Lt
                     | BinOp::LtEq
                     | BinOp::Gt
-                    | BinOp::GtEq
-                    | BinOp::And
-                    | BinOp::Or => WasmType::I32,
+                    | BinOp::GtEq => WasmType::I32,
+                    // (And/Or handled above: the deciding operand's join type.)
                     _ => {
                         if lt == WasmType::F64 || rt == WasmType::F64 {
                             WasmType::F64
@@ -1043,28 +1362,52 @@ impl WasmEmitter {
     }
 
     /// Emit a complete WASM module from eligible functions.
+    /// Emit on a fresh emitter and hand back the typed rejections with the
+    /// bytes (the `codegen_wasm` typed-admission drain).
+    pub fn emit_module_collecting(
+        module: &Module,
+        analysis: &WasmAnalysis,
+    ) -> (Vec<u8>, Vec<(String, String)>) {
+        let mut e = WasmEmitter::new();
+        let bytes = e.emit_module(module, analysis);
+        let rejections = e.take_typed_rejections();
+        (bytes, rejections)
+    }
+
     pub fn emit_module(&mut self, module: &Module, analysis: &WasmAnalysis) -> Vec<u8> {
         self.func_info = analysis.eligible.clone();
 
-        // Collect names bound by `from math import X [as Y]` so bare calls
-        // (`sqrt(x)`) dispatch to the math import the same as `math.sqrt(x)`.
-        // Module-scope imports only (we scan `module.body`, not function bodies):
-        // a `from math import` nested inside a function body is not rebound here,
-        // matching the `math.X` attribute path which likewise assumes a
-        // module-level `import math`.
+        // #491 name-binding soundness (ORDER-AWARE, SHADOW_BINDING_DESIGN.md): derive the
+        // shadow authority from the analysis's FINAL module bindings. WASM compiles only
+        // function bodies, which see the final binding at call time, so a name is a user
+        // shadow iff its FINAL module binding is a user def (a later `from math import` or
+        // a later def wins). `user_def_names` therefore holds exactly the names whose
+        // final binding is a `UserDef`; every existing consult site (`user_shadow` guards,
+        // the three inference paths, `is_range`) becomes order-aware unchanged.
+        // `Other(_)` binders (assignment / class / non-math import / for-target /
+        // `global` write / `del`) are shadows too: admission demotes every caller
+        // of such a name, so emit never lowers one — keeping them here is defense
+        // in depth (a shadowed name skips every builtin arm; a missing index then
+        // emits no call — an invalid module caught at build, never a silent value).
+        use pyths_hir::wasm_analysis::ShadowBinding;
+        self.user_def_names = analysis
+            .shadow_bindings
+            .iter()
+            .filter(|(_, (_, b))| matches!(b, ShadowBinding::UserDef | ShadowBinding::Other(_)))
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        // Math-import aliases for bare-call dispatch (`sqrt(x)` == `math.sqrt(x)`), also
+        // order-aware: only names whose FINAL binding is a `MathAlias` (a later user def
+        // removes the entry, so an import-then-def resolves to the user def, not the
+        // alias — the #491 blocker-4 twin on the emit side). A def-then-import caller is
+        // demoted at admission and never reaches emit, so this map only carries live
+        // canonical/aliased math imports.
         self.math_aliases.clear();
-        for stmt in &module.body {
-            if let StmtKind::ImportFrom {
-                module: m, names, ..
-            } = &stmt.kind
-            {
-                if m == "math" {
-                    for alias in names {
-                        if math_function_arity(&alias.name).is_some() {
-                            let bound = alias.alias.clone().unwrap_or_else(|| alias.name.clone());
-                            self.math_aliases.insert(bound, alias.name.clone());
-                        }
-                    }
+        for (bound, (_, binding)) in &analysis.shadow_bindings {
+            if let ShadowBinding::MathAlias(canonical) = binding {
+                if math_function_arity(canonical).is_some() {
+                    self.math_aliases.insert(bound.clone(), canonical.clone());
                 }
             }
         }
@@ -1352,6 +1695,7 @@ impl WasmEmitter {
         // Globals: 0 = __heap_ptr (if needs_strings), then __err_code (if
         // needs_errors), then __err_msg (if also strings), then __ovf
         // (always — #358 i64-exactness flag; see field doc).
+        let abi_global_idx: u32;
         {
             let mut globals = GlobalSection::new();
             let mut next_global_idx: u32 = 0;
@@ -1401,6 +1745,20 @@ impl WasmEmitter {
                 },
                 &ConstExpr::i32_const(0),
             );
+            next_global_idx += 1;
+            // M2.1 (spec 13-09-26 §5.6): the IMMUTABLE ABI-major global, exported as
+            // `__pyths_abi` below. Always last, so every existing global index above
+            // is untouched. The full contract travels in the `pyths.abi` custom
+            // section after the export section.
+            abi_global_idx = next_global_idx;
+            globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(abi::PYTHS_ABI_MAJOR as i32),
+            );
             wasm_module.section(&globals);
         }
 
@@ -1426,7 +1784,19 @@ impl WasmEmitter {
         }
         // #358: exactness flag — the glue checks this after every call.
         exports.export("__ovf", ExportKind::Global, self.ovf_global_idx);
+        // M2.1: the ABI major, readable without parsing sections (`__wasm.__pyths_abi.value`).
+        exports.export(abi::ABI_GLOBAL_EXPORT, ExportKind::Global, abi_global_idx);
         wasm_module.section(&exports);
+
+        // === `pyths.abi` custom section (M2.1) — the runtime contract, from the ONE
+        // source `abi.rs`: `{abi, list_layout, array_layout, compiler, history}`.
+        // Placed right after the export section (custom sections are legal anywhere).
+        // The pip runtime / browser shim / generated glue compare it at load.
+        let abi_json = abi::abi_section_json();
+        wasm_module.section(&CustomSection {
+            name: abi::ABI_SECTION_NAME.into(),
+            data: abi_json.as_bytes().into(),
+        });
 
         // === DataCount Section (required before Code when Data section exists) ===
         let has_data = !self.string_pool.is_empty();
@@ -1572,6 +1942,7 @@ impl WasmEmitter {
             str_temps: Vec::new(),
             sub_scratch: Vec::new(),
             sub_scratch_i64: Vec::new(),
+            sub_scratch_2d: Vec::new(),
             sub_depth: 0,
             str_saves: Vec::new(),
             str_depth: 0,
@@ -1580,6 +1951,11 @@ impl WasmEmitter {
             ck_i64: Vec::new(),
             pw_i64: Vec::new(),
             ck_f64: Vec::new(),
+            lg_tmp: [0; 3],
+            ch_l: [0; 3],
+            ch_r: [0; 3],
+            lc_i32: [0; 5],
+            lc_elem: [(0, 0); 3],
         };
         // env_ptr is implicit local 0. We don't add it to ctx.locals (so user
         // code can't accidentally reference it by name), but we do record
@@ -1599,6 +1975,8 @@ impl WasmEmitter {
         // nested reads always have their own pair. Depth is bounded by the
         // WASM_MAX_SUBSCRIPT_NESTING eligibility check.
         let sub_pairs = pyths_hir::max_subscript_depth(&lam.body).max(4);
+        // Lambdas never take a 2-D array param, so no 2-D element-access scratch.
+        let want_2d_scratch = false;
         for i in 0..sub_pairs {
             let l = ctx.next_local;
             ctx.next_local += 1;
@@ -1619,6 +1997,33 @@ impl WasmEmitter {
             ctx.locals
                 .insert(format!("__subL{}", i), (bl, WasmType::I64));
             ctx.sub_scratch_i64.push((bi, bl));
+            // M2b: 2-D array element-access scratch for this depth —
+            // [arr, iidx, jidx, oob : i32] + [n0, l0, n1, l1 : i64]. Allocated
+            // ONLY when the function has a 2-D array param (`want_2d_scratch`);
+            // otherwise a zero dummy keeps the pool index in lockstep with
+            // `sub_scratch` WITHOUT allocating any locals — so every non-2-D
+            // function's local section is byte-identical to pre-M2b (the
+            // forced-rebuild byte-identity gate). A non-2-D function never calls
+            // `emit_array_2d_check`, so the dummy is never read.
+            let mut slot2d = [0u32; 8];
+            if want_2d_scratch {
+                for (k, name, wt) in [
+                    (0usize, "__a2arr", WasmType::I32),
+                    (1, "__a2i", WasmType::I32),
+                    (2, "__a2j", WasmType::I32),
+                    (3, "__a2oob", WasmType::I32),
+                    (4, "__a2n0", WasmType::I64),
+                    (5, "__a2l0", WasmType::I64),
+                    (6, "__a2n1", WasmType::I64),
+                    (7, "__a2l1", WasmType::I64),
+                ] {
+                    let idx = ctx.next_local;
+                    ctx.next_local += 1;
+                    ctx.locals.insert(format!("{}{}", name, i), (idx, wt));
+                    slot2d[k] = idx;
+                }
+            }
+            ctx.sub_scratch_2d.push(slot2d);
         }
         // #358: overflow-check scratch (4 + 3 i64, 2 f64) — lambda bodies are
         // expressions and can contain checked int arithmetic too.
@@ -1643,6 +2048,8 @@ impl WasmEmitter {
                 .insert(format!("__ckf{}", i), (idx, WasmType::F64));
             ctx.ck_f64.push(idx);
         }
+        // Cluster-A value-semantics pools (and/or, chains, list comparison).
+        ctx.alloc_cluster_a_pools();
         // Scratch non-interference — LAMBDA variant: local 0 is env_ptr, so no
         // scratch slot may alias it (the old `unwrap_or(0)` clobber bug class).
         debug_assert!(
@@ -1650,16 +2057,28 @@ impl WasmEmitter {
             "WASM scratch interference in a lambda body: {:?}",
             ctx.scratch_non_interference_violations(true)
         );
-        let mut func = Function::new(vec![
-            (8, ValType::I32),
-            (7, ValType::I64),
-            (2, ValType::F64),
-        ]);
+        // Declare EXACTLY the locals allocated in `ctx` (params 1..n after
+        // env_ptr), the way the function path does — the old hard-coded
+        // `(8 i32, 7 i64, 2 f64)` layout under-declared the scratch pools
+        // (opus r1/SF8: a Cluster-A slot beyond the declared count would be an
+        // invalid module the moment a lambda body used `and`/`or`).
+        let lambda_param_count = 1 + lam.params.len() as u32;
+        debug_assert_eq!(
+            ctx.next_local,
+            lambda_param_count
+                + ctx
+                    .locals
+                    .values()
+                    .filter(|(i, _)| *i >= lambda_param_count)
+                    .count() as u32,
+            "every allocated lambda local must be declared"
+        );
+        let mut func = Function::new(local_declarations_from(&ctx, lambda_param_count));
         self.emit_expr(&lam.body, &mut ctx, &mut func);
         let body_ty = self.expr_type(&lam.body, &ctx);
         if let Some(ret_ty) = &lam.return_type {
             if body_ty != *ret_ty {
-                self.emit_convert(&body_ty, ret_ty, &mut func);
+                self.emit_return_coerce(&body_ty, ret_ty, &mut func);
             }
         }
         func.instruction(&Instruction::End);
@@ -1877,6 +2296,7 @@ impl WasmEmitter {
             str_temps: Vec::new(),
             sub_scratch: Vec::new(),
             sub_scratch_i64: Vec::new(),
+            sub_scratch_2d: Vec::new(),
             sub_depth: 0,
             str_saves: Vec::new(),
             str_depth: 0,
@@ -1885,6 +2305,11 @@ impl WasmEmitter {
             ck_i64: Vec::new(),
             pw_i64: Vec::new(),
             ck_f64: Vec::new(),
+            lg_tmp: [0; 3],
+            ch_l: [0; 3],
+            ch_r: [0; 3],
+            lc_i32: [0; 5],
+            lc_elem: [(0, 0); 3],
         };
 
         for (name, ty) in &info.params {
@@ -1913,6 +2338,14 @@ impl WasmEmitter {
         // WASM_MAX_SUBSCRIPT_NESTING were already rejected in
         // `pyths_hir::wasm_analysis::check_body`, so this count is bounded.
         let sub_pairs = pyths_hir::max_subscript_depth_in_stmts(body).max(8);
+        // M2b: allocate the 2-D element-access scratch ONLY for a function that
+        // takes a 2-D array param (the only way a 2-D access can occur). Every
+        // other function allocates NO extra locals, so its emitted code is
+        // byte-identical to pre-M2b (forced-rebuild byte-identity gate).
+        let want_2d_scratch = info
+            .params
+            .iter()
+            .any(|(_, t)| matches!(t, Type::Array(_, 2)));
         for i in 0..sub_pairs {
             let l = ctx.next_local;
             ctx.next_local += 1;
@@ -1933,6 +2366,33 @@ impl WasmEmitter {
             ctx.locals
                 .insert(format!("__subL{}", i), (bl, WasmType::I64));
             ctx.sub_scratch_i64.push((bi, bl));
+            // M2b: 2-D array element-access scratch for this depth —
+            // [arr, iidx, jidx, oob : i32] + [n0, l0, n1, l1 : i64]. Allocated
+            // ONLY when the function has a 2-D array param (`want_2d_scratch`);
+            // otherwise a zero dummy keeps the pool index in lockstep with
+            // `sub_scratch` WITHOUT allocating any locals — so every non-2-D
+            // function's local section is byte-identical to pre-M2b (the
+            // forced-rebuild byte-identity gate). A non-2-D function never calls
+            // `emit_array_2d_check`, so the dummy is never read.
+            let mut slot2d = [0u32; 8];
+            if want_2d_scratch {
+                for (k, name, wt) in [
+                    (0usize, "__a2arr", WasmType::I32),
+                    (1, "__a2i", WasmType::I32),
+                    (2, "__a2j", WasmType::I32),
+                    (3, "__a2oob", WasmType::I32),
+                    (4, "__a2n0", WasmType::I64),
+                    (5, "__a2l0", WasmType::I64),
+                    (6, "__a2n1", WasmType::I64),
+                    (7, "__a2l1", WasmType::I64),
+                ] {
+                    let idx = ctx.next_local;
+                    ctx.next_local += 1;
+                    ctx.locals.insert(format!("{}{}", name, i), (idx, wt));
+                    slot2d[k] = idx;
+                }
+            }
+            ctx.sub_scratch_2d.push(slot2d);
         }
 
         // #358: pre-allocate overflow-check scratch locals. Binary checked
@@ -1960,6 +2420,8 @@ impl WasmEmitter {
                 .insert(format!("__ckf{}", i), (idx, WasmType::F64));
             ctx.ck_f64.push(idx);
         }
+        // Cluster-A value-semantics pools (and/or, chains, list comparison).
+        ctx.alloc_cluster_a_pools();
 
         // Pre-allocate string temp locals if this module uses strings
         if self.needs_strings {
@@ -1982,31 +2444,17 @@ impl WasmEmitter {
         }
 
         // Build function: declare extra locals (params are implicit)
-        let param_count = info.params.len() as u32;
-        let local_declarations: Vec<(u32, ValType)> = {
-            let mut decls: Vec<(u32, ValType)> = Vec::new();
-            // Collect extra locals sorted by index
-            let mut extra: Vec<(u32, WasmType)> = ctx
-                .locals
-                .values()
-                .filter(|(idx, _)| *idx >= param_count)
-                .cloned()
-                .collect();
-            extra.sort_by_key(|(idx, _)| *idx);
+        // Cluster-A TYPED admission (opus r2): refuse, with a reason, what the
+        // lowering cannot represent — decided here because only here is every
+        // operand's WASM type known (`expr_type` over params + pre-scanned locals).
+        if let Err(reason) = self.cluster_a_typed_check(body, &ctx) {
+            self.typed_rejections
+                .borrow_mut()
+                .push((info.name.clone(), reason));
+        }
 
-            // Group consecutive locals of the same type
-            for (_, wt) in extra {
-                let vt = wt.to_val_type();
-                if let Some(last) = decls.last_mut() {
-                    if last.1 == vt {
-                        last.0 += 1;
-                        continue;
-                    }
-                }
-                decls.push((1, vt));
-            }
-            decls
-        };
+        let param_count = info.params.len() as u32;
+        let local_declarations = local_declarations_from(&ctx, param_count);
 
         // Validate scratch non-interference now that every local (params,
         // pre-scanned body vars, and all scratch pools) is allocated — the
@@ -2020,6 +2468,35 @@ impl WasmEmitter {
 
         let mut func = Function::new(local_declarations);
 
+        // M2b: KERNEL-SIDE array header guard — the ONE authority that closes the
+        // mis-declared-shape class on EVERY path. A marshaller (the server
+        // `ServerKernel.call`, whose caller DECLARES the param types) can lay a
+        // buffer with a header `ndim` that differs from the ndim this kernel was
+        // compiled for (e.g. a 1-D buffer + `Array[int32]` spelling handed to a
+        // 2-D kernel): the kernel would then read shape1@12 = 0 / the wrong
+        // shape0 and SILENTLY compute a no-op or a partial result. So each array
+        // param's header ndim@4 is checked against the compiled-for ndim at
+        // function entry and a mismatch TRAPS (`unreachable`): loud on the
+        // server (WasmTrap) and rerouted to the exact JS twin on js+wasm —
+        // never a silent wrong value. (The js+wasm glue derives ndim from the
+        // compiled signature, so it can never mis-declare; this guard is the
+        // belt-and-braces for every OTHER marshaller, present and future.)
+        for (i, (_, ty)) in info.params.iter().enumerate() {
+            if let Type::Array(_, ndim) = ty {
+                func.instruction(&Instruction::LocalGet(i as u32));
+                func.instruction(&Instruction::I32Load(MemArg {
+                    offset: ARRAY_NDIM_OFFSET as u64,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                func.instruction(&Instruction::I32Const(*ndim as i32));
+                func.instruction(&Instruction::I32Ne);
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                func.instruction(&Instruction::Unreachable);
+                func.instruction(&Instruction::End);
+            }
+        }
+
         // Emit body
         for s in body {
             self.emit_stmt(s, &mut ctx, &mut func);
@@ -2032,6 +2509,472 @@ impl WasmEmitter {
 
         func.instruction(&Instruction::End);
         func
+    }
+
+    /// The typed rejections recorded by the last `emit_module` (drained by
+    /// `codegen_wasm`).
+    pub fn take_typed_rejections(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut *self.typed_rejections.borrow_mut())
+    }
+
+    /// v0.2.5 Cluster A — the TYPED admission pre-check (opus r2/NEW-1, NEW-2,
+    /// NEW-7; replaces the syntactic pass that a list-valued subscript or a
+    /// `for` target bypassed). Walks the body with `expr_type` and refuses:
+    ///   * `and` / `or` whose operands have NO common WASM type
+    ///     (`logic_join` = None: a list and a scalar) anywhere but a truth-
+    ///     consuming position (if/while/assert/IfExp TEST, `not`, a nested
+    ///     and/or in such a position) — Python yields the list or the scalar,
+    ///     which no single WASM type carries; two lists of one element type
+    ///     ARE representable (`xs or ys`) and stay admitted;
+    ///   * a `return` whose value is a container while the declared return is
+    ///     a scalar (`-> int: return xs` would surface the heap pointer);
+    ///   * a store of an int/float value into a `list[bool]` element (the i32
+    ///     slot would wrap `2**32` to 0).
+    fn cluster_a_typed_check(&self, body: &[Stmt], ctx: &FuncContext) -> Result<(), String> {
+        for s in body {
+            self.typed_check_stmt(s, ctx)?;
+        }
+        Ok(())
+    }
+
+    /// The CONTAINER-PRESERVING static type of an expression (opus r3/NEW-r3-1):
+    /// `expr_type` — the lowering's view — funnels `IfExpr` and `+` through
+    /// `arithmetic_op_type`, which erases a list to `I64`. The typed check
+    /// must see the container: a conditional expression whose arm is a list
+    /// IS a list, `xs + ys` IS a list, `xs and ys` is the deciding list.
+    /// Wherever this disagrees with `expr_type` the lowering has no
+    /// representation for the value, and `typed_check_expr` refuses the
+    /// function (the universal rule).
+    fn static_value_type(&self, e: &Expr, ctx: &FuncContext) -> WasmType {
+        match &e.kind {
+            ExprKind::IfExpr {
+                body, else_body, ..
+            } => {
+                let (b, o) = (
+                    self.static_value_type(body, ctx),
+                    self.static_value_type(else_body, ctx),
+                );
+                if b.is_any_ptr() {
+                    b
+                } else if o.is_any_ptr() {
+                    o
+                } else {
+                    self.expr_type(e, ctx)
+                }
+            }
+            ExprKind::BinOp {
+                left,
+                op: BinOp::And | BinOp::Or,
+                right,
+            } => logic_result_type(
+                &self.static_value_type(left, ctx),
+                &self.static_value_type(right, ctx),
+            ),
+            ExprKind::BinOp { left, right, .. } => {
+                let (l, r) = (
+                    self.static_value_type(left, ctx),
+                    self.static_value_type(right, ctx),
+                );
+                if l.is_any_ptr() {
+                    l
+                } else if r.is_any_ptr() {
+                    r
+                } else {
+                    self.expr_type(e, ctx)
+                }
+            }
+            _ => self.expr_type(e, ctx),
+        }
+    }
+
+    /// THE representability predicate for every value SINK (opus r3/NEW-r3-2,
+    /// r4/NEW-r4-1, r5/NEW-r5-1, NEW-r5-2): can a value of static type `stored`
+    /// be placed in a slot of type `slot` without changing it? Refused: a
+    /// container into a scalar slot or a scalar into a container slot (the
+    /// pointer would be the value / the value a pointer), an int or float
+    /// into a bool i32 slot (wraps), a float into an int i64 slot (truncates;
+    /// NaN traps). An int into a float slot is Python's own exact coercion.
+    /// Applied to the list-element slot, the LOCAL slot (assign / annotated
+    /// assign), the RETURN slot and every CALL-ARGUMENT slot — one authority.
+    fn slot_rejects(slot: &WasmType, stored: &WasmType) -> bool {
+        if slot == stored {
+            return false;
+        }
+        slot.is_any_ptr() != stored.is_any_ptr()
+            || (slot.is_any_ptr() && slot != stored)
+            || (*slot == WasmType::I32 && matches!(stored, WasmType::I64 | WasmType::F64))
+            || (*slot == WasmType::I64 && *stored == WasmType::F64)
+    }
+
+    fn typed_check_slot(
+        &self,
+        what: &str,
+        slot: &WasmType,
+        stored: &WasmType,
+    ) -> Result<(), String> {
+        if Self::slot_rejects(slot, stored) {
+            return Err(format!(
+                "storing a {:?} value into {} of type {:?} is not supported on the WASM fast path (the \
+                 slot cannot represent the value: a wrapped / truncated number or a raw pointer; \
+                 function stays JS)",
+                stored, what, slot
+            ));
+        }
+        Ok(())
+    }
+
+    /// The store rule at an assignment TARGET: a list element slot or a local
+    /// variable slot (the type `collect_locals` gave the name).
+    fn typed_check_subscript_store(
+        &self,
+        target: &Expr,
+        stored: &WasmType,
+        ctx: &FuncContext,
+    ) -> Result<(), String> {
+        match &target.kind {
+            ExprKind::Subscript { value: base, .. } => {
+                match self.static_value_type(base, ctx) {
+                    WasmType::PtrList(elem) => {
+                        self.typed_check_slot("a list element slot", &elem, stored)
+                    }
+                    // M2a-3: an array element slot holds a scalar of the dtype's
+                    // compute type (i64 for int dtypes, f64 for float dtypes).
+                    // The same slot authority applies: refuse a container into a
+                    // numeric element slot. A number is width-narrowed (WRAP /
+                    // demote) at store, so int↔float element coercions are the
+                    // element store's job, not a rejection.
+                    WasmType::PtrArray { dtype, .. } => {
+                        let slot = array_elem_compute_type(dtype);
+                        if stored.is_any_ptr() {
+                            return self.typed_check_slot("an array element slot", &slot, stored);
+                        }
+                        Ok(())
+                    }
+                    _ => Ok(()),
+                }
+            }
+            ExprKind::Name(n) => match ctx.get_local(n) {
+                Some((_, slot)) => self
+                    .typed_check_slot(&format!("the local `{n}` (slot"), &slot, stored)
+                    .map_err(|e| e.replacen("(slot of type", "of type", 1)),
+                None => Ok(()),
+            },
+            _ => Ok(()),
+        }
+    }
+
+    fn typed_check_stmt(&self, stmt: &Stmt, ctx: &FuncContext) -> Result<(), String> {
+        let body_of = |b: &[Stmt], ctx: &FuncContext| -> Result<(), String> {
+            for s in b {
+                self.typed_check_stmt(s, ctx)?;
+            }
+            Ok(())
+        };
+        match &stmt.kind {
+            StmtKind::Assign { targets, value } => {
+                let stored = self.static_value_type(value, ctx);
+                for t in targets {
+                    self.typed_check_expr(t, false, ctx)?;
+                    self.typed_check_subscript_store(t, &stored, ctx)?;
+                }
+                self.typed_check_expr(value, false, ctx)
+            }
+            StmtKind::AugAssign { target, op, value } => {
+                self.typed_check_expr(target, false, ctx)?;
+                // `t op= v` stores the op's result type into the target slot (a list
+                // element or a local): the same rule, same authority. `/` is a float.
+                let tt = self.static_value_type(target, ctx);
+                let vt = self.static_value_type(value, ctx);
+                let stored = if matches!(op, pyths_syntax::operators::AugAssignOp::Div) {
+                    WasmType::F64
+                } else if tt.is_any_ptr() || vt.is_any_ptr() {
+                    if tt.is_any_ptr() {
+                        tt.clone()
+                    } else {
+                        vt.clone()
+                    }
+                } else {
+                    self.arithmetic_op_type(&tt, &vt)
+                };
+                self.typed_check_subscript_store(target, &stored, ctx)?;
+                self.typed_check_expr(value, false, ctx)
+            }
+            StmtKind::AnnAssign { target, value, .. } => {
+                self.typed_check_expr(target, false, ctx)?;
+                match value {
+                    Some(v) => {
+                        let stored = self.static_value_type(v, ctx);
+                        self.typed_check_subscript_store(target, &stored, ctx)?;
+                        self.typed_check_expr(v, false, ctx)
+                    }
+                    None => Ok(()),
+                }
+            }
+            StmtKind::Return(Some(v)) => {
+                self.typed_check_expr(v, false, ctx)?;
+                if ctx.return_type.is_none() {
+                    return Err("a `-> None` function returning a value is not supported on the WASM fast \
+                                path (the value would be dropped where CPython returns it; function stays JS)"
+                        .into());
+                }
+                let vt = self.static_value_type(v, ctx);
+                if vt.is_any_ptr()
+                    && matches!(
+                        ctx.return_type,
+                        Some(WasmType::I64 | WasmType::F64 | WasmType::I32)
+                    )
+                {
+                    return Err(
+                        "returns a list/container value under a scalar return type (the heap \
+                                pointer would surface as the value); function stays JS"
+                            .into(),
+                    );
+                }
+                // The RETURN slot: a float under `-> int` would be truncated (the
+                // `-> bool` boundary is Python's bool() — the documented NEW-W10
+                // repr row — and stays). Opus r5/NEW-r5-2.
+                if vt == WasmType::F64 && ctx.return_type == Some(WasmType::I64) {
+                    return Err(
+                        "returns a float value under an `int` return type (it would be truncated \
+                                where CPython returns the float); function stays JS"
+                            .into(),
+                    );
+                }
+                Ok(())
+            }
+            StmtKind::Expr(v) => self.typed_check_expr(v, false, ctx),
+            StmtKind::Raise(Some(v), _) => {
+                // The lowering emits only the error code: an argument that could itself
+                // raise (a subscript, a call, a division, …) would change the error KIND.
+                // Only a literal / name argument (or none) is admitted (opus r4/NEW-r4-2).
+                if let ExprKind::Call { args, .. } = &v.kind {
+                    for a in args {
+                        if !matches!(
+                            &a.kind,
+                            ExprKind::StringLiteral(_)
+                                | ExprKind::IntLiteral(_)
+                                | ExprKind::FloatLiteral(_)
+                                | ExprKind::BoolLiteral(_)
+                                | ExprKind::Name(_)
+                        ) {
+                            return Err("a `raise` whose argument is not a literal or a name is not supported \
+                                        on the WASM fast path (the argument is not lowered, so a raising \
+                                        argument would change the error kind; function stays JS)"
+                                .into());
+                        }
+                    }
+                }
+                self.typed_check_expr(v, false, ctx)
+            }
+            StmtKind::If {
+                test,
+                body,
+                elif_clauses,
+                else_body,
+            } => {
+                self.typed_check_expr(test, true, ctx)?;
+                body_of(body, ctx)?;
+                for (t, b) in elif_clauses {
+                    self.typed_check_expr(t, true, ctx)?;
+                    body_of(b, ctx)?;
+                }
+                if let Some(b) = else_body {
+                    body_of(b, ctx)?;
+                }
+                Ok(())
+            }
+            StmtKind::While {
+                test,
+                body,
+                else_body,
+            } => {
+                self.typed_check_expr(test, true, ctx)?;
+                body_of(body, ctx)?;
+                if let Some(b) = else_body {
+                    body_of(b, ctx)?;
+                }
+                Ok(())
+            }
+            StmtKind::For {
+                target,
+                iter,
+                body,
+                else_body,
+                ..
+            } => {
+                self.typed_check_expr(target, false, ctx)?;
+                self.typed_check_expr(iter, false, ctx)?;
+                body_of(body, ctx)?;
+                if let Some(b) = else_body {
+                    body_of(b, ctx)?;
+                }
+                Ok(())
+            }
+            StmtKind::Assert { test, msg } => {
+                if msg.is_some() {
+                    return Err("an `assert` with a message expression is not supported on the WASM fast \
+                                path (the message is not lowered, so a raising message would change the \
+                                error kind; function stays JS)"
+                        .into());
+                }
+                self.typed_check_expr(test, true, ctx)
+            }
+            StmtKind::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+            } => {
+                body_of(body, ctx)?;
+                for h in handlers {
+                    body_of(&h.body, ctx)?;
+                }
+                if let Some(b) = else_body {
+                    body_of(b, ctx)?;
+                }
+                if let Some(b) = finally_body {
+                    body_of(b, ctx)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// `in_test` = only the truth value of `expr` is consumed.
+    fn typed_check_expr(
+        &self,
+        expr: &Expr,
+        in_test: bool,
+        ctx: &FuncContext,
+    ) -> Result<(), String> {
+        // The universal rule: a value the container-preserving static type sees
+        // as a container but the lowering types as a scalar (a list-valued
+        // `IfExpr`, `xs + ys`, …) has NO representation — refuse it wherever it
+        // appears (return, operand, argument, subscript, test, …). Deliberately
+        // also in pure truth position (`not (xs if c else ys)`): the arms push
+        // pointers while the expression is typed I64, so even the truth test
+        // would read a mis-typed value — a conservative refusal, not a gap.
+        let (st, et) = (self.static_value_type(expr, ctx), self.expr_type(expr, ctx));
+        if st.is_any_ptr() != et.is_any_ptr() {
+            return Err(format!(
+                "a container-valued expression ({:?}) the WASM lowering types as {:?} (a list-valued \
+                 conditional expression or `+`) is not supported on the WASM fast path (function stays JS)",
+                st, et
+            ));
+        }
+        match &expr.kind {
+            ExprKind::BinOp {
+                left,
+                op: BinOp::And | BinOp::Or,
+                right,
+            } => {
+                if !in_test {
+                    let (lt, rt) = (
+                        self.static_value_type(left, ctx),
+                        self.static_value_type(right, ctx),
+                    );
+                    if logic_join(&lt, &rt).is_none() {
+                        return Err(format!(
+                            "`and`/`or` whose operands have no common WASM type ({:?} and {:?}: a list \
+                             and a scalar) used as a VALUE (not as an if/while/assert/`not`/conditional \
+                             test) is not supported on the WASM fast path: Python yields the list or the \
+                             scalar, which no single WASM type carries (function stays JS)",
+                            lt, rt
+                        ));
+                    }
+                }
+                self.typed_check_expr(left, in_test, ctx)?;
+                self.typed_check_expr(right, in_test, ctx)
+            }
+            ExprKind::UnaryOp {
+                op: UnaryOp::Not,
+                operand,
+            } => self.typed_check_expr(operand, true, ctx),
+            ExprKind::IfExpr {
+                test,
+                body,
+                else_body,
+            } => {
+                self.typed_check_expr(test, true, ctx)?;
+                self.typed_check_expr(body, in_test, ctx)?;
+                self.typed_check_expr(else_body, in_test, ctx)
+            }
+            ExprKind::BinOp { left, right, .. } => {
+                self.typed_check_expr(left, false, ctx)?;
+                self.typed_check_expr(right, false, ctx)
+            }
+            ExprKind::UnaryOp { operand, .. } => self.typed_check_expr(operand, false, ctx),
+            ExprKind::Compare { left, comparisons } => {
+                self.typed_check_expr(left, false, ctx)?;
+                for (_, e) in comparisons {
+                    self.typed_check_expr(e, false, ctx)?;
+                }
+                Ok(())
+            }
+            ExprKind::Call {
+                func, args, kwargs, ..
+            } => {
+                self.typed_check_expr(func, false, ctx)?;
+                // A user-function call passes each argument into the callee's PARAMETER
+                // slot with no conversion: the static type must match (opus r5/NEW-r5-1 d).
+                if let ExprKind::Name(callee) = &func.kind {
+                    if let Some(info) = self.func_info.get(callee.as_str()) {
+                        for (a, (pname, pty)) in args.iter().zip(info.params.iter()) {
+                            if let Some(slot) = to_wasm_type(pty) {
+                                let at = self.static_value_type(a, ctx);
+                                if slot != at {
+                                    return Err(format!(
+                                        "passing a {:?} value to parameter `{pname}` of `{callee}` (slot {:?}) is \
+                                         not supported on the WASM fast path (the call passes arguments without \
+                                         conversion; function stays JS)",
+                                        at, slot
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                for a in args {
+                    self.typed_check_expr(a, false, ctx)?;
+                }
+                for k in kwargs {
+                    self.typed_check_expr(&k.value, false, ctx)?;
+                }
+                Ok(())
+            }
+            ExprKind::Subscript { value, index, .. } => {
+                self.typed_check_expr(value, false, ctx)?;
+                self.typed_check_expr(index, false, ctx)
+            }
+            ExprKind::Attribute { value, .. } => self.typed_check_expr(value, false, ctx),
+            ExprKind::List(elts) => {
+                // The literal's element slot is its FIRST element's type; every other
+                // element is stored into that slot (`[True, v]` would wrap v).
+                if let Some(first) = elts.first() {
+                    let slot = self.static_value_type(first, ctx);
+                    for e in &elts[1..] {
+                        self.typed_check_slot(
+                            "a list-literal element slot",
+                            &slot,
+                            &self.static_value_type(e, ctx),
+                        )?;
+                    }
+                }
+                for e in elts {
+                    self.typed_check_expr(e, false, ctx)?;
+                }
+                Ok(())
+            }
+            ExprKind::Tuple(elts) | ExprKind::Set(elts) => {
+                for e in elts {
+                    self.typed_check_expr(e, false, ctx)?;
+                }
+                Ok(())
+            }
+            ExprKind::Lambda { body, .. } => self.typed_check_expr(body, false, ctx),
+            _ => Ok(()),
+        }
     }
 
     /// Pre-scan a function body to find all local variable declarations.
@@ -2400,7 +3343,7 @@ impl WasmEmitter {
                 BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
                     WasmType::I32
                 }
-                BinOp::And | BinOp::Or => WasmType::I32,
+                BinOp::And | BinOp::Or => logic_result_type(&lt, &rt),
                 _ => {
                     if lt == WasmType::F64 || rt == WasmType::F64 {
                         WasmType::F64
@@ -2421,7 +3364,15 @@ impl WasmEmitter {
         // then `t = sorted(s)`) propagates element types correctly.
         if let ExprKind::Call { func, args, .. } = &expr.kind {
             if let ExprKind::Name(name) = &func.kind {
-                if matches!(name.as_str(), "sorted" | "filter") {
+                // #491 name-binding soundness: a user `def` shadows the builtin, so this
+                // list-return inference must NOT fire for a user-shadowed `sorted`/
+                // `filter` (else `v = sorted(xs)` with an eligible user `def sorted` gets
+                // typed as the builtin's list-return and NEWLY demotes the caller into the
+                // JS path). Keyed on the same `user_def_names` authority as the other two
+                // inference paths.
+                if matches!(name.as_str(), "sorted" | "filter")
+                    && !self.user_def_names.contains(name.as_str())
+                {
                     let lst_arg_idx = if name == "filter" { 1 } else { 0 };
                     if let Some(lst_arg) = args.get(lst_arg_idx) {
                         if let WasmType::PtrList(inner) =
@@ -2498,10 +3449,9 @@ impl WasmEmitter {
                     | BinOp::LtEq
                     | BinOp::Gt
                     | BinOp::GtEq => WasmType::I32,
-                    BinOp::And | BinOp::Or => {
-                        // For logical ops in numeric context, result is i32 (bool)
-                        WasmType::I32
-                    }
+                    // #485: `and`/`or` yield the deciding OPERAND (the JS
+                    // `pyAnd`/`pyOr` contract), so the type is the join.
+                    BinOp::And | BinOp::Or => logic_result_type(&lt, &rt),
                     _ => {
                         if lt == WasmType::F64 || rt == WasmType::F64 {
                             WasmType::F64
@@ -2529,13 +3479,18 @@ impl WasmEmitter {
             }
             ExprKind::Call { func, args, .. } => {
                 if let ExprKind::Name(name) = &func.kind {
+                    // #491 name-binding soundness: a user `def` shadows the builtin (and
+                    // any math-import alias), so a shadowed name's return type comes from
+                    // the user function (the `_` arm), not the builtin's assumed type.
+                    // Keyed on the FULL user-def set (mirrors emit_call).
+                    let user_shadow = self.user_def_names.contains(name.as_str());
                     match name.as_str() {
-                        "int" => WasmType::I64,
-                        "float" => WasmType::F64,
-                        "abs" | "min" | "max" => WasmType::F64,
+                        "int" if !user_shadow => WasmType::I64,
+                        "float" if !user_shadow => WasmType::F64,
+                        "abs" | "min" | "max" if !user_shadow => WasmType::F64,
                         // Tier 6 HoF: map/filter/sorted return a list; reduce
                         // returns the accumulator type (≈ init's type).
-                        "map" => {
+                        "map" if !user_shadow => {
                             // Element type = lambda's ret type, if available.
                             let elem = if let Some(fn_arg) = args.first() {
                                 if let WasmType::PtrClosure { ret, .. } =
@@ -2550,7 +3505,7 @@ impl WasmEmitter {
                             };
                             WasmType::PtrList(Box::new(elem))
                         }
-                        "filter" | "sorted" => {
+                        "filter" | "sorted" if !user_shadow => {
                             // Element type = input list's element type.
                             let elem = if let Some(lst_arg) =
                                 args.get(if name == "filter" { 1 } else { 0 })
@@ -2567,7 +3522,7 @@ impl WasmEmitter {
                             };
                             WasmType::PtrList(Box::new(elem))
                         }
-                        "reduce" => {
+                        "reduce" if !user_shadow => {
                             // Result is the accumulator type — same as init.
                             if let Some(init) = args.get(2) {
                                 self.infer_wasm_type_from_expr(init)
@@ -2576,7 +3531,10 @@ impl WasmEmitter {
                             }
                         }
                         _ => {
-                            if self.math_aliases.contains_key(name) {
+                            // #491: a user `def` shadows a math alias — consult the
+                            // user function's return type FIRST when the name is a
+                            // user shadow, before the math-alias f64 assumption.
+                            if !user_shadow && self.math_aliases.contains_key(name) {
                                 WasmType::F64
                             } else if let Some(info) = self.func_info.get(name.as_str()) {
                                 to_wasm_type(&info.return_type).unwrap_or(WasmType::I64)
@@ -2649,6 +3607,13 @@ impl WasmEmitter {
                             index,
                             ..
                         } => {
+                            // M2b: 2-D element store `a[i, j] = v` / `a[i][j] = v`.
+                            if let Some((arr, i, j, dtype)) =
+                                self.array_2d_index(container, index, ctx)
+                            {
+                                self.emit_array_2d_store(arr, i, j, dtype, value, ctx, func);
+                                continue;
+                            }
                             let cont_ty = self.expr_type(container, ctx);
                             match &cont_ty {
                                 WasmType::PtrList(elem_ty) => {
@@ -2747,6 +3712,92 @@ impl WasmEmitter {
                                             }));
                                         }
                                     }
+                                    func.instruction(&Instruction::End);
+                                }
+                                WasmType::PtrArray { dtype, .. } => {
+                                    // M2a-3 array store `out[i] = v` — address
+                                    // ptr + 16 + i*esize, value narrowed to the
+                                    // element width. The narrowing integer store
+                                    // is the NumPy fixed-width WRAP (no `__ovf`);
+                                    // float32 demotes f64→f32 (narrow-on-store).
+                                    let dtype = *dtype;
+                                    let esize = dtype.size_bytes();
+                                    let compute = array_elem_compute_type(dtype);
+                                    let (arr_temp, idx_temp) =
+                                        match ctx.sub_scratch.get(ctx.sub_depth) {
+                                            Some(&p) => p,
+                                            None => {
+                                                debug_assert!(
+                                                    false,
+                                                    "sub_scratch pool undersized (array store)"
+                                                );
+                                                func.instruction(&Instruction::Unreachable);
+                                                return;
+                                            }
+                                        };
+                                    let (idx64_temp, len64_temp) =
+                                        match ctx.sub_scratch_i64.get(ctx.sub_depth) {
+                                            Some(&p) => p,
+                                            None => {
+                                                debug_assert!(
+                                                    false,
+                                                    "sub_scratch_i64 pool undersized (array store)"
+                                                );
+                                                func.instruction(&Instruction::Unreachable);
+                                                return;
+                                            }
+                                        };
+                                    ctx.sub_depth += 1;
+                                    self.emit_expr(container, ctx, func);
+                                    ctx.sub_depth -= 1;
+                                    func.instruction(&Instruction::LocalSet(arr_temp));
+                                    ctx.sub_depth += 1;
+                                    self.emit_expr(index, ctx, func);
+                                    ctx.sub_depth -= 1;
+                                    let idx_ty = self.expr_type(index, ctx);
+                                    self.emit_index_check_at(
+                                        arr_temp,
+                                        idx_temp,
+                                        idx64_temp,
+                                        len64_temp,
+                                        &idx_ty,
+                                        ARRAY_LEN_OFFSET,
+                                        func,
+                                    );
+                                    func.instruction(&Instruction::If(
+                                        wasm_encoder::BlockType::Empty,
+                                    ));
+                                    self.emit_index_oob(ctx, func);
+                                    func.instruction(&Instruction::Else);
+                                    // Address: ptr + 16 + i*esize.
+                                    func.instruction(&Instruction::LocalGet(arr_temp));
+                                    func.instruction(&Instruction::I32Const(
+                                        ARRAY_ELEM_OFFSET as i32,
+                                    ));
+                                    func.instruction(&Instruction::I32Add);
+                                    func.instruction(&Instruction::LocalGet(idx_temp));
+                                    if esize > 1 {
+                                        func.instruction(&Instruction::I32Const(esize as i32));
+                                        func.instruction(&Instruction::I32Mul);
+                                    }
+                                    func.instruction(&Instruction::I32Add);
+                                    // Value on the compute stack, coerced to the
+                                    // element's scalar compute type, then the
+                                    // width-narrowing WRAP store. The array slot
+                                    // dtype dictates fixed-width WRAP, so the
+                                    // i64 refuse-on-overflow guard is suppressed
+                                    // for the whole RHS (int64 wraps mod-2⁶⁴ at
+                                    // ±2⁶³ rather than raising OverflowError).
+                                    self.suppress_ovf.set(self.suppress_ovf.get() + 1);
+                                    ctx.sub_depth += 1;
+                                    self.emit_expr(value, ctx, func);
+                                    ctx.sub_depth -= 1;
+                                    let val_ty = self.expr_type(value, ctx);
+                                    if val_ty != compute {
+                                        self.emit_convert(&val_ty, &compute, func);
+                                    }
+                                    self.suppress_ovf.set(self.suppress_ovf.get() - 1);
+                                    emit_array_elem_store(dtype, func);
                                     func.instruction(&Instruction::End);
                                 }
                                 WasmType::PtrDict(_, _) => {
@@ -2850,9 +3901,7 @@ impl WasmEmitter {
                     // Coerce to return type if needed
                     let expr_ty = self.expr_type(v, ctx);
                     if let Some(ret_ty) = ctx.return_type.clone() {
-                        if expr_ty != ret_ty {
-                            self.emit_convert(&expr_ty, &ret_ty, func);
-                        }
+                        self.emit_return_coerce(&expr_ty, &ret_ty, func);
                     }
                 }
                 func.instruction(&Instruction::Return);
@@ -2939,11 +3988,17 @@ impl WasmEmitter {
                 else_body,
                 ..
             } => {
-                // range() vs collection iteration
+                // range() vs collection iteration. #491: a user `def range` SHADOWS
+                // the builtin — it is NOT the builtin range loop (admission already
+                // refuses a for-loop over a user-shadowed iterator, so this is
+                // defense-in-depth to never lower a user shadow as builtin range).
                 let is_range = matches!(
                     &iter.kind,
                     ExprKind::Call { func: callee, .. }
-                        if matches!(&callee.kind, ExprKind::Name(n) if n == "range")
+                        if matches!(&callee.kind, ExprKind::Name(n)
+                            if n == "range"
+                                && !self.user_def_names.contains(n.as_str())
+                                && ctx.get_local(n).is_none())
                 );
                 if is_range {
                     self.emit_for_range(target, iter, body, else_body, ctx, func);
@@ -3097,6 +4152,23 @@ impl WasmEmitter {
         idx_ty: &WasmType,
         func: &mut Function,
     ) {
+        self.emit_index_check_at(list_temp, idx_temp, idx64_temp, len64_temp, idx_ty, 0, func);
+    }
+
+    /// The shared normalize+bounds check, parameterized by the byte offset of
+    /// the length header: **0** for a list (`[len:i32][cap:i32][elems…]`) and
+    /// **8** for an M2a-3 array (`[dtype][ndim][shape0:i32]…`, shape0 @ +8).
+    #[allow(clippy::too_many_arguments)]
+    fn emit_index_check_at(
+        &self,
+        list_temp: u32,
+        idx_temp: u32,
+        idx64_temp: u32,
+        len64_temp: u32,
+        idx_ty: &WasmType,
+        len_offset: u32,
+        func: &mut Function,
+    ) {
         // Raw index -> i64 (no narrowing yet).
         if *idx_ty != WasmType::I64 {
             self.emit_convert(idx_ty, &WasmType::I64, func);
@@ -3105,7 +4177,7 @@ impl WasmEmitter {
         // len -> i64 (the length header is a non-negative i32).
         func.instruction(&Instruction::LocalGet(list_temp));
         func.instruction(&Instruction::I32Load(MemArg {
-            offset: 0,
+            offset: len_offset as u64,
             align: 2,
             memory_index: 0,
         }));
@@ -3147,6 +4219,200 @@ impl WasmEmitter {
         } else {
             func.instruction(&Instruction::Unreachable);
         }
+    }
+
+    /// M2b: recognize a 2-D array element access from a subscript's `value` and
+    /// `index` parts, in EITHER admitted form, and return the normalized
+    /// `(array_expr, row_index_expr, col_index_expr, dtype)`:
+    ///   * `a[i, j]` — `value` is a 2-D `PtrArray`, `index` is a 2-tuple; or
+    ///   * `a[i][j]` — `value` is itself a subscript `a[i]` over a 2-D
+    ///     `PtrArray` with a single (non-tuple) inner index, `index` is `j`.
+    ///
+    /// Returns `None` for any 1-D access, a non-2-D container, or a shape read.
+    /// A bare 2-D row (`a[i]` as a value) is refused at admission (G3), so it
+    /// never reaches codegen as a standalone value.
+    fn array_2d_index<'a>(
+        &self,
+        value: &'a Expr,
+        index: &'a Expr,
+        ctx: &FuncContext,
+    ) -> Option<(&'a Expr, &'a Expr, &'a Expr, ArrayDtype)> {
+        // `a[i, j]` — tuple index on a 2-D array.
+        if let ExprKind::Tuple(elts) = &index.kind {
+            if elts.len() == 2 {
+                if let WasmType::PtrArray { dtype, ndim: 2 } = self.expr_type(value, ctx) {
+                    return Some((value, &elts[0], &elts[1], dtype));
+                }
+            }
+            return None;
+        }
+        // `a[i][j]` — nested single-index subscript on a 2-D array.
+        if let ExprKind::Subscript {
+            value: inner_arr,
+            index: i,
+            ..
+        } = &value.kind
+        {
+            if !matches!(i.kind, ExprKind::Tuple(_)) {
+                if let WasmType::PtrArray { dtype, ndim: 2 } = self.expr_type(inner_arr, ctx) {
+                    return Some((inner_arr, i, index, dtype));
+                }
+            }
+        }
+        None
+    }
+
+    /// Emit the two-axis bounds check for a 2-D access: evaluate `arr` → the
+    /// slot's `arr` local; evaluate `i`, negative-normalize + bounds-check
+    /// against shape0 (rows, @+8) → `iidx`; evaluate `j`, likewise against
+    /// shape1 (cols, @+12) → `jidx`; leave the COMBINED out-of-bounds boolean
+    /// (`i_oob | j_oob`) on the stack. Sub-expressions are emitted at
+    /// `sub_depth + 1` so a nested 2-D access takes a different scratch slot.
+    fn emit_array_2d_check(
+        &self,
+        arr: &Expr,
+        i: &Expr,
+        j: &Expr,
+        ctx: &mut FuncContext,
+        func: &mut Function,
+    ) -> [u32; 8] {
+        let slot = match ctx.sub_scratch_2d.get(ctx.sub_depth) {
+            Some(&s) => s,
+            None => {
+                debug_assert!(false, "sub_scratch_2d pool undersized (2-D array access)");
+                func.instruction(&Instruction::Unreachable);
+                [0u32; 8]
+            }
+        };
+        let [arr_t, iidx_t, jidx_t, oob_t, n0, l0, n1, l1] = slot;
+        // arr pointer.
+        ctx.sub_depth += 1;
+        self.emit_expr(arr, ctx, func);
+        ctx.sub_depth -= 1;
+        func.instruction(&Instruction::LocalSet(arr_t));
+        // i axis (rows, shape0 @+8).
+        ctx.sub_depth += 1;
+        self.emit_expr(i, ctx, func);
+        ctx.sub_depth -= 1;
+        let i_ty = self.expr_type(i, ctx);
+        self.emit_index_check_at(arr_t, iidx_t, n0, l0, &i_ty, ARRAY_LEN_OFFSET, func);
+        func.instruction(&Instruction::LocalSet(oob_t));
+        // j axis (cols, shape1 @+12).
+        ctx.sub_depth += 1;
+        self.emit_expr(j, ctx, func);
+        ctx.sub_depth -= 1;
+        let j_ty = self.expr_type(j, ctx);
+        self.emit_index_check_at(arr_t, jidx_t, n1, l1, &j_ty, ARRAY_COLS_OFFSET, func);
+        // combined OOB = i_oob | j_oob.
+        func.instruction(&Instruction::LocalGet(oob_t));
+        func.instruction(&Instruction::I32Or);
+        slot
+    }
+
+    /// Push the in-bounds byte address of a 2-D element onto the stack:
+    /// `arr + 16 + (iidx*ncols + jidx)*esize`, with `ncols = shape1 @+12`
+    /// (row-major, C-contiguous). `iidx`/`jidx` are the narrowed, already
+    /// bounds-checked axis indices from `emit_array_2d_check`.
+    fn emit_array_2d_addr(&self, slot: [u32; 8], dtype: ArrayDtype, func: &mut Function) {
+        let [arr_t, iidx_t, jidx_t, ..] = slot;
+        let esize = dtype.size_bytes();
+        // linear index = iidx*ncols + jidx
+        func.instruction(&Instruction::LocalGet(iidx_t));
+        func.instruction(&Instruction::LocalGet(arr_t));
+        func.instruction(&Instruction::I32Load(MemArg {
+            offset: ARRAY_COLS_OFFSET as u64,
+            align: 2,
+            memory_index: 0,
+        }));
+        func.instruction(&Instruction::I32Mul);
+        func.instruction(&Instruction::LocalGet(jidx_t));
+        func.instruction(&Instruction::I32Add);
+        // byte address = arr + 16 + linear*esize
+        if esize > 1 {
+            func.instruction(&Instruction::I32Const(esize as i32));
+            func.instruction(&Instruction::I32Mul);
+        }
+        func.instruction(&Instruction::LocalGet(arr_t));
+        func.instruction(&Instruction::I32Const(ARRAY_ELEM_OFFSET as i32));
+        func.instruction(&Instruction::I32Add);
+        func.instruction(&Instruction::I32Add);
+    }
+
+    /// Emit a 2-D element LOAD `a[i, j]` / `a[i][j]` onto the i64/f64 compute
+    /// stack (row-major, width-correct, both axes bounds-checked).
+    fn emit_array_2d_load(
+        &self,
+        arr: &Expr,
+        i: &Expr,
+        j: &Expr,
+        dtype: ArrayDtype,
+        ctx: &mut FuncContext,
+        func: &mut Function,
+    ) {
+        let compute = array_elem_compute_type(dtype);
+        let slot = self.emit_array_2d_check(arr, i, j, ctx, func);
+        let result_vt = compute.to_val_type();
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(result_vt)));
+        self.emit_index_oob(ctx, func);
+        if self.needs_errors && ctx.try_depth > 0 {
+            self.emit_sentinel_for(&Some(compute.clone()), func);
+        }
+        func.instruction(&Instruction::Else);
+        self.emit_array_2d_addr(slot, dtype, func);
+        emit_array_elem_load(dtype, func);
+        func.instruction(&Instruction::End);
+    }
+
+    /// Emit a 2-D element STORE `a[i, j] = v` / `a[i][j] = v` (row-major,
+    /// width-narrowing WRAP / f32 demote on store, both axes bounds-checked).
+    #[allow(clippy::too_many_arguments)] // codegen helper: each arg is a distinct lowering input
+    fn emit_array_2d_store(
+        &self,
+        arr: &Expr,
+        i: &Expr,
+        j: &Expr,
+        dtype: ArrayDtype,
+        value: &Expr,
+        ctx: &mut FuncContext,
+        func: &mut Function,
+    ) {
+        let compute = array_elem_compute_type(dtype);
+        let slot = self.emit_array_2d_check(arr, i, j, ctx, func);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        self.emit_index_oob(ctx, func);
+        func.instruction(&Instruction::Else);
+        self.emit_array_2d_addr(slot, dtype, func);
+        // Value on the compute stack (array slots WRAP mod-width, so suppress
+        // the i64 refuse-on-overflow guard for the RHS), then the width store.
+        self.suppress_ovf.set(self.suppress_ovf.get() + 1);
+        ctx.sub_depth += 1;
+        self.emit_expr(value, ctx, func);
+        ctx.sub_depth -= 1;
+        let val_ty = self.expr_type(value, ctx);
+        if val_ty != compute {
+            self.emit_convert(&val_ty, &compute, func);
+        }
+        self.suppress_ovf.set(self.suppress_ovf.get() - 1);
+        emit_array_elem_store(dtype, func);
+        func.instruction(&Instruction::End);
+    }
+
+    /// M2b: emit `a.shape[k]` — the 2-D shape read. `k == 0` → shape0 (rows,
+    /// @+8), `k == 1` → shape1 (cols, @+12). Pushed as an i64 (the compute type
+    /// of a Python int), matching `len(a)`'s `I64ExtendI32S`.
+    fn emit_array_shape(&self, arr: &Expr, k: u32, ctx: &mut FuncContext, func: &mut Function) {
+        let offset = if k == 0 {
+            ARRAY_LEN_OFFSET
+        } else {
+            ARRAY_COLS_OFFSET
+        };
+        self.emit_expr(arr, ctx, func);
+        func.instruction(&Instruction::I32Load(MemArg {
+            offset: offset as u64,
+            align: 2,
+            memory_index: 0,
+        }));
+        func.instruction(&Instruction::I64ExtendI32S);
     }
 
     fn emit_raise_code(&self, code: i32, ctx: &FuncContext, func: &mut Function) {
@@ -3725,6 +4991,28 @@ impl WasmEmitter {
             }
 
             ExprKind::Subscript { value, index, .. } => {
+                // M2b: `<arr>.shape[0|1]` — the 2-D shape read (rows @+8 /
+                // cols @+12). Recognized before the container-type dispatch;
+                // admission (`check_shape_uses`) guarantees a 2-D array base
+                // and a literal 0/1 index.
+                if let ExprKind::Attribute {
+                    value: base, attr, ..
+                } = &value.kind
+                {
+                    if attr == "shape" {
+                        if let (WasmType::PtrArray { .. }, ExprKind::IntLiteral(k)) =
+                            (self.expr_type(base, ctx), &index.kind)
+                        {
+                            self.emit_array_shape(base, *k as u32, ctx, func);
+                            return;
+                        }
+                    }
+                }
+                // M2b: 2-D element load `a[i, j]` / `a[i][j]`.
+                if let Some((arr, i, j, dtype)) = self.array_2d_index(value, index, ctx) {
+                    self.emit_array_2d_load(arr, i, j, dtype, ctx, func);
+                    return;
+                }
                 let val_type = self.expr_type(value, ctx);
                 match &val_type {
                     WasmType::Ptr => {
@@ -3840,6 +5128,75 @@ impl WasmEmitter {
                         }
                         func.instruction(&Instruction::I32Add);
                         self.emit_load_at_offset(elem_ty, 0, func);
+                        func.instruction(&Instruction::End);
+                    }
+                    WasmType::PtrArray { dtype, .. } => {
+                        // M2a-3 array indexing: `a[i]` — load the element at
+                        // ptr + 16 + i*esize (header offset 16; shape0 @ +8),
+                        // width-correct + extended to the i64/f64 compute stack
+                        // (`emit_array_elem_load`). Mirrors the list read path's
+                        // UNCONDITIONAL full-i64 bounds check + Python negative
+                        // normalization, but against shape0 @ +8, not len @ 0.
+                        let dtype = *dtype;
+                        let esize = dtype.size_bytes();
+                        let compute = array_elem_compute_type(dtype);
+                        let (arr_temp, idx_temp) = match ctx.sub_scratch.get(ctx.sub_depth) {
+                            Some(&pair) => pair,
+                            None => {
+                                debug_assert!(false, "array-subscript sub_scratch pool undersized");
+                                func.instruction(&Instruction::Unreachable);
+                                return;
+                            }
+                        };
+                        let (idx64_temp, len64_temp) = match ctx.sub_scratch_i64.get(ctx.sub_depth)
+                        {
+                            Some(&pair) => pair,
+                            None => {
+                                debug_assert!(
+                                    false,
+                                    "array-subscript sub_scratch_i64 pool undersized"
+                                );
+                                func.instruction(&Instruction::Unreachable);
+                                return;
+                            }
+                        };
+                        ctx.sub_depth += 1;
+                        self.emit_expr(value, ctx, func);
+                        ctx.sub_depth -= 1;
+                        func.instruction(&Instruction::LocalSet(arr_temp));
+                        ctx.sub_depth += 1;
+                        self.emit_expr(index, ctx, func);
+                        ctx.sub_depth -= 1;
+                        let idx_ty = self.expr_type(index, ctx);
+                        self.emit_index_check_at(
+                            arr_temp,
+                            idx_temp,
+                            idx64_temp,
+                            len64_temp,
+                            &idx_ty,
+                            ARRAY_LEN_OFFSET,
+                            func,
+                        );
+                        let result_vt = compute.to_val_type();
+                        func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                            result_vt,
+                        )));
+                        self.emit_index_oob(ctx, func);
+                        if self.needs_errors && ctx.try_depth > 0 {
+                            self.emit_sentinel_for(&Some(compute.clone()), func);
+                        }
+                        func.instruction(&Instruction::Else);
+                        // In-bounds address: ptr + 16 + i*esize.
+                        func.instruction(&Instruction::LocalGet(arr_temp));
+                        func.instruction(&Instruction::I32Const(ARRAY_ELEM_OFFSET as i32));
+                        func.instruction(&Instruction::I32Add);
+                        func.instruction(&Instruction::LocalGet(idx_temp));
+                        if esize > 1 {
+                            func.instruction(&Instruction::I32Const(esize as i32));
+                            func.instruction(&Instruction::I32Mul);
+                        }
+                        func.instruction(&Instruction::I32Add);
+                        emit_array_elem_load(dtype, func);
                         func.instruction(&Instruction::End);
                     }
                     WasmType::PtrDict(_, _) => {
@@ -5164,18 +6521,8 @@ impl WasmEmitter {
                 self.emit_comparison_op(left, op, right, ctx, func);
             }
 
-            BinOp::And => {
-                // Logical and: emit as (a != 0) && (b != 0) â†’ i32
-                self.emit_condition(left, ctx, func);
-                self.emit_condition(right, ctx, func);
-                func.instruction(&Instruction::I32And);
-            }
-
-            BinOp::Or => {
-                // Logical or: (a != 0) || (b != 0) â†’ i32
-                self.emit_condition(left, ctx, func);
-                self.emit_condition(right, ctx, func);
-                func.instruction(&Instruction::I32Or);
+            BinOp::And | BinOp::Or => {
+                self.emit_logic(op, left, right, &lt, &rt, ctx, func);
             }
 
             // Standard arithmetic: Add, Sub, Mul
@@ -5214,6 +6561,13 @@ impl WasmEmitter {
             return;
         }
 
+        // #487: list vs list compares CONTENTS (element-wise, then length),
+        // never the linear-memory handles.
+        if let (WasmType::PtrList(ea), WasmType::PtrList(eb)) = (&lt, &rt) {
+            self.emit_list_compare(left, right, op, ea, eb, ctx, func);
+            return;
+        }
+
         let cmp_type = self.arithmetic_op_type(&lt, &rt);
 
         self.emit_expr(left, ctx, func);
@@ -5224,74 +6578,174 @@ impl WasmEmitter {
         if rt != cmp_type {
             self.emit_convert(&rt, &cmp_type, func);
         }
+        self.emit_cmp_instr(op, &cmp_type, func);
+    }
 
-        match cmp_type {
+    /// The comparison instruction for two values of `ty` on the stack.
+    fn emit_cmp_instr(&self, op: BinOp, ty: &WasmType, func: &mut Function) {
+        let ins = match ty {
             WasmType::I64 => match op {
-                BinOp::Eq => {
-                    func.instruction(&Instruction::I64Eq);
-                }
-                BinOp::NotEq => {
-                    func.instruction(&Instruction::I64Ne);
-                }
-                BinOp::Lt => {
-                    func.instruction(&Instruction::I64LtS);
-                }
-                BinOp::LtEq => {
-                    func.instruction(&Instruction::I64LeS);
-                }
-                BinOp::Gt => {
-                    func.instruction(&Instruction::I64GtS);
-                }
-                BinOp::GtEq => {
-                    func.instruction(&Instruction::I64GeS);
-                }
-                _ => {}
+                BinOp::Eq => Instruction::I64Eq,
+                BinOp::NotEq => Instruction::I64Ne,
+                BinOp::Lt => Instruction::I64LtS,
+                BinOp::LtEq => Instruction::I64LeS,
+                BinOp::Gt => Instruction::I64GtS,
+                BinOp::GtEq => Instruction::I64GeS,
+                _ => return,
             },
             WasmType::F64 => match op {
-                BinOp::Eq => {
-                    func.instruction(&Instruction::F64Eq);
-                }
-                BinOp::NotEq => {
-                    func.instruction(&Instruction::F64Ne);
-                }
-                BinOp::Lt => {
-                    func.instruction(&Instruction::F64Lt);
-                }
-                BinOp::LtEq => {
-                    func.instruction(&Instruction::F64Le);
-                }
-                BinOp::Gt => {
-                    func.instruction(&Instruction::F64Gt);
-                }
-                BinOp::GtEq => {
-                    func.instruction(&Instruction::F64Ge);
-                }
-                _ => {}
+                BinOp::Eq => Instruction::F64Eq,
+                BinOp::NotEq => Instruction::F64Ne,
+                BinOp::Lt => Instruction::F64Lt,
+                BinOp::LtEq => Instruction::F64Le,
+                BinOp::Gt => Instruction::F64Gt,
+                BinOp::GtEq => Instruction::F64Ge,
+                _ => return,
             },
             // I32 (bool), Ptr (string), or any collection/closure ptr — all i32 at the
             // WASM level, so use signed i32 comparisons.
             _ => match op {
-                BinOp::Eq => {
-                    func.instruction(&Instruction::I32Eq);
-                }
-                BinOp::NotEq => {
-                    func.instruction(&Instruction::I32Ne);
-                }
-                BinOp::Lt => {
-                    func.instruction(&Instruction::I32LtS);
-                }
-                BinOp::LtEq => {
-                    func.instruction(&Instruction::I32LeS);
-                }
-                BinOp::Gt => {
-                    func.instruction(&Instruction::I32GtS);
-                }
-                BinOp::GtEq => {
-                    func.instruction(&Instruction::I32GeS);
-                }
-                _ => {}
+                BinOp::Eq => Instruction::I32Eq,
+                BinOp::NotEq => Instruction::I32Ne,
+                BinOp::Lt => Instruction::I32LtS,
+                BinOp::LtEq => Instruction::I32LeS,
+                BinOp::Gt => Instruction::I32GtS,
+                BinOp::GtEq => Instruction::I32GeS,
+                _ => return,
             },
+        };
+        func.instruction(&ins);
+    }
+
+    /// #487 (Cluster A): Python list comparison — CPython's sequence ordering
+    /// (the language reference; the JS `pyEq` is the porting source for `==`,
+    /// while the JS ordering arm is itself wrong on NaN, net finding J3): walk
+    /// the common prefix and decide at the FIRST pair of elements that are not
+    /// equal (`==` → false, `!=` → true, an order op → that op on the pair);
+    /// if every common element is equal, the op is decided by the LENGTHS.
+    /// Elements are compared numerically in the pair's join type (bool ⊂ int
+    /// ⊂ float; `[True] == [1]`), so mixed element kinds work; NaN is unequal
+    /// to everything, as for two distinct NaN objects in CPython. Both list
+    /// operands are evaluated BEFORE any scratch is written (nesting-safe).
+    ///
+    ///   block $done (i32)
+    ///     block $exit
+    ///       loop
+    ///         i >= len_a || i >= len_b  → br_if $exit
+    ///         ea = a[i]; eb = b[i];  if ea != eb { <op ea eb>; br $done }
+    ///         i += 1; br loop
+    ///       end
+    ///     end
+    ///     <op len_a len_b>
+    ///   end
+    #[allow(clippy::too_many_arguments)] // codegen helper: each arg is a distinct lowering input
+    fn emit_list_compare(
+        &self,
+        left: &Expr,
+        right: &Expr,
+        op: BinOp,
+        ea_ty: &WasmType,
+        eb_ty: &WasmType,
+        ctx: &mut FuncContext,
+        func: &mut Function,
+    ) {
+        let cmp_ty = self.arithmetic_op_type(ea_ty, eb_ty);
+        let [pa, pb, la, lb, ix] = ctx.lc_i32;
+        let (ta, tb) = ctx.lc_elem[val_kind(&cmp_ty)];
+        let (esa, esb) = (ea_ty.size_bytes(), eb_ty.size_bytes());
+
+        // Evaluate both operands first, then store (nesting-safe by construction).
+        self.emit_expr(left, ctx, func);
+        self.emit_expr(right, ctx, func);
+        func.instruction(&Instruction::LocalSet(pb));
+        func.instruction(&Instruction::LocalSet(pa));
+        // CPython's per-element identity shortcut (`x is y or x == y`) lifted to
+        // the whole list: the SAME list compares reflexively even through NaN
+        // (`fs == fs` is True for `[nan]`; `fs < fs` is False). Opus r1/SF6.
+        let reflexive = matches!(op, BinOp::Eq | BinOp::LtEq | BinOp::GtEq);
+        func.instruction(&Instruction::LocalGet(pa));
+        func.instruction(&Instruction::LocalGet(pb));
+        func.instruction(&Instruction::I32Eq);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+            ValType::I32,
+        )));
+        func.instruction(&Instruction::I32Const(if reflexive { 1 } else { 0 }));
+        func.instruction(&Instruction::Else);
+        for (p, l) in [(pa, la), (pb, lb)] {
+            func.instruction(&Instruction::LocalGet(p));
+            func.instruction(&Instruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&Instruction::LocalSet(l));
         }
+        func.instruction(&Instruction::I32Const(0));
+        func.instruction(&Instruction::LocalSet(ix));
+
+        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Result(
+            ValType::I32,
+        ))); // $done
+        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // $exit
+        func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+        // Exhausted either list → decide by lengths.
+        func.instruction(&Instruction::LocalGet(ix));
+        func.instruction(&Instruction::LocalGet(la));
+        func.instruction(&Instruction::I32GeS);
+        func.instruction(&Instruction::LocalGet(ix));
+        func.instruction(&Instruction::LocalGet(lb));
+        func.instruction(&Instruction::I32GeS);
+        func.instruction(&Instruction::I32Or);
+        func.instruction(&Instruction::BrIf(1)); // → $exit
+                                                 // Load the pair into the join type.
+        for (p, es, ety, t) in [(pa, esa, ea_ty, ta), (pb, esb, eb_ty, tb)] {
+            func.instruction(&Instruction::LocalGet(p));
+            func.instruction(&Instruction::I32Const(8));
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::LocalGet(ix));
+            if es > 1 {
+                func.instruction(&Instruction::I32Const(es as i32));
+                func.instruction(&Instruction::I32Mul);
+            }
+            func.instruction(&Instruction::I32Add);
+            self.emit_load_at_offset(ety, 0, func);
+            self.emit_convert(ety, &cmp_ty, func);
+            func.instruction(&Instruction::LocalSet(t));
+        }
+        // First unequal pair decides.
+        func.instruction(&Instruction::LocalGet(ta));
+        func.instruction(&Instruction::LocalGet(tb));
+        self.emit_cmp_instr(BinOp::Eq, &cmp_ty, func);
+        func.instruction(&Instruction::I32Eqz);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        match op {
+            BinOp::Eq => {
+                func.instruction(&Instruction::I32Const(0));
+            }
+            BinOp::NotEq => {
+                func.instruction(&Instruction::I32Const(1));
+            }
+            _ => {
+                func.instruction(&Instruction::LocalGet(ta));
+                func.instruction(&Instruction::LocalGet(tb));
+                self.emit_cmp_instr(op, &cmp_ty, func);
+            }
+        }
+        func.instruction(&Instruction::Br(3)); // → $done (if=0, loop=1, $exit=2, $done=3)
+        func.instruction(&Instruction::End); // if
+        func.instruction(&Instruction::LocalGet(ix));
+        func.instruction(&Instruction::I32Const(1));
+        func.instruction(&Instruction::I32Add);
+        func.instruction(&Instruction::LocalSet(ix));
+        func.instruction(&Instruction::Br(0)); // loop
+        func.instruction(&Instruction::End); // loop
+        func.instruction(&Instruction::End); // $exit
+                                             // Common prefix equal: the lengths decide.
+        func.instruction(&Instruction::LocalGet(la));
+        func.instruction(&Instruction::LocalGet(lb));
+        self.emit_cmp_instr(op, &WasmType::I32, func);
+        func.instruction(&Instruction::End); // $done
+        func.instruction(&Instruction::End); // identity if/else
     }
 
     fn emit_unaryop(
@@ -5344,21 +6798,13 @@ impl WasmEmitter {
                 // Positive is identity
                 self.emit_expr(operand, ctx, func);
             }
-            UnaryOp::Not => match ot {
-                WasmType::I64 => {
-                    self.emit_expr(operand, ctx, func);
-                    func.instruction(&Instruction::I64Eqz);
-                }
-                WasmType::F64 => {
-                    self.emit_expr(operand, ctx, func);
-                    func.instruction(&Instruction::F64Const(0.0));
-                    func.instruction(&Instruction::F64Eq);
-                }
-                _ => {
-                    self.emit_expr(operand, ctx, func);
-                    func.instruction(&Instruction::I32Eqz);
-                }
-            },
+            UnaryOp::Not => {
+                // `not x` = `not bool(x)` — through the one truthiness
+                // authority (a list operand is a length test, #487).
+                self.emit_expr(operand, ctx, func);
+                self.emit_truthiness(&ot, func);
+                func.instruction(&Instruction::I32Eqz);
+            }
             UnaryOp::BitNot => {
                 match ot {
                     WasmType::I64 => {
@@ -5380,6 +6826,85 @@ impl WasmEmitter {
         }
     }
 
+    /// #485 (Cluster A): `a and b` / `a or b` with Python semantics — the
+    /// RIGHT operand is evaluated only when the left does not decide (short-
+    /// circuit: `while j < n and xs[j] > 0` must not read `xs[n]`), and the
+    /// expression yields the DECIDING OPERAND, not its truth value (`3 and 5`
+    /// is `5`). This is the port of the JS backend's `pyAnd(a, () => b)`
+    /// contract (#273): `a` is evaluated once into a scratch slot, its Python
+    /// truthiness selects the arm, the untaken arm is never emitted-into.
+    ///
+    ///   and:  tee tmp; truth; if (T) { b } else { tmp }
+    ///   or:   tee tmp; truth; if (T) { tmp } else { b }
+    ///
+    /// `T` = `logic_join(lt, rt)` (value mode). With no join (list vs scalar)
+    /// the expression lowers to its truth value (i32) — still short-circuited.
+    #[allow(clippy::too_many_arguments)] // codegen helper: each arg is a distinct lowering input
+    fn emit_logic(
+        &self,
+        op: BinOp,
+        left: &Expr,
+        right: &Expr,
+        lt: &WasmType,
+        rt: &WasmType,
+        ctx: &mut FuncContext,
+        func: &mut Function,
+    ) {
+        let is_and = op == BinOp::And;
+        match logic_join(lt, rt) {
+            Some(t) => {
+                let tmp = ctx.lg_tmp[val_kind(&t)];
+                self.emit_expr(left, ctx, func);
+                self.emit_convert(lt, &t, func);
+                func.instruction(&Instruction::LocalTee(tmp));
+                self.emit_truthiness(&t, func);
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                    t.to_val_type(),
+                )));
+                if is_and {
+                    self.emit_expr(right, ctx, func);
+                    self.emit_convert(rt, &t, func);
+                    func.instruction(&Instruction::Else);
+                    func.instruction(&Instruction::LocalGet(tmp));
+                } else {
+                    func.instruction(&Instruction::LocalGet(tmp));
+                    func.instruction(&Instruction::Else);
+                    self.emit_expr(right, ctx, func);
+                    self.emit_convert(rt, &t, func);
+                }
+                func.instruction(&Instruction::End);
+            }
+            None => {
+                // Truth mode (no representable join): i32 result, lazy right.
+                let tmp = ctx.lg_tmp[0];
+                self.emit_condition(left, ctx, func);
+                func.instruction(&Instruction::LocalTee(tmp));
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                    ValType::I32,
+                )));
+                if is_and {
+                    self.emit_condition(right, ctx, func);
+                    func.instruction(&Instruction::Else);
+                    func.instruction(&Instruction::LocalGet(tmp));
+                } else {
+                    func.instruction(&Instruction::LocalGet(tmp));
+                    func.instruction(&Instruction::Else);
+                    self.emit_condition(right, ctx, func);
+                }
+                func.instruction(&Instruction::End);
+            }
+        }
+    }
+
+    /// Chained comparison `a < b < c …` with Python semantics (the JS
+    /// backend's `emit_comparison_chain` contract): every operand is evaluated
+    /// AT MOST ONCE, left to right, and the chain short-circuits — `c` is not
+    /// evaluated when `a < b` is false (`i < n < xs[i]` must not read `xs[i]`
+    /// once `i < n` fails). A link whose right operand is non-trivial captures
+    /// BOTH operands into the chain slots (both are evaluated before either is
+    /// stored, so an operand containing a chain cannot clobber them), then
+    /// compares the captures; the captured right operand is the next link's
+    /// left. Trivial operands (names / literals) are re-emitted, as in JS.
     fn emit_compare(
         &self,
         left: &Expr,
@@ -5387,32 +6912,67 @@ impl WasmEmitter {
         ctx: &mut FuncContext,
         func: &mut Function,
     ) {
+        let (op, right) = &comparisons[0];
         if comparisons.len() == 1 {
-            let (op, right) = &comparisons[0];
             self.emit_comparison_op(left, *op, right, ctx, func);
-        } else {
-            // Chained comparison: a < b < c â†’ (a < b) && (b < c)
-            // For simplicity, emit each pair and AND them together
-            let (first_op, first_right) = &comparisons[0];
-            self.emit_comparison_op(left, *first_op, first_right, ctx, func);
-
-            let mut prev_right = first_right;
-            for (op, right) in &comparisons[1..] {
-                self.emit_comparison_op(prev_right, *op, right, ctx, func);
-                func.instruction(&Instruction::I32And);
-                prev_right = right;
-            }
+            return;
         }
+        let (l_expr, r_expr) = if chain_operand_trivial(right) {
+            (left.clone(), right.clone())
+        } else {
+            let lt = self.expr_type(left, ctx);
+            let rt = self.expr_type(right, ctx);
+            self.emit_expr(left, ctx, func);
+            self.emit_expr(right, ctx, func);
+            let r_name = ctx.chain_slot("r", &rt);
+            let l_name = ctx.chain_slot("l", &lt);
+            let (r_idx, _) = ctx.get_local(&r_name).expect("chain slot");
+            let (l_idx, _) = ctx.get_local(&l_name).expect("chain slot");
+            func.instruction(&Instruction::LocalSet(r_idx));
+            func.instruction(&Instruction::LocalSet(l_idx));
+            (
+                Expr::new(ExprKind::Name(l_name), left.span),
+                Expr::new(ExprKind::Name(r_name), right.span),
+            )
+        };
+        self.emit_comparison_op(&l_expr, *op, &r_expr, ctx, func);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+            ValType::I32,
+        )));
+        self.emit_compare(&r_expr, &comparisons[1..], ctx, func);
+        func.instruction(&Instruction::Else);
+        func.instruction(&Instruction::I32Const(0));
+        func.instruction(&Instruction::End);
     }
 
     fn emit_call(&self, callee: &Expr, args: &[Expr], ctx: &mut FuncContext, func: &mut Function) {
         if let ExprKind::Name(name) = &callee.kind {
+            // #491 / #420 name-binding soundness: a user `def` SHADOWS the builtin of
+            // the same name (CPython semantics), so a user-defined binding
+            // (`func_indices`) MUST be resolved BEFORE the builtin lowering. Without
+            // this guard, `def abs(x, y): ...` followed by `abs(a, b)` silently lowered
+            // to the builtin `abs` — dropping the second arg and returning a SILENT
+            // WRONG VALUE. Guarding every builtin arm with `!user_shadow` routes a
+            // shadowed name to the `_` arm below, which is the single authority that
+            // emits the direct user-function call. (A local closure that shadows a
+            // builtin cannot reach here on the WASM backend: a lambda-binding function
+            // is refused admission, so `func_indices` is the whole class here.)
+            // Keyed on the FULL user-def set (not just eligible `func_indices`): a
+            // user shadow must skip EVERY builtin arm AND the math-alias lookup below,
+            // routing to the direct user-function call (the single authority).
+            // #491 (S1): a function-LOCAL binding of the name (param / local) wins
+            // over every builtin arm too — admission refuses the special-name case
+            // (`local_shadow_call`), so this is defense in depth: a local closure
+            // reaches the `call_indirect` arm below, a scalar local emits nothing
+            // (invalid module, caught at build), never the builtin's value.
+            let user_shadow =
+                self.user_def_names.contains(name.as_str()) || ctx.get_local(name).is_some();
             match name.as_str() {
                 // Livermore finding (2026-07-10): int()/float() numeric
                 // conversions. int(f64) truncates toward zero (Python
                 // semantics) via saturating trunc; float(i64) converts.
                 // Already-target-typed args are a no-op.
-                "int" => {
+                "int" if !user_shadow => {
                     assert!(!args.is_empty());
                     let arg = &args[0];
                     let at = self.expr_type(arg, ctx);
@@ -5427,7 +6987,7 @@ impl WasmEmitter {
                         _ => {}
                     }
                 }
-                "float" => {
+                "float" if !user_shadow => {
                     assert!(!args.is_empty());
                     let arg = &args[0];
                     let at = self.expr_type(arg, ctx);
@@ -5442,7 +7002,7 @@ impl WasmEmitter {
                         _ => {}
                     }
                 }
-                "abs" => {
+                "abs" if !user_shadow => {
                     assert!(!args.is_empty());
                     let arg = &args[0];
                     let at = self.expr_type(arg, ctx);
@@ -5484,7 +7044,7 @@ impl WasmEmitter {
                         }
                     }
                 }
-                "min" => {
+                "min" if !user_shadow => {
                     assert!(args.len() == 2);
                     let a_type = self.expr_type(&args[0], ctx);
                     let b_type = self.expr_type(&args[1], ctx);
@@ -5522,7 +7082,7 @@ impl WasmEmitter {
                         func.instruction(&Instruction::Select);
                     }
                 }
-                "max" => {
+                "max" if !user_shadow => {
                     assert!(args.len() == 2);
                     let a_type = self.expr_type(&args[0], ctx);
                     let b_type = self.expr_type(&args[1], ctx);
@@ -5557,7 +7117,7 @@ impl WasmEmitter {
                         func.instruction(&Instruction::Select);
                     }
                 }
-                "len" => {
+                "len" if !user_shadow => {
                     if !args.is_empty() {
                         let arg = &args[0];
                         let at = self.expr_type(arg, ctx);
@@ -5577,6 +7137,17 @@ impl WasmEmitter {
                                 self.emit_expr(arg, ctx, func);
                                 func.instruction(&Instruction::I32Load(MemArg {
                                     offset: 0,
+                                    align: 2,
+                                    memory_index: 0,
+                                }));
+                                func.instruction(&Instruction::I64ExtendI32S);
+                            }
+                            WasmType::PtrArray { .. } => {
+                                // M2a-3 array len: shape0 is at header offset 8
+                                // (dtype @0, ndim @4, shape0 @8), not offset 0.
+                                self.emit_expr(arg, ctx, func);
+                                func.instruction(&Instruction::I32Load(MemArg {
+                                    offset: ARRAY_LEN_OFFSET as u64,
                                     align: 2,
                                     memory_index: 0,
                                 }));
@@ -5605,24 +7176,30 @@ impl WasmEmitter {
                         }
                     }
                 }
-                "range" => {
+                "range" if !user_shadow => {
                     // range() shouldn't be called as an expression in WASM context
                     // (it's only valid in for loops, which are handled separately)
                     func.instruction(&Instruction::I64Const(0));
                 }
                 // Tier 6 HoF builtins. Each iterates a list and calls a
                 // closure via `call_indirect`.
-                "map" => self.emit_map(args, ctx, func),
-                "filter" => self.emit_filter(args, ctx, func),
-                "reduce" => self.emit_reduce(args, ctx, func),
-                "sorted" => self.emit_sorted(args, ctx, func),
+                "map" if !user_shadow => self.emit_map(args, ctx, func),
+                "filter" if !user_shadow => self.emit_filter(args, ctx, func),
+                "reduce" if !user_shadow => self.emit_reduce(args, ctx, func),
+                "sorted" if !user_shadow => self.emit_sorted(args, ctx, func),
                 _ => {
                     // Bare math call: `sqrt(x)` bound via `from math import sqrt`.
                     // Dispatch identically to the `math.sqrt(x)` attribute form —
-                    // coerce each arg to f64 and call the registered import. A
-                    // user function never shadows a math alias here (the alias map
-                    // is only populated when the name was imported from math).
-                    if let Some(canonical) = self.math_aliases.get(name).cloned() {
+                    // coerce each arg to f64 and call the registered import.
+                    // #491: a user `def` of the same name SHADOWS the math alias
+                    // (`from math import sqrt as abs` then `def abs(x, y): ...` must
+                    // call the user fn, not sqrt) — so the alias lookup is guarded by
+                    // `!user_shadow`, letting a shadowed name fall to the direct
+                    // user-function call below (CPython precedence: later def wins).
+                    if let Some(canonical) = (!user_shadow)
+                        .then(|| self.math_aliases.get(name).cloned())
+                        .flatten()
+                    {
                         if let Some(arity) = math_function_arity(&canonical) {
                             for i in 0..arity as usize {
                                 if i < args.len() {
@@ -5923,21 +7500,75 @@ impl WasmEmitter {
     fn emit_condition(&self, expr: &Expr, ctx: &mut FuncContext, func: &mut Function) {
         let ty = self.expr_type(expr, ctx);
         self.emit_expr(expr, ctx, func);
+        self.emit_truthiness(&ty, func);
+    }
 
+    /// THE truthiness authority (#487, Cluster A): turn the value of type `ty`
+    /// on top of the stack into its Python `bool()` as an i32 — the one place
+    /// every condition (`if` / `while` / `assert` / `IfExp` test / `not` /
+    /// `and` / `or` / `-> bool` coercion) lowers through. Mirrors the shipped
+    /// `pyBool` (Lean `pyBoolM`): numeric zero is false (NaN is TRUE: `NaN !=
+    /// 0`), a list / str is true iff its length is non-zero (the `[len:i32]`
+    /// header at offset 0 — previously a list handle was tested as a raw
+    /// non-null pointer, i.e. always true, and a list param in `if` was
+    /// constant). Other pointer kinds keep the non-null convention (they are
+    /// not admitted to WASM).
+    fn emit_truthiness(&self, ty: &WasmType, func: &mut Function) {
         match ty {
             WasmType::I64 => {
-                // i64 → i32 condition: x != 0
                 func.instruction(&Instruction::I64Const(0));
                 func.instruction(&Instruction::I64Ne);
             }
             WasmType::F64 => {
-                // f64 → i32 condition: x != 0.0
                 func.instruction(&Instruction::F64Const(0.0));
                 func.instruction(&Instruction::F64Ne);
             }
-            // I32 (bool), Ptr (str), or any collection/closure ptr — already i32,
-            // and the truthiness convention is "non-null/non-zero".
-            _ => {}
+            WasmType::PtrList(_) | WasmType::Ptr => {
+                func.instruction(&Instruction::I32Load(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                func.instruction(&Instruction::I32Const(0));
+                func.instruction(&Instruction::I32Ne);
+            }
+            // Statically shaped: a tuple is truthy iff it has elements.
+            WasmType::PtrTuple(elts) => {
+                func.instruction(&Instruction::Drop);
+                func.instruction(&Instruction::I32Const(if elts.is_empty() { 0 } else { 1 }));
+            }
+            // A function object is always truthy.
+            WasmType::PtrClosure { .. } => {
+                func.instruction(&Instruction::Drop);
+                func.instruction(&Instruction::I32Const(1));
+            }
+            // A dict handle: its JS-side size when the import is registered
+            // (it is whenever a dict is built in the module); otherwise the
+            // handle can only be tested non-null (dicts are not admitted).
+            WasmType::PtrDict(_, _) => {
+                if let Some(&idx) = self.import_indices.get("__dict_len") {
+                    func.instruction(&Instruction::Call(idx));
+                    func.instruction(&Instruction::I32Const(0));
+                    func.instruction(&Instruction::I32Ne);
+                }
+            }
+            WasmType::I32 => {}
+            // M2a-3: an array value is an i32 pointer into linear memory — its
+            // truthiness is a non-null test, exactly like the other pointer
+            // reps (`if arr:` is true for any admitted buffer, which always has
+            // a non-zero base). `bool(len(arr))` is the Pythonic emptiness
+            // check and lowers through the `len` path above. F32 never reaches
+            // truthiness under option (b) (an f32 element promotes to f64 on
+            // load, so a value on the compute stack is F64, never F32); handle
+            // it as `f32 != 0` for totality rather than panicking.
+            WasmType::PtrArray { .. } => {
+                func.instruction(&Instruction::I32Const(0));
+                func.instruction(&Instruction::I32Ne);
+            }
+            WasmType::F32 => {
+                func.instruction(&Instruction::F32Const(0.0));
+                func.instruction(&Instruction::F32Ne);
+            }
         }
     }
 
@@ -6030,9 +7661,13 @@ impl WasmEmitter {
                     | BinOp::Lt
                     | BinOp::LtEq
                     | BinOp::Gt
-                    | BinOp::GtEq
-                    | BinOp::And
-                    | BinOp::Or => WasmType::I32,
+                    | BinOp::GtEq => WasmType::I32,
+                    // #485: the deciding operand's type (join), not a bool.
+                    BinOp::And | BinOp::Or => {
+                        let lt = self.expr_type(left, ctx);
+                        let rt = self.expr_type(right, ctx);
+                        logic_result_type(&lt, &rt)
+                    }
                     BinOp::FloorDiv => {
                         let lt = self.expr_type(left, ctx);
                         let rt = self.expr_type(right, ctx);
@@ -6100,22 +7735,28 @@ impl WasmEmitter {
                 func: callee, args, ..
             } => {
                 if let ExprKind::Name(name) = &callee.kind {
+                    // #491 name-binding soundness: a user `def` shadows the builtin (and
+                    // any math-import alias), so a shadowed name's return type comes from
+                    // the user function (the `_` arm), not the builtin's assumed type.
+                    // Keyed on the FULL user-def set + a ctx local (mirrors emit_call).
+                    let user_shadow = self.user_def_names.contains(name.as_str())
+                        || ctx.get_local(name).is_some();
                     match name.as_str() {
                         // Livermore finding (2026-07-10): int()/float()
                         // numeric conversions (previously unhandled — the
                         // call emitted NOTHING, underflowing the operand
                         // stack; k13/k14 int-from-float indexing).
-                        "int" => WasmType::I64,
-                        "float" => WasmType::F64,
-                        "abs" => {
+                        "int" if !user_shadow => WasmType::I64,
+                        "float" if !user_shadow => WasmType::F64,
+                        "abs" if !user_shadow => {
                             if !args.is_empty() {
                                 self.expr_type(&args[0], ctx)
                             } else {
                                 WasmType::I64
                             }
                         }
-                        "len" => WasmType::I64,
-                        "min" | "max" => {
+                        "len" if !user_shadow => WasmType::I64,
+                        "min" | "max" if !user_shadow => {
                             if args.len() == 2 {
                                 let a = self.expr_type(&args[0], ctx);
                                 let b = self.expr_type(&args[1], ctx);
@@ -6125,7 +7766,7 @@ impl WasmEmitter {
                             }
                         }
                         // Tier 6 HoF return-type inference.
-                        "map" => {
+                        "map" if !user_shadow => {
                             let elem = if let Some(fn_arg) = args.first() {
                                 if let WasmType::PtrClosure { ret, .. } =
                                     self.expr_type(fn_arg, ctx)
@@ -6139,7 +7780,7 @@ impl WasmEmitter {
                             };
                             WasmType::PtrList(Box::new(elem))
                         }
-                        "filter" | "sorted" => {
+                        "filter" | "sorted" if !user_shadow => {
                             let lst_arg_idx = if name == "filter" { 1 } else { 0 };
                             let elem = if let Some(lst_arg) = args.get(lst_arg_idx) {
                                 if let WasmType::PtrList(inner) = self.expr_type(lst_arg, ctx) {
@@ -6152,7 +7793,7 @@ impl WasmEmitter {
                             };
                             WasmType::PtrList(Box::new(elem))
                         }
-                        "reduce" => {
+                        "reduce" if !user_shadow => {
                             if let Some(init) = args.get(2) {
                                 self.expr_type(init, ctx)
                             } else {
@@ -6161,8 +7802,10 @@ impl WasmEmitter {
                         }
                         _ => {
                             // Bare math call (`sqrt(...)` via `from math import`)
-                            // always returns f64.
-                            if self.math_aliases.contains_key(name) {
+                            // always returns f64. #491: a user `def` shadows the math
+                            // alias — consult the user function's return type FIRST for
+                            // a user shadow, before the math-alias f64 assumption.
+                            if !user_shadow && self.math_aliases.contains_key(name) {
                                 WasmType::F64
                             } else if let Some(info) = self.func_info.get(name.as_str()) {
                                 to_wasm_type(&info.return_type).unwrap_or(WasmType::I64)
@@ -6219,6 +7862,26 @@ impl WasmEmitter {
                     WasmType::PtrList(elem_ty) => (**elem_ty).clone(),
                     // Dict: value type from dict signature.
                     WasmType::PtrDict(_, v_ty) => (**v_ty).clone(),
+                    // M2a-3/M2b array indexing. For a 1-D array, or a 2-D array
+                    // indexed by a 2-tuple (`a[i, j]`), a subscript yields the
+                    // SCALAR element compute type (f64 for float dtypes, i64 for
+                    // int dtypes — sign/zero extended). For a 2-D array indexed
+                    // by a SINGLE index (`a[i]`), the result is a conceptual
+                    // 1-D ROW (`PtrArray{ndim:1}`) — the inner half of `a[i][j]`
+                    // (a bare row bound to a value is refused at admission, G3),
+                    // so the OUTER `[j]` on that row yields the element. The
+                    // dtype width and WRAP-on-store are handled by the dedicated
+                    // `PtrArray` load/store branches.
+                    WasmType::PtrArray { dtype, ndim } => {
+                        if *ndim == 2 && !matches!(index.kind, ExprKind::Tuple(_)) {
+                            WasmType::PtrArray {
+                                dtype: *dtype,
+                                ndim: 1,
+                            }
+                        } else {
+                            array_elem_compute_type(*dtype)
+                        }
+                    }
                     _ => WasmType::I64,
                 }
             }
@@ -6267,6 +7930,11 @@ impl WasmEmitter {
             (WasmType::F64, WasmType::I64) => {
                 func.instruction(&Instruction::I64TruncF64S);
             }
+            // NOT a bool coercion: a `list[bool]` element store, a `x: bool =
+            // v` annotated assign and a list-literal element keep the
+            // representation CPython keeps (the int itself: `buf = [True, 7];
+            // buf[1] == 7`); only the `-> bool` RETURN boundary coerces
+            // (`emit_return_coerce`, opus r1/B1).
             (WasmType::F64, WasmType::I32) => {
                 func.instruction(&Instruction::I32TruncF64S);
             }
@@ -6281,8 +7949,33 @@ impl WasmEmitter {
         self.emit_convert(&from, &to, func);
     }
 
-    /// #358: set the `__ovf` exactness flag.
+    /// Coerce a value of type `from` to the function's declared return type.
+    /// The `-> bool` boundary is the ONE place a numeric value becomes a bool
+    /// (the glue then surfaces `Boolean(raw)`): Python's `bool(v)` is a truth
+    /// test, never a wrap (`2**32` wrapped to 0 = False). Every other I32
+    /// target (a `list[bool]` element, `x: bool = v`) keeps the raw value the
+    /// way CPython keeps the int itself (opus r1/B1 witnesses).
+    fn emit_return_coerce(&self, from: &WasmType, ret: &WasmType, func: &mut Function) {
+        if from == ret {
+            return;
+        }
+        if *ret == WasmType::I32
+            && (matches!(from, WasmType::I64 | WasmType::F64) || from.is_any_ptr())
+        {
+            self.emit_truthiness(from, func);
+        } else {
+            self.emit_convert(from, ret, func);
+        }
+    }
+
+    /// #358: set the `__ovf` exactness flag. **M2a-3:** a no-op while
+    /// `suppress_ovf` is active — the value is destined for a fixed-width array
+    /// element slot whose dtype dictates WRAP (the checked op still left its
+    /// wrapping i64 result on the stack; only the refuse-flag is skipped).
     fn emit_set_ovf(&self, func: &mut Function) {
+        if self.suppress_ovf.get() > 0 {
+            return;
+        }
         func.instruction(&Instruction::I32Const(1));
         func.instruction(&Instruction::GlobalSet(self.ovf_global_idx));
     }

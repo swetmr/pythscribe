@@ -1,0 +1,13 @@
+@wasm
+def rms_gain(xs: list[float], target: float) -> float:
+    acc = 0.0
+    n = 0
+    for x in xs:
+        acc = acc + x * x
+        n = n + 1
+    if n == 0:
+        return 1.0
+    rms = (acc / n) ** 0.5
+    if rms == 0.0:
+        return 1.0
+    return target / rms

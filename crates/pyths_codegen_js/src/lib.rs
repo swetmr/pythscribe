@@ -1,4 +1,5 @@
 pub mod builtins;
+mod captured_global_rename;
 pub mod cert;
 pub mod css_properties;
 pub mod dts;

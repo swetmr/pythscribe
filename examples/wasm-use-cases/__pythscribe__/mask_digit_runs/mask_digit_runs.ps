@@ -1,0 +1,33 @@
+@wasm
+def mask_digit_runs(codes: list[int], min_run: int, out: list[int]) -> int:
+    n = len(codes)
+    masked = 0
+    i = 0
+    while i < n:
+        c = codes[i]
+        if c >= 48 and c <= 57:
+            j = i
+            more = 1
+            # NOT `while j < n and codes[j] ...`: pyths 0.2.4 evaluates BOTH operands of `and`
+            # in the WASM backend (no short-circuit), so `codes[n]` would trap where CPython
+            # never reads it -- upstream reproducer in pythscribe/review/2026-09-03-upstream-*.md
+            while more == 1:
+                if j < n:
+                    if codes[j] >= 48 and codes[j] <= 57:
+                        j = j + 1
+                    else:
+                        more = 0
+                else:
+                    more = 0
+            if j - i >= min_run:
+                for k in range(i, j):
+                    out[k] = 42
+                masked = masked + (j - i)
+            else:
+                for k in range(i, j):
+                    out[k] = codes[k]
+            i = j
+        else:
+            out[i] = c
+            i = i + 1
+    return masked

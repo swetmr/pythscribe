@@ -1,0 +1,26 @@
+@wasm
+def viterbi(logp: list[float], trans: list[float], emit: list[float], n_states: int, n_steps: int, score: list[float], back: list[int], path: list[int]) -> float:
+    for s in range(n_states):
+        score[s] = logp[s] + emit[s]
+    for t in range(1, n_steps):
+        for s in range(n_states):
+            best = -1e300
+            arg = 0
+            for r in range(n_states):
+                v = score[(t - 1) * n_states + r] + trans[r * n_states + s]
+                if v > best:
+                    best = v
+                    arg = r
+            score[t * n_states + s] = best + emit[t * n_states + s]
+            back[t * n_states + s] = arg
+    best = -1e300
+    arg = 0
+    for s in range(n_states):
+        if score[(n_steps - 1) * n_states + s] > best:
+            best = score[(n_steps - 1) * n_states + s]
+            arg = s
+    path[n_steps - 1] = arg
+    for t in range(n_steps - 1, 0, -1):
+        arg = back[t * n_states + arg]
+        path[t - 1] = arg
+    return best

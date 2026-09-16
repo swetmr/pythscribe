@@ -22,6 +22,22 @@ Both run `#print axioms` in the REAL Lean environment via `lake env lean`, so
 this binds to the built kernel state, not to prose. Python-for-tooling per the
 repo rule; shells out only to lake/lean.
 
+SCOPE (read this before trusting the assurance it prints): this gate is
+PythExpandVerify-HEADLINE-scoped — it audits the Paper-C headline claims (+ their
+refuter witnesses) that live in PythExpandVerify's import closure, and it drives
+the formalization.yaml manifest. It is NOT the whole-tree trust base. The
+WHOLE-TREE, bypass-immune authority — every declaration across ALL
+verification/*.lean (the sibling proof modules Union7/Union8/C1C3C4Outcome/
+RoutingSoundness/RpcBoundary/C2TypeRepr/C8HostInterop/EffectOrder/
+InternalConsistency/JsWasmMirror + the generated *Data modules + Main), asserted
+from the kernel via `Lean.collectAxioms` — is `comparator/whole_tree_axiom_gate.py`
+(the `axiomgate` exe, verification/AxiomGate.lean). The `scan_escape_hatches`
+regex below is now only defense-in-depth: the kernel-level whole-tree gate, not a
+grep, is what actually guarantees the trust base (a grep cannot see `private
+axiom`, `@[simp] axiom`, tab-`axiom`, term-level `sorryAx`, `ofReduceBool`, or
+`unsafe`/`partial` reliably; the whole-tree gate does, because it reads the
+environment).
+
 Usage (from verification/):
     python comparator/axiom_footprint.py gate      # CI gate (exit nonzero on violation)
     python comparator/axiom_footprint.py emit       # (re)write formalization.yaml
@@ -69,15 +85,28 @@ def count_theorems_lemmas():
     return sum(1 for ln in txt if re.match(r"^\s*(theorem|lemma)\s", ln))
 
 
-def scan_escape_hatches():
-    """Return list of (file, lineno, text) for any sorry/admit/axiom/native_decide.
+# Gate INFRASTRUCTURE modules (not shipping proofs): their prose legitimately
+# discusses `sorry`/`axiom`/`native_decide`/`unsafe` as subject matter, so the
+# keyword scan must skip them (the whole-tree kernel gate — AxiomGate — is the
+# authority for the trust base; this scan is defense-in-depth over the SHIPPING
+# modules only). Mirrors whole_tree_axiom_gate.py's INFRA_MODULES.
+INFRA_LEAN = {"AxiomGate.lean"}
 
-    Scans EVERY `verification/*.lean` (not just PythExpandVerify.lean) — the fable
-    F-6 fix: a sorry hidden in a sibling `.lean` (e.g. a generated *Data.lean or a
-    future module) must not slip past the trust-base audit. Ignores comment-only
-    lines (mirrors the CI grep's intent)."""
+
+def scan_escape_hatches():
+    """Return list of (file, lineno, text) for any sorry/admit/axiom/native_decide
+    in a SHIPPING `verification/*.lean` (excludes gate infrastructure).
+
+    Scans EVERY shipping `verification/*.lean` (not just PythExpandVerify.lean) — the
+    fable F-6 fix: a sorry hidden in a sibling `.lean` (e.g. a generated *Data.lean or
+    a future module) must not slip past the trust-base audit. Ignores comment-only
+    lines (mirrors the CI grep's intent). NB this is a keyword scan and is NOT the
+    trust-base authority — the kernel-level whole-tree gate is; a decl-inside-a-block
+    -comment is not distinguished here, which is why infra prose is excluded by name."""
     hits = []
     for lean in sorted(VERIF.glob("*.lean")):
+        if lean.name in INFRA_LEAN:
+            continue
         for i, line in enumerate(lean.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.lstrip()
             if stripped.startswith("--"):
@@ -275,10 +304,11 @@ def cmd_emit(do_build=True, out_path=None):
     cc = "Classical.choice" in union
     lines.append(f"  uses_classical_choice: {str(cc).lower()}   # inherited from Lean core `String` (String.length/ofList), not our own")
     lines.append("  enforcement:")
-    lines.append("    - '`python comparator/axiom_footprint.py gate` (CI verification job) — asserts every headline decl axioms subset pinned + 0 sorry'")
-    lines.append("    - '`#guard_msgs`-pinned `#print axioms` assertions inside PythExpandVerify.lean (per-decl, build-enforced)'")
-    lines.append("    - '`lake build` + the CI trust-base grep (no sorry/admit/axiom/native_decide)'")
-    lines.append("    - 'comparator/run_comparator.sh — export (lean4export) + independent re-check (nanoda) when wired; see comparator.md'")
+    lines.append("    - '`python comparator/whole_tree_axiom_gate.py gate` (CI verification job) — the WHOLE-TREE kernel gate: kernel-replays (Environment.replay) every decl across ALL verification/*.lean, and asserts axiom footprint subset pinned, no user-declared axiom, no unsafe, imports subset Init-union-covered (partial/implemented_by/extern inventoried) (via Lean.collectAxioms; immune to grep bypasses)'")
+    lines.append("    - '`python comparator/whole_tree_axiom_gate.py selftest` — paired negative-control mutation drill: each hard bypass form (private/@[simp] axiom, sorryAx, native_decide, unsafe) + a planted partial (inventoried) + an uncovered shipping module provably turns the gate RED/reports, clean tree PASSES'")
+    lines.append("    - '`python comparator/axiom_footprint.py gate` (CI verification job) — per-HEADLINE subset gate: every PythExpandVerify headline decl (+ witness) axioms subset pinned + 0 sorry; drives this manifest'")
+    lines.append("    - '`#guard_msgs`-pinned `#print axioms` assertions inside the .lean modules (per-decl, build-enforced)'")
+    lines.append("    - 'comparator/run_comparator.sh — export (lean4export) + independent re-check (nanoda) of PythExpandVerify when wired; see comparator.md'")
     lines.append("")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")

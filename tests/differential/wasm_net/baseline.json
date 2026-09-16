@@ -1,0 +1,8261 @@
+{
+ "_note": "Known-RED rows after chunk 1 (M-NET + M-A1 + M-A2, 2026-09-03; base 677ddc6f had 129). Tags: #NNN = tracked issue; NEW-Wn = new WASM-backend finding; NEW-Jn = JS-backend (reference-arm) finding. This list only SHRINKS: a fix removes its rows in the same change.",
+ "rows": 401,
+ "calls": 15063,
+ "state": {
+  "binop_int_int::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "binop_int_int::op_add": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 12,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 19,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_mul": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 60,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_truediv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 16
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 16
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_int_int::op_floordiv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 1,
+     "gaps": 16,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_mod": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 16,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_pow": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 5
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 5
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 12,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "JS backend: `int ** negative-int` returns an int where CPython promotes to float (`1 ** -1` -> JS int 1 vs CPython float 1.0; `-1 ** -1`). WASM direct arm is correct: it flags overflow and defers to the exact JS twin (ovf->twin), so the admitted path matches. A JS-backend `**` float-promotion fidelity gap surfaced by the r5 negative-exponent corpus; OUT of Cluster-A / #485/#487 scope (candidate for a separate JS-backend issue)."
+  },
+  "binop_int_int::op_bitand": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_bitor": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_bitxor": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_shl": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 70,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_shr": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 16,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_int::op_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "binop_int_float::op_add": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_mul": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_truediv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 16
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 16
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_int_float::op_floordiv": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 16
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 16
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_int_float::op_mod": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 12
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 25
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 25
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_int_float::op_pow": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_int_float::op_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_float::op_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "binop_int_bool::op_add": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_mul": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_truediv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_int_bool::op_floordiv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 8,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_mod": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 8,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_pow": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_bitand": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_bitor": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_bitxor": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_shl": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_shr": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_eq": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J1 JS arm: `int == bool` with a bool-TYPED PARAM takes the `===` fast path (`0 == False` -> false; #241 family for typed params)"
+  },
+  "binop_int_bool::op_ne": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J1 JS arm: `int == bool` with a bool-TYPED PARAM takes the `===` fast path (`0 == False` -> false; #241 family for typed params)"
+  },
+  "binop_int_bool::op_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_int_bool::op_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "binop_float_int::op_add": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_mul": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_truediv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_int::op_floordiv": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_int::op_mod": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 11
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 20
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 20
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_int::op_pow": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 5
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 5
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_int::op_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_int::op_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "binop_float_float::op_add": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_mul": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_truediv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 24
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 24
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_float::op_floordiv": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 10
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 45
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 45
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_float::op_mod": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 13
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 57
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 57
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_float::op_pow": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 3
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 3
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 3
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_float::op_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_float::op_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "binop_float_bool::op_add": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_mul": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_truediv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_bool::op_floordiv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_bool::op_mod": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 8
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_float_bool::op_pow": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_float_bool::op_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "binop_bool_int::op_add": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_mul": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_truediv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_bool_int::op_floordiv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 2,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_mod": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 2,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_pow": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 4,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "Same JS-backend `**` float-promotion gap as binop_int_int::op_pow, bool base (`True ** -1` -> JS int 1 vs CPython float 1.0). WASM direct arm correct (ovf->twin). OUT of #485/#487 scope; candidate JS-backend issue."
+  },
+  "binop_bool_int::op_bitand": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_bitor": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_bitxor": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_shl": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 5,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_shr": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 2,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_eq": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J1 JS arm: `int == bool` with a bool-TYPED PARAM takes the `===` fast path (`0 == False` -> false; #241 family for typed params)"
+  },
+  "binop_bool_int::op_ne": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J1 JS arm: `int == bool` with a bool-TYPED PARAM takes the `===` fast path (`0 == False` -> false; #241 family for typed params)"
+  },
+  "binop_bool_int::op_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_int::op_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "binop_bool_float::op_add": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_mul": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_truediv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 4
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 4
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_bool_float::op_floordiv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 4
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 4
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_bool_float::op_mod": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 3
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 7
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 7
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_bool_float::op_pow": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_bool_float::op_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_float::op_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_add": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_mul": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_truediv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    }
+   },
+   "note": "NEW-W2 WASM float `/`, `//`, `%` by zero and `0.0 ** -1.0` / `1e300 ** 2.0` return inf/nan instead of ZeroDivisionError / OverflowError; JS arm ALSO: float `//`/`%` signed-zero results (`-1 // -3.75` -> -0.0, `0 % -1.0` -> 0.0) and bare float `**` skips the #319 overflow/zero checks"
+  },
+  "binop_bool_bool::op_floordiv": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 2,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_mod": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 2,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_pow": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_bitand": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_bitor": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_bitxor": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_shl": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_shr": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "binop_bool_bool::op_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "unop_int::u_neg": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 1,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_pos": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_not": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_abs": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 1,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_int": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_float": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_truth_if": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_truth_while": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_truth_assert": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_truth_ifexp": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_int::u_bool_ret": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 16
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 16
+    }
+   },
+   "note": "NEW-W10 `-> bool: return a` boundary repr: CPython returns the int/float itself, the WASM raw export / glue return a bool (JS returns the operand) \u2014 a C2 repr divergence at the declared-bool boundary, tracked (opus r1/SF9)"
+  },
+  "unop_int::u_invert": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_float::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "unop_float::u_neg": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_float::u_pos": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_float::u_not": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_float::u_abs": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_float::u_int": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 4
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 4
+    }
+   },
+   "note": "NEW-W3 WASM `int(x)` saturates: `int(1e300)` -> i64::MAX (CPython exact big int), `int(inf)` -> i64::MAX (CPython OverflowError)"
+  },
+  "unop_float::u_float": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_float::u_truth_if": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_float::u_truth_while": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_float::u_truth_assert": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J2 JS arm: `assert nan` raises (NaN is truthy in Python)"
+  },
+  "unop_float::u_truth_ifexp": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_float::u_bool_ret": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 5
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 12
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 12
+    }
+   },
+   "note": "NEW-W10 `-> bool: return a` boundary repr: CPython returns the int/float itself, the WASM raw export / glue return a bool (JS returns the operand) \u2014 a C2 repr divergence at the declared-bool boundary, tracked (opus r1/SF9)"
+  },
+  "unop_bool::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "unop_bool::u_neg": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_pos": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_not": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_abs": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_int": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_float": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_truth_if": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_truth_while": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_truth_assert": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_truth_ifexp": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_bool_ret": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "unop_bool::u_invert": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::cmp_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::cmp_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::cmp_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::cmp_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::cmp_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::cmp_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::cmp_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::self_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::self_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::self_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::self_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::self_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::self_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::sub_value": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::for_value": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ret_list": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ret_list_bool": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::two_lists": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::ret_ifexp": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ret_concat": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ifexp_and_value": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::len_ifexp": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::assert_msg": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::store_float_into_int": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::store_list_into_elem": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::raise_msg": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ret_none_value": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ann_int_from_float": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ann_int_from_list": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ret_float_as_int": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ret_div_as_int": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::ret_elem_as_int": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "WASM path correctly REFUSES `def f(fs: list[float]) -> int: return fs[0]` (r5 return-slot representability rule: a float value cannot be represented in the int return slot without truncation; function stays JS). The js/glue RED is NOT a WASM bug: it fires only for integer-valued floats ([1.0], not [2.5]) and is the int/float #451-class representation gap (a JS number 1.0 is indistinguishable from int 1, while CPython keeps the float). OUT of #485/#487 scope."
+  },
+  "listcmp_int::callee_int": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::call_arg_float_into_int": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "WASM path correctly REFUSES passing a float into an int parameter (`callee_int(fs[0])`, r5 call-argument-slot rule: the call converts nothing, so the static types must match; caller stays JS, callee stays admitted). The js/glue RED is the same int/float #451-class representation gap plus the JS backend not coercing at the call boundary. OUT of #485/#487 scope."
+  },
+  "listcmp_int::and_value": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_int::truth_if": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::truth_while": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::truth_assert": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J4 JS arm only: `assert []` does not raise (raw JS truthiness for a container, #273 family); the WASM truthiness (#487) is FIXED in M-A2: glue+direct green | JS arm also: `assert []` does not raise (raw JS truthiness for a container \u2014 #273 family, NEW-J4)"
+  },
+  "listcmp_int::truth_ifexp": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::truth_not": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::truth_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::truth_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_int::eq_branch": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_float::cmp_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::cmp_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::cmp_lt": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 6
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J3 JS arm only: `[nan] < [..]` list ordering with NaN differs from CPython; WASM element-wise comparison (#487) is FIXED in M-A2 | JS arm also: `[nan] == [nan]` (CPython True by identity) and `[nan] < [..]` ordering differ (NEW-J3)"
+  },
+  "listcmp_float::cmp_le": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 11
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J3 JS arm only: `[nan] < [..]` list ordering with NaN differs from CPython; WASM element-wise comparison (#487) is FIXED in M-A2 | JS arm also: `[nan] == [nan]` (CPython True by identity) and `[nan] < [..]` ordering differ (NEW-J3)"
+  },
+  "listcmp_float::cmp_gt": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 6
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J3 JS arm only: `[nan] < [..]` list ordering with NaN differs from CPython; WASM element-wise comparison (#487) is FIXED in M-A2 | JS arm also: `[nan] == [nan]` (CPython True by identity) and `[nan] < [..]` ordering differ (NEW-J3)"
+  },
+  "listcmp_float::cmp_ge": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 11
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J3 JS arm only: `[nan] < [..]` list ordering with NaN differs from CPython; WASM element-wise comparison (#487) is FIXED in M-A2 | JS arm also: `[nan] == [nan]` (CPython True by identity) and `[nan] < [..]` ordering differ (NEW-J3)"
+  },
+  "listcmp_float::cmp_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::self_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::self_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::self_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::self_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::self_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::self_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::alias_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-W11 the GLUE marshals `f(xs, xs)` into two buffers, so the identity that CPython / the JS runtime / the raw export honour (`xs == xs` True through NaN) is lost on the glue path (opus r2/NEW-5; marshalling chunk M-B)"
+  },
+  "listcmp_float::and_value": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_float::truth_if": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::truth_while": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::truth_assert": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J4 JS arm only: `assert []` does not raise (raw JS truthiness for a container, #273 family); the WASM truthiness (#487) is FIXED in M-A2: glue+direct green | JS arm also: `assert []` does not raise (raw JS truthiness for a container \u2014 #273 family, NEW-J4)"
+  },
+  "listcmp_float::truth_ifexp": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::truth_not": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::truth_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_float::truth_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_bool::cmp_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::cmp_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::cmp_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::cmp_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::cmp_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::cmp_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::cmp_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::self_eq": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::self_ne": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::self_lt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::self_le": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::self_gt": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::self_ge": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::store_int": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_bool::store_int_aug": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_bool::and_value": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "listcmp_bool::truth_if": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::truth_while": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::truth_assert": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   },
+   "note": "NEW-J4 JS arm only: `assert []` does not raise (raw JS truthiness for a container, #273 family); the WASM truthiness (#487) is FIXED in M-A2: glue+direct green | JS arm also: `assert []` does not raise (raw JS truthiness for a container \u2014 #273 family, NEW-J4)"
+  },
+  "listcmp_bool::truth_ifexp": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::truth_not": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::truth_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "listcmp_bool::truth_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shortcircuit::sc_while_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 5,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_if_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_or": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_nested": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_not_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_ifexp_and": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_ifexp_guard": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_chain_guard": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 12,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_and_or_mix": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_or_and_mix": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_value_and_f": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_value_or_f": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::bump": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_and_bump": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_or_bump": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_chain_bump": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shortcircuit::sc_chain_bump_tail": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "writeback::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "writeback::fill_int": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 1,
+     "mism": 0
+    }
+   }
+  },
+  "writeback::fill_float": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "writeback::fill_bool": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "writeback::swap_first": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "writeback::scale_inplace": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "writeback::aug_sub": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 2,
+     "mism": 0
+    }
+   }
+  },
+  "writeback_refusal::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "writeback_refusal::grow": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "writeback_refusal::shrink": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "writeback_refusal::wipe": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "writeback_refusal::extend2": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_len2::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_len2::len2": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "#486 (Chunk-3): WASM/`direct` arm now REFUSES wrong-arity cleanly. Remaining RED = SEPARATE JS-backend arity-fidelity gap (JS runtime helpers don't raise TypeError on extra args / nullary int()/float()); tracked for a dedicated JS-arity issue, not WASM."
+  },
+  "arity_len0::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_len0::len0": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_abs2::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_abs2::abs2": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "#486 (Chunk-3): WASM/`direct` arm now REFUSES wrong-arity cleanly. Remaining RED = SEPARATE JS-backend arity-fidelity gap (JS runtime helpers don't raise TypeError on extra args / nullary int()/float()); tracked for a dedicated JS-arity issue, not WASM."
+  },
+  "arity_abs0::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_abs0::abs0": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_int2::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_int2::int2": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_int0::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_int0::int0": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_float0::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_float0::float0": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_float2::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_float2::float2": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "#486 (Chunk-3): WASM/`direct` arm now REFUSES wrong-arity cleanly. Remaining RED = SEPARATE JS-backend arity-fidelity gap (JS runtime helpers don't raise TypeError on extra args / nullary int()/float()); tracked for a dedicated JS-arity issue, not WASM."
+  },
+  "arity_sqrt2::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_sqrt2::sqrt2": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "#486 (Chunk-3): WASM/`direct` arm now REFUSES wrong-arity cleanly. Remaining RED = SEPARATE JS-backend arity-fidelity gap (JS runtime helpers don't raise TypeError on extra args / nullary int()/float()); tracked for a dedicated JS-arity issue, not WASM."
+  },
+  "arity_pow1::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_pow1::pow1": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "#486 (Chunk-3): WASM/`direct` arm now REFUSES wrong-arity cleanly. Remaining RED = SEPARATE JS-backend arity-fidelity gap (JS runtime helpers don't raise TypeError on extra args / nullary int()/float()); tracked for a dedicated JS-arity issue, not WASM."
+  },
+  "arity_range4::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "arity_range4::range4": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "refused(acceptable)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "#486 (Chunk-3): WASM/`direct` arm now REFUSES wrong-arity cleanly. Remaining RED = SEPARATE JS-backend arity-fidelity gap (JS runtime helpers don't raise TypeError on extra args / nullary int()/float()); tracked for a dedicated JS-arity issue, not WASM."
+  },
+  "stmts::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "stmts::while_else": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::while_break": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::for_step": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 9
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 9
+    }
+   },
+   "note": "NEW-W4 WASM `range(a, b, 0)` spins forever (hang) where CPython raises ValueError \u2014 termination component"
+  },
+  "stmts::for_list_sum": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::nested_continue": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::local_list": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::raise_val": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::try_zero": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "REFUSED",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "#496 sound-by-refusal: a division under a ZeroDivisionError handler is REFUSED at admission (the WASM path traps where CPython dispatches the handler). Already refused at #491's base commit de345491 (verified with the base binary: evidence/wasm_net-base-de345491.txt) - the pin recorded the pre-#496 RED. Re-pinned surgically during #491; the arity_int0/float0 js+glue arms likewise turned green before #491 and are re-pinned here."
+  },
+  "stmts::assert_pos": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::ifexp": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::elif_chain": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::math_sqrt": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    },
+    "direct": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 1
+    }
+   },
+   "note": "NEW-W6 `math.sqrt(-1.0)` -> nan on WASM AND JS where CPython raises ValueError (math domain)"
+  },
+  "stmts::math_floor": {
+   "arms": {
+    "js": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "glue": {
+     "status": "RED",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 2
+    },
+    "direct": {
+     "status": "REFUSED",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "NEW-W7 `math.floor(inf/nan)` -> no OverflowError/ValueError on JS; the js+wasm GLUE's JS twin throws ReferenceError because the glue never imports the stdlib `math` module it embeds (js/glue RED). Since r5 the WASM direct arm correctly REFUSES this function (return-slot rule: `math.floor(...)` is typed F64 and cannot be represented in the `-> int` slot without truncation; it stays JS, where it is correct for finite floats). The js/glue REDs are the pre-existing NEW-W7 stdlib-math gap, out of #485/#487 scope."
+  },
+  "stmts::math_fabs": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::bool_ret": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::none_ret": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::index_load": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::const_pi": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "stmts::augassign_all": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "try_index::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "try_index::try_index": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "REFUSED",
+     "ovf": 0,
+     "gaps": 0
+    }
+   },
+   "note": "NEW-W1 try/except IndexError around a subscript emits INVALID WASM (`type-lowering gap` fallback to JS) \u2014 admission says eligible, codegen cannot lower it"
+  },
+  "shadow::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow::use_len": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shadow::use_abs": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shadow_range::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_range::use_shadow_range": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_abs_list::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_abs_list::use_shadow_abs": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_math_alias::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_math_alias::use_alias_abs": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_demoted::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_demoted::use_abs": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_demoted::use_len": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_reimport::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_reimport::use_abs": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_infer::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "shadow_infer::use_sorted": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "shadow_infer::use_filter": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    }
+   }
+  },
+  "refusal::__determinism": {
+   "arms": {
+    "compile": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "refusal::comp_len": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "refusal::lam": {
+   "arms": {
+    "js": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "glue": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0,
+     "mism": 0
+    },
+    "direct": {
+     "status": "refused(expected)",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "determinism::mixed_lists_24x": {
+   "arms": {
+    "admit": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "determinism::single_kind_12x": {
+   "arms": {
+    "admit": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "determinism::scalar_list_mix_12x": {
+   "arms": {
+    "admit": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "determinism::invalid_sibling_12x": {
+   "arms": {
+    "admit": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  },
+  "determinism::stmts_shape_24x": {
+   "arms": {
+    "admit": {
+     "status": "ok",
+     "ovf": 0,
+     "gaps": 0
+    }
+   }
+  }
+ }
+}

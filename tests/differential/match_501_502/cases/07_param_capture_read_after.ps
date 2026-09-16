@@ -1,0 +1,8 @@
+# EXPECT: match
+# #502 headline: a capture of a PARAM name rebinds the param (post-match read)
+def p(v, x):
+    match v:
+        case [1, x]:
+            pass
+    return x
+print(p([1, 8], 100), p([2, 8], 100))

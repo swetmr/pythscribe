@@ -12,6 +12,7 @@
 //!   * `from pyths.react import create_element`       (hybrid — B4 root)
 //!   * `from pyths.react import create_element as h`  (hybrid alias)
 //!   * `import react; react.create_element(...)`      (namespace member)
+//!
 //! and the unsupported `import pyths.react as R` namespace form is diagnosed.
 
 use std::collections::HashMap;

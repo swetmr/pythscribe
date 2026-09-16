@@ -1,0 +1,14 @@
+# a `global abs` write inside a function rebinds the MODULE cell at call time.
+# DEMOTE: use
+def use(x: int) -> int:
+    return abs(x)
+
+
+def rebind():
+    global abs
+    abs = lambda z: z * 2
+
+
+print(use(-5))
+rebind()
+print(use(-5))

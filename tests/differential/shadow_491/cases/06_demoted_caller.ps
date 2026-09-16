@@ -1,0 +1,22 @@
+# repro 6: the shadowing def is WASM-routed, its CALLER is demoted to JS (str
+# return) -> the JS caller must call the re-exported USER fn, not pyAbs/pyLen.
+# WASM: abs,len
+# DEMOTE: use_abs,use_len
+def abs(x: int) -> int:
+    return x * 7
+
+
+def len(x: int) -> int:
+    return x + 1000
+
+
+def use_abs(x: int) -> str:
+    return str(abs(x))
+
+
+def use_len(x: int) -> str:
+    return str(len(x))
+
+
+print(use_abs(-5))
+print(use_len(5))

@@ -1,0 +1,9 @@
+# EXPECT: match
+# #502 x #501: a METHOD param captured through an OR
+class C:
+    def m(self, v, x):
+        match v:
+            case [1, x] | [x, 1]:
+                pass
+        return x
+print(C().m([1, 8], 100), C().m([6, 1], 100), C().m([2, 2], 100))

@@ -1,0 +1,16 @@
+# Hugging Face Space runtime (the Space clones this directory as its root).
+#
+# pythscribe is PINNED (pin, don't float) to a RELEASE TAG on the public mirror
+# (https://github.com/swetmr/pythscribe carries one squashed commit + tag per release; a dev-repo
+# commit sha can never appear there -- opus r1/B4). Until v0.2.5 is published on the mirror, deploy
+# from a checkout instead: see README.md "Deploy" (vendor the two packages into the Space). The dev
+# commit this example was built from is recorded in README.md for provenance.
+#
+# The artifacts under __pythscribe__/ are committed, so the Space needs neither the compiler nor Node.
+gradio==6.26.0
+fastapi>=0.115
+uvicorn>=0.30
+pillow>=10
+numpy>=1.26
+pythscribe @ git+https://github.com/swetmr/pythscribe.git@v0.2.5
+gradio_wasmfunction @ git+https://github.com/swetmr/pythscribe.git@v0.2.5#subdirectory=pythscribe/gradio/wasm_function

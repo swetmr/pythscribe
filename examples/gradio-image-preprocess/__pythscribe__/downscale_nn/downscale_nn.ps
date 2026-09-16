@@ -1,0 +1,11 @@
+@wasm
+def downscale_nn(img: Array[uint8, 2], scale: int, oh: int, ow: int, out: Array[uint8, 2]) -> int:
+    for oy in range(oh):
+        iy = oy * scale
+        for ox in range(ow):
+            ix = ox * scale * 3
+            o = ox * 3
+            out[oy][o] = img[iy][ix]
+            out[oy][o + 1] = img[iy][ix + 1]
+            out[oy][o + 2] = img[iy][ix + 2]
+    return oh * ow

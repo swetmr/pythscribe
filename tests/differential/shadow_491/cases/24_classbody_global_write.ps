@@ -1,0 +1,31 @@
+# #491 BLOCKER-2: a `global abs` WRITE directly in a CLASS BODY rebinds the MODULE cell
+# at class-definition time (CPython: `global` in a class block binds the module, never
+# the class namespace) — before the fix it emitted `__pyClassAttr(C, "abs", 7)` and
+# `print(abs)` printed the stale builtin (silent). `peek` resolves `abs` at call time,
+# so it demotes; a class-body read after the write sees the module value; the class has
+# NO `abs` attribute.
+# DEMOTE: peek
+def peek() -> int:
+    return abs(-9)
+
+
+print(peek())
+
+
+class C:
+    global abs
+    abs = 7
+    y = abs
+
+
+print(abs)
+print(C.y)
+print(hasattr(C, "abs"))
+
+
+class R:
+    global abs
+    abs = lambda z: 100
+
+
+print(peek())

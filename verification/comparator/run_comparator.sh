@@ -3,17 +3,28 @@
 #
 # Two layers, strongest-available first:
 #
-#   LAYER 1 (ALWAYS runs, no external deps): the axiom-footprint gate.
-#     `lake build` + `python comparator/axiom_footprint.py gate` — re-derives
-#     `#print axioms` in the real Lean env over every headline claim and fails
-#     on any axiom outside {propext, Classical.choice, Quot.sound} or any sorry.
+#   LAYER 1 (ALWAYS runs, no external deps): the axiom-footprint gates.
+#     `lake build` + TWO gates:
+#       (1a) `python comparator/whole_tree_axiom_gate.py gate` — the WHOLE-TREE
+#            gate: re-imports EVERY shipping verification module into a fresh
+#            env, RE-TYPECHECKS every decl through the kernel (Environment.replay),
+#            and asserts, per declaration, axiom footprint ⊆
+#            {propext, Classical.choice, Quot.sound}, no user-declared axiom, no
+#            `unsafe`, and imports ⊆ Init∪covered (partial/implemented_by/extern
+#            inventoried). Covers ALL verification/*.lean (not just
+#            PythExpandVerify's import closure) and is immune to grep bypasses.
+#       (1b) `python comparator/axiom_footprint.py gate` — the per-HEADLINE
+#            subset gate + the formalization.yaml manifest binding (PythExpandVerify
+#            headline claims + their refuter witnesses).
 #     This is ~80% of the trust value and is what CI enforces.
 #
 #   LAYER 2 (runs iff lean4export + nanoda_bin are present): the true
 #     Comparator — export the elaborated proof terms and RE-TYPE-CHECK them in
 #     an INDEPENDENT Rust Lean-4 kernel (nanoda_bin), with permitted_axioms
 #     pinned to the trio. Because our core is dependency-free the export is
-#     small and this covers ALL declarations, not just the headlines.
+#     small and this covers ALL declarations of PythExpandVerify's export closure
+#     (the exported module) — the whole-tree axiom footprint over the sibling
+#     proof modules is enforced by Layer 1a above, not by this export.
 #
 # Point both env vars at the built binaries to enable Layer 2:
 #   LEAN4EXPORT_BIN=/path/to/lean4export/.lake/build/bin/lean4export
@@ -30,9 +41,12 @@ VERIF="$(cd "$HERE/.." && pwd)"
 cd "$VERIF"
 
 echo "=================================================================="
-echo "Comparator LAYER 1 — axiom-footprint gate (always on)"
+echo "Comparator LAYER 1 — axiom-footprint gates (always on)"
 echo "=================================================================="
 lake build
+echo "--- 1a: whole-tree gate (all verification/*.lean) ---"
+python comparator/whole_tree_axiom_gate.py gate --no-build
+echo "--- 1b: per-headline subset gate + formalization.yaml binding ---"
 python comparator/axiom_footprint.py gate --no-build
 
 echo

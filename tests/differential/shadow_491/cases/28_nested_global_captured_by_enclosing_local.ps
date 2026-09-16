@@ -1,0 +1,58 @@
+# #491 BLOCKER-3 (item 3): a nested function's `global abs` WRITE must reach the
+# module cell even though the ENCLOSING function binds a local `abs` — and must
+# NOT corrupt that local (CPython: outer() is 1, module abs is 7). Before the fix
+# the bare JS write was lexically captured by outer's `let abs` (7 / <pyAbs>).
+# The read-only twin (`global abs; return abs(-5)`) was captured the same way
+# (TypeError: int not callable), and the non-builtin twin `g` likewise.
+# `peek` demotes: `abs` is rebound by a global write (call-time resolution);
+# `sq` stays WASM so the glue TWIN is built from the renamed module too.
+# DEMOTE: peek
+# WASM: sq
+def peek() -> int:
+    return abs(-9)
+
+
+def sq(x: int) -> int:
+    return x * x
+
+
+def outer():
+    abs = 1
+    def inner():
+        global abs
+        abs = 7
+    inner()
+    return abs
+
+
+def reader():
+    abs = 1
+    def inner():
+        global abs
+        return abs(-5)
+    return (inner(), abs)
+
+
+g = 0
+
+
+def outer_g():
+    g = 1
+    def inner():
+        global g
+        g = 7
+    inner()
+    return g
+
+
+print(peek())
+print(sq(6))
+print(reader())
+print(outer())
+print(abs)
+print(outer_g())
+print(g)
+try:
+    print(peek())
+except TypeError:
+    print("TypeError")

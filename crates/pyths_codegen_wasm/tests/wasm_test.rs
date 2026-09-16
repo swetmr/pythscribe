@@ -38,6 +38,26 @@ fn assert_stays_js(source: &str, reason_substr: &str) {
     );
 }
 
+/// #496 (B1): assert that ONE named function is rejected from WASM with the given
+/// reason substring, WITHOUT requiring the whole module to be wasm-empty — the
+/// dividing callee (`h`) is itself legitimately WASM-eligible, so only the guarded
+/// caller must stay JS. Re-admitting the caller (guard removed) → not in
+/// `rejected_functions` → RED (the paired negative control).
+fn assert_fn_stays_js(source: &str, fn_name: &str, reason_substr: &str) {
+    let module = pyths_parser::parse(source).expect("Parse failed");
+    let output = codegen_wasm(&module);
+    assert!(
+        output
+            .rejected_functions
+            .iter()
+            .any(|(n, r)| n == fn_name && r.contains(reason_substr)),
+        "expected `{}` rejected with reason containing {:?}, got rejected={:?}",
+        fn_name,
+        reason_substr,
+        output.rejected_functions,
+    );
+}
+
 /// Helper to create a wasmi instance and call an i64 -> i64 function
 fn call_i64_i64(wasm: &[u8], func_name: &str, arg: i64) -> i64 {
     let engine = wasmi::Engine::default();
@@ -551,6 +571,7 @@ fn make_instance(wasm: &[u8]) -> (wasmi::Store<()>, wasmi::Instance) {
 }
 
 /// Write a string into WASM memory using __alloc, returning the pointer.
+#[allow(dead_code)] // reusable test-harness helper, not currently called
 fn write_string(store: &mut wasmi::Store<()>, instance: &wasmi::Instance, s: &str) -> i32 {
     let alloc = instance
         .get_typed_func::<i32, i32>(&mut *store, "__alloc")
@@ -1129,6 +1150,294 @@ def f(x: int) -> int:
     let r = func.call(&mut store, -1).unwrap();
     assert_eq!(r, 0); // sentinel
     assert_eq!(read_err_code(&mut store, &instance), 3); // IndexError still set
+}
+
+// ============================
+// #496: try/except ZeroDivisionError around a division-family op must NOT be
+// WASM-admitted (integer //,% TRAP on a zero divisor; true / yields inf — the
+// catchable ZeroDivisionError CPython raises is never dispatched, so the handler
+// is dropped: a C3 error-occurrence divergence). Refuse-to-admit → the function
+// stays on the JS backend, which raises and runs the handler like CPython.
+//
+// Each `assert_stays_js` here IS the paired negative control: a mutant that drops
+// the guard re-admits the shape → `output.wasm` is non-empty → the test goes RED.
+// ============================
+
+// Unique to the #496 message (the IndexError guard also says "not supported on
+// the WASM fast path", so match on the zero-divisor phrasing specifically).
+const ZDIV_REASON: &str = "a zero divisor would";
+
+#[test]
+fn test_496_try_except_zerodiv_floordiv_stays_js() {
+    // The pinned repro (issue #496 / M4 A6): `100 // (i % 3)` under
+    // `except ZeroDivisionError` — on a zero divisor CPython runs the handler.
+    assert_stays_js(
+        "\
+def zdiv(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        try:
+            total = total + 100 // (i % 3)
+        except ZeroDivisionError:
+            total = total - 1
+        i = i + 1
+    return total
+",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_try_except_zerodiv_mod_stays_js() {
+    // sibling `%`
+    assert_stays_js(
+        "\
+def m(a: int, b: int) -> int:
+    try:
+        return a % b
+    except ZeroDivisionError:
+        return -1
+",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_try_except_zerodiv_truediv_stays_js() {
+    // sibling `/` (true division → f64.div → inf on zero, no raise: silent-wrong).
+    assert_stays_js(
+        "\
+def d(a: int, b: int) -> float:
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return -1.0
+",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_try_except_zerodiv_augassign_stays_js() {
+    // sibling: augmented `//=`
+    assert_stays_js(
+        "\
+def a(n: int, b: int) -> int:
+    total = 100
+    try:
+        total //= b
+    except ZeroDivisionError:
+        total = -1
+    return total
+",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_try_except_exception_superclass_stays_js() {
+    // `except Exception` (an admitted superclass) also catches ZeroDivisionError.
+    assert_stays_js(
+        "\
+def e(a: int, b: int) -> int:
+    try:
+        return a // b
+    except Exception:
+        return -1
+",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_try_bare_except_stays_js() {
+    // bare `except:` catches everything, ZeroDivisionError included.
+    assert_stays_js(
+        "\
+def bx(a: int, b: int) -> int:
+    try:
+        return a // b
+    except:
+        return -1
+",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_nested_try_division_in_inner_try_stays_js() {
+    // The scan descends into a nested try body: the outer `except ZeroDivisionError`
+    // sees the inner-try division and must refuse.
+    assert_stays_js(
+        "\
+def nz(a: int, b: int) -> int:
+    try:
+        try:
+            return a // b
+        except ValueError:
+            return 0
+    except ZeroDivisionError:
+        return -1
+",
+        ZDIV_REASON,
+    );
+}
+
+// ---- over-refusal controls: these are SOUND on WASM and must STAY admitted ----
+
+#[test]
+fn test_496_no_over_refusal_wrong_handler_class_stays_wasm() {
+    // `except ValueError` does NOT catch a ZeroDivisionError in CPython, so the
+    // division's trap propagates out either way — WASM behaves correctly and the
+    // function must remain WASM-eligible (no over-refusal).
+    let wasm = compile_wasm(
+        "\
+def okv(a: int, b: int) -> int:
+    try:
+        return a // b
+    except ValueError:
+        return -1
+",
+    );
+    validate_wasm(&wasm);
+    assert_eq!(call_i64_i64_i64(&wasm, "okv", 7, 2), 3);
+}
+
+#[test]
+fn test_496_no_over_refusal_division_without_try_stays_wasm() {
+    // A bare division with NO try/except is untouched by the #496 guard.
+    let wasm = compile_wasm("def q(a: int, b: int) -> int:\n    return a // b\n");
+    validate_wasm(&wasm);
+    assert_eq!(call_i64_i64_i64(&wasm, "q", 7, 2), 3);
+}
+
+#[test]
+fn test_496_no_over_refusal_try_zerodiv_without_division_stays_wasm() {
+    // `except ZeroDivisionError` around a try body with NO division op is sound
+    // (nothing can raise ZeroDivisionError on the WASM path) — must stay admitted.
+    let wasm = compile_wasm(
+        "\
+def nod(a: int, b: int) -> int:
+    try:
+        return a + b
+    except ZeroDivisionError:
+        return -1
+",
+    );
+    validate_wasm(&wasm);
+    assert_eq!(call_i64_i64_i64(&wasm, "nod", 7, 2), 9);
+}
+
+// ---- B2 (Fable r1): `**` with a zero base + negative exponent raises
+// ZeroDivisionError in CPython (`0 ** -1`); WASM yields a silent wrong value / inf.
+// It must be refused under a ZeroDivisionError handler, same as the other siblings.
+
+#[test]
+fn test_496_try_except_zerodiv_pow_stays_js() {
+    assert_stays_js(
+        "\
+def zp(a: int, b: int) -> int:
+    try:
+        return a ** b
+    except ZeroDivisionError:
+        return -1
+",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_try_except_zerodiv_pow_augassign_stays_js() {
+    assert_stays_js(
+        "\
+def zpa(a: int, b: int) -> int:
+    total = a
+    try:
+        total **= b
+    except ZeroDivisionError:
+        total = -1
+    return total
+",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_no_over_refusal_pow_without_zde_handler_stays_wasm() {
+    // `**` with NO ZeroDivisionError handler is untouched — it stays WASM-admitted.
+    // (compile+validate only: int `**` imports host `math.pow`, so instantiating it
+    // needs a linker that provides it — not relevant to the admission claim here.)
+    let wasm = compile_wasm("def qp(a: int, b: int) -> int:\n    return a ** b\n");
+    validate_wasm(&wasm);
+}
+
+// ---- B1 (Fable r1): a division inside a WASM-admitted CALLEE, under the caller's
+// ZeroDivisionError handler, TRAPS across the WASM call boundary (uncatchable) and
+// drops the handler. The caller must be refused (transitive `may_zerodiv`).
+
+#[test]
+fn test_496_try_except_zerodiv_direct_callee_stays_js() {
+    // `g`'s try body calls `h`, which divides; `g` must stay on JS (only `g`, not
+    // `h` — `h` alone is legitimately WASM-eligible).
+    assert_fn_stays_js(
+        "\
+def h(a: int, b: int) -> int:
+    return a // b
+
+def g(a: int, b: int) -> int:
+    try:
+        return h(a, b)
+    except ZeroDivisionError:
+        return -1
+",
+        "g",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_try_except_zerodiv_transitive_callee_stays_js() {
+    // `g` -> `mid` -> `h` (divides): the transitive closure must reach it, and
+    // `except Exception` catches ZeroDivisionError too.
+    assert_fn_stays_js(
+        "\
+def h(a: int, b: int) -> int:
+    return a // b
+
+def mid(a: int, b: int) -> int:
+    return h(a, b) + 1
+
+def g(a: int, b: int) -> int:
+    try:
+        return mid(a, b)
+    except Exception:
+        return -1
+",
+        "g",
+        ZDIV_REASON,
+    );
+}
+
+#[test]
+fn test_496_no_over_refusal_call_to_nondividing_fn_stays_wasm() {
+    // A callee that does NOT divide is sound: the caller's `except ZeroDivisionError`
+    // around a call to it must NOT be over-refused — it stays WASM-eligible.
+    let wasm = compile_wasm(
+        "\
+def sq(a: int) -> int:
+    return a * a
+
+def gg(a: int, b: int) -> int:
+    try:
+        return sq(a) + b
+    except ZeroDivisionError:
+        return -1
+",
+    );
+    validate_wasm(&wasm);
+    assert_eq!(call_i64_i64_i64(&wasm, "gg", 3, 2), 11);
+    assert_eq!(call_i64_i64(&wasm, "sq", 4), 16);
 }
 
 #[test]
@@ -1876,6 +2185,7 @@ fn test_b032b_bare_sqrt_with_alias() {
 }
 
 /// Read an f64 list `[i32 len][i32 cap][f64...]` from WASM memory at `ptr`.
+#[allow(dead_code)] // reusable test-harness helper, not currently called
 fn read_f64_list(store: &wasmi::Store<()>, instance: &wasmi::Instance, ptr: i32) -> Vec<f64> {
     let memory = instance
         .get_memory(store, "memory")
@@ -2136,4 +2446,716 @@ fn test_nested_subscript_read_no_scratch_clobber() {
     // sum rh[ir[k]+1] = rh[1]+rh[4]+rh[2]+rh[5]+rh[3] = 100+400+200+0+300 = 1000
     let got = call_i64_f64(&wasm, "indirect", 5);
     assert_eq!(got, 2000.0);
+}
+
+// ============================================================================
+// v0.2.5 Cluster A (#485 / #487): the WASM expression lowering upholds the
+// same Python value-semantics contract the JS backend encodes (pyAnd / pyOr /
+// pyEq / pyBool / emit_comparison_chain). SPOTs through the emitted .wasm on
+// wasmi; tests/differential/wasm_net binds the same shapes to CPython, and its
+// baseline evidence (evidence/base-677ddc6f.txt) is the RED half.
+// ============================================================================
+
+/// Write an i64 list `[i32 len][i32 cap][i64...]` via __alloc; return the ptr.
+fn write_i64_list(store: &mut wasmi::Store<()>, instance: &wasmi::Instance, vals: &[i64]) -> i32 {
+    let alloc = instance
+        .get_typed_func::<i32, i32>(&mut *store, "__alloc")
+        .expect("list-param module must export __alloc");
+    let n = vals.len() as i32;
+    let ptr = alloc.call(&mut *store, 8 + n * 8).expect("__alloc failed");
+    let memory = instance
+        .get_memory(&mut *store, "memory")
+        .expect("No memory export");
+    memory
+        .write(&mut *store, ptr as usize, &n.to_le_bytes())
+        .unwrap();
+    memory
+        .write(&mut *store, (ptr as usize) + 4, &n.to_le_bytes())
+        .unwrap();
+    for (i, v) in vals.iter().enumerate() {
+        memory
+            .write(&mut *store, (ptr as usize) + 8 + i * 8, &v.to_le_bytes())
+            .unwrap();
+    }
+    ptr
+}
+
+/// Write an i32 (bool) list `[i32 len][i32 cap][i32...]`.
+fn write_i32_list(store: &mut wasmi::Store<()>, instance: &wasmi::Instance, vals: &[i32]) -> i32 {
+    let alloc = instance
+        .get_typed_func::<i32, i32>(&mut *store, "__alloc")
+        .expect("list-param module must export __alloc");
+    let n = vals.len() as i32;
+    let ptr = alloc.call(&mut *store, 8 + n * 4).expect("__alloc failed");
+    let memory = instance
+        .get_memory(&mut *store, "memory")
+        .expect("No memory export");
+    memory
+        .write(&mut *store, ptr as usize, &n.to_le_bytes())
+        .unwrap();
+    memory
+        .write(&mut *store, (ptr as usize) + 4, &n.to_le_bytes())
+        .unwrap();
+    for (i, v) in vals.iter().enumerate() {
+        memory
+            .write(&mut *store, (ptr as usize) + 8 + i * 4, &v.to_le_bytes())
+            .unwrap();
+    }
+    ptr
+}
+
+fn read_i64_elem(store: &wasmi::Store<()>, instance: &wasmi::Instance, ptr: i32, i: usize) -> i64 {
+    let memory = instance
+        .get_memory(store, "memory")
+        .expect("No memory export");
+    let mut buf = [0u8; 8];
+    memory
+        .read(store, (ptr as usize) + 8 + i * 8, &mut buf)
+        .unwrap();
+    i64::from_le_bytes(buf)
+}
+
+/// `(list[int], int) -> int`; `Err` = the call TRAPPED (the #485 symptom).
+fn call_listi64_i64_i64(wasm: &[u8], name: &str, xs: &[i64], n: i64) -> Result<i64, String> {
+    let (mut store, instance) = make_math_instance(wasm);
+    let ptr = write_i64_list(&mut store, &instance, xs);
+    let f = instance
+        .get_typed_func::<(i32, i64), i64>(&store, name)
+        .expect("no fn");
+    f.call(&mut store, (ptr, n)).map_err(|e| e.to_string())
+}
+
+fn call_listi64_listi64_i32(wasm: &[u8], name: &str, a: &[i64], b: &[i64]) -> i32 {
+    let (mut store, instance) = make_math_instance(wasm);
+    let pa = write_i64_list(&mut store, &instance, a);
+    let pb = write_i64_list(&mut store, &instance, b);
+    let f = instance
+        .get_typed_func::<(i32, i32), i32>(&store, name)
+        .expect("no fn");
+    f.call(&mut store, (pa, pb)).expect("call failed")
+}
+
+#[test]
+fn cluster_a_and_short_circuits_the_bounds_guard_idiom() {
+    // The #485 reproducer: `xs[j]` must NOT be evaluated once `j < n` is false.
+    let wasm = compile_wasm(
+        "def sc(xs: list[int], n: int) -> int:\n\
+         \x20   j = 0\n\
+         \x20   while j < n and xs[j] > 0:\n\
+         \x20       j = j + 1\n\
+         \x20   return j\n",
+    );
+    validate_wasm(&wasm);
+    assert_eq!(call_listi64_i64_i64(&wasm, "sc", &[1], 1), Ok(1)); // trapped before the fix
+    assert_eq!(call_listi64_i64_i64(&wasm, "sc", &[1, 1, 0], 3), Ok(2));
+    assert_eq!(call_listi64_i64_i64(&wasm, "sc", &[], 0), Ok(0));
+    assert_eq!(call_listi64_i64_i64(&wasm, "sc", &[5, 5, 5], 3), Ok(3));
+}
+
+#[test]
+fn cluster_a_or_short_circuits_the_bounds_guard_idiom() {
+    let wasm = compile_wasm(
+        "def g(xs: list[int], i: int) -> int:\n\
+         \x20   if i >= len(xs) or xs[i] == 0:\n\
+         \x20       return 1\n\
+         \x20   return 0\n",
+    );
+    validate_wasm(&wasm);
+    assert_eq!(call_listi64_i64_i64(&wasm, "g", &[1], 1), Ok(1)); // xs[1] never read
+    assert_eq!(call_listi64_i64_i64(&wasm, "g", &[0], 0), Ok(1));
+    assert_eq!(call_listi64_i64_i64(&wasm, "g", &[5], 0), Ok(0));
+}
+
+#[test]
+fn cluster_a_and_or_yield_the_deciding_operand() {
+    // Python: `3 and 5 == 5`, `0 or 7 == 7` — the OPERAND, not its truth value.
+    let wasm = compile_wasm(
+        "def a(x: int, y: int) -> int:\n    return x and y\n\
+         def o(x: int, y: int) -> int:\n    return x or y\n\
+         def af(x: float, y: float) -> float:\n    return x and y\n\
+         def of(x: float, y: float) -> float:\n    return x or y\n",
+    );
+    validate_wasm(&wasm);
+    assert_eq!(call_i64_i64_i64(&wasm, "a", 3, 5), 5);
+    assert_eq!(call_i64_i64_i64(&wasm, "a", 0, 5), 0);
+    assert_eq!(call_i64_i64_i64(&wasm, "a", -2, 9), 9);
+    assert_eq!(call_i64_i64_i64(&wasm, "o", 0, 7), 7);
+    assert_eq!(call_i64_i64_i64(&wasm, "o", 3, 7), 3);
+    assert_eq!(call_f64_f64_f64(&wasm, "af", 2.5, -1.0), -1.0);
+    assert_eq!(
+        call_f64_f64_f64(&wasm, "af", 0.0, 2.5).to_bits(),
+        0.0f64.to_bits()
+    );
+    // -0.0 is falsy and is returned AS -0.0 (sign preserved: the operand, not a bool).
+    assert_eq!(
+        call_f64_f64_f64(&wasm, "af", -0.0, 2.5).to_bits(),
+        (-0.0f64).to_bits()
+    );
+    assert_eq!(call_f64_f64_f64(&wasm, "of", 0.0, -1.0), -1.0);
+    // NaN is TRUTHY in Python: `nan or 1.0` is nan.
+    assert!(call_f64_f64_f64(&wasm, "of", f64::NAN, 1.0).is_nan());
+}
+
+#[test]
+fn cluster_a_right_operand_side_effect_runs_only_when_it_decides() {
+    let wasm = compile_wasm(
+        "def bump(xs: list[int]) -> int:\n\
+         \x20   xs[0] = xs[0] + 1\n\
+         \x20   return xs[0]\n\
+         def f(xs: list[int], flag: bool) -> int:\n\
+         \x20   return flag and bump(xs)\n\
+         def g(xs: list[int], flag: bool) -> int:\n\
+         \x20   return flag or bump(xs)\n",
+    );
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let f = instance
+        .get_typed_func::<(i32, i32), i64>(&store, "f")
+        .unwrap();
+    let g = instance
+        .get_typed_func::<(i32, i32), i64>(&store, "g")
+        .unwrap();
+    let p = write_i64_list(&mut store, &instance, &[0]);
+    assert_eq!(f.call(&mut store, (p, 0)).unwrap(), 0); // flag False: bump NOT run
+    assert_eq!(read_i64_elem(&store, &instance, p, 0), 0);
+    assert_eq!(f.call(&mut store, (p, 1)).unwrap(), 1); // flag True: bump runs once
+    assert_eq!(read_i64_elem(&store, &instance, p, 0), 1);
+    assert_eq!(g.call(&mut store, (p, 1)).unwrap(), 1); // flag True decides: no bump
+    assert_eq!(read_i64_elem(&store, &instance, p, 0), 1);
+    assert_eq!(g.call(&mut store, (p, 0)).unwrap(), 2); // falsy left: bump runs -> 2
+    assert_eq!(read_i64_elem(&store, &instance, p, 0), 2);
+}
+
+#[test]
+fn cluster_a_chained_comparison_short_circuits_and_evaluates_middle_once() {
+    let wasm = compile_wasm(
+        "def bump(xs: list[int]) -> int:\n\
+         \x20   xs[0] = xs[0] + 1\n\
+         \x20   return xs[0]\n\
+         def c(xs: list[int]) -> bool:\n\
+         \x20   return 0 < bump(xs) < 100\n\
+         def t(xs: list[int], k: int) -> bool:\n\
+         \x20   return k < 0 < bump(xs)\n\
+         def g(xs: list[int], i: int, n: int) -> bool:\n\
+         \x20   return i < n < xs[i]\n",
+    );
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let c = instance.get_typed_func::<i32, i32>(&store, "c").unwrap();
+    let t = instance
+        .get_typed_func::<(i32, i64), i32>(&store, "t")
+        .unwrap();
+    let g = instance
+        .get_typed_func::<(i32, i64, i64), i32>(&store, "g")
+        .unwrap();
+    let p = write_i64_list(&mut store, &instance, &[0]);
+    assert_eq!(c.call(&mut store, p).unwrap(), 1);
+    assert_eq!(read_i64_elem(&store, &instance, p, 0), 1); // once (was 2: double evaluation)
+                                                           // `k < 0` false: the tail `0 < bump(xs)` must not run.
+    assert_eq!(t.call(&mut store, (p, 1)).unwrap(), 0);
+    assert_eq!(read_i64_elem(&store, &instance, p, 0), 1);
+    assert_eq!(t.call(&mut store, (p, -1)).unwrap(), 1);
+    assert_eq!(read_i64_elem(&store, &instance, p, 0), 2);
+    // `i < n` false: `xs[i]` (out of range) is never read: no trap.
+    let q = write_i64_list(&mut store, &instance, &[5]);
+    assert_eq!(g.call(&mut store, (q, 1, 1)).unwrap(), 0);
+    assert_eq!(g.call(&mut store, (q, 0, 1)).unwrap(), 1); // 0 < 1 < 5
+    assert_eq!(g.call(&mut store, (q, 0, 9)).unwrap(), 0); // 0 < 9 < 5 is False
+}
+
+#[test]
+fn cluster_a_list_comparison_compares_contents_not_handles() {
+    let src = "def eq(a: list[int], b: list[int]) -> bool:\n    return a == b\n\
+               def ne(a: list[int], b: list[int]) -> bool:\n    return a != b\n\
+               def lt(a: list[int], b: list[int]) -> bool:\n    return a < b\n\
+               def le(a: list[int], b: list[int]) -> bool:\n    return a <= b\n\
+               def gt(a: list[int], b: list[int]) -> bool:\n    return a > b\n\
+               def ge(a: list[int], b: list[int]) -> bool:\n    return a >= b\n";
+    let wasm = compile_wasm(src);
+    validate_wasm(&wasm);
+    let cases: &[(&[i64], &[i64], [i32; 6])] = &[
+        // (a, b, [eq, ne, lt, le, gt, ge]): CPython answers
+        (&[1, 2], &[1, 2], [1, 0, 0, 1, 0, 1]),
+        (&[1, 2], &[1, 3], [0, 1, 1, 1, 0, 0]),
+        (&[1], &[1, 2], [0, 1, 1, 1, 0, 0]),
+        (&[1, 2], &[1], [0, 1, 0, 0, 1, 1]),
+        (&[], &[], [1, 0, 0, 1, 0, 1]),
+        (&[], &[0], [0, 1, 1, 1, 0, 0]),
+        (&[2, 1], &[1, 9], [0, 1, 0, 0, 1, 1]),
+        (&[-1, i64::MAX], &[-1, i64::MAX], [1, 0, 0, 1, 0, 1]),
+    ];
+    for (a, b, want) in cases {
+        for (k, name) in ["eq", "ne", "lt", "le", "gt", "ge"].iter().enumerate() {
+            assert_eq!(
+                call_listi64_listi64_i32(&wasm, name, a, b),
+                want[k],
+                "{name}({a:?}, {b:?})"
+            );
+        }
+    }
+}
+
+#[test]
+fn cluster_a_list_comparison_mixed_element_kinds_and_chain() {
+    let wasm = compile_wasm(
+        "def m(a: list[int], b: list[float]) -> bool:\n    return a == b\n\
+         def mb(a: list[bool], b: list[int]) -> bool:\n    return a == b\n\
+         def ch(a: list[int], b: list[int], c: list[int]) -> bool:\n    return a == b == c\n",
+    );
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let pa = write_i64_list(&mut store, &instance, &[1, 2]);
+    let pf = write_f64_list(&mut store, &instance, &[1.0, 2.0]);
+    let pf2 = write_f64_list(&mut store, &instance, &[1.0, 2.5]);
+    let m = instance
+        .get_typed_func::<(i32, i32), i32>(&store, "m")
+        .unwrap();
+    assert_eq!(m.call(&mut store, (pa, pf)).unwrap(), 1); // [1, 2] == [1.0, 2.0]
+    assert_eq!(m.call(&mut store, (pa, pf2)).unwrap(), 0);
+    let pb = write_i32_list(&mut store, &instance, &[1, 0]);
+    let pi = write_i64_list(&mut store, &instance, &[1, 0]);
+    let mb = instance
+        .get_typed_func::<(i32, i32), i32>(&store, "mb")
+        .unwrap();
+    assert_eq!(mb.call(&mut store, (pb, pi)).unwrap(), 1); // [True, False] == [1, 0]
+    let pa2 = write_i64_list(&mut store, &instance, &[1, 2]);
+    let pa3 = write_i64_list(&mut store, &instance, &[1, 2]);
+    let pd = write_i64_list(&mut store, &instance, &[1, 3]);
+    let ch = instance
+        .get_typed_func::<(i32, i32, i32), i32>(&store, "ch")
+        .unwrap();
+    assert_eq!(ch.call(&mut store, (pa, pa2, pa3)).unwrap(), 1);
+    assert_eq!(ch.call(&mut store, (pa, pa2, pd)).unwrap(), 0);
+    assert_eq!(ch.call(&mut store, (pa, pd, pa3)).unwrap(), 0);
+}
+
+#[test]
+fn cluster_a_mutation_in_branch_witness_from_487() {
+    // CPython leaves out == [9, 2] for equal contents; the handle comparison gave [8, 2].
+    let wasm = compile_wasm(
+        "def f(out: list[int], o: list[int]) -> int:\n\
+         \x20   if out == o:\n\
+         \x20       out[0] = 9\n\
+         \x20   else:\n\
+         \x20       out[0] = 8\n\
+         \x20   return 0\n",
+    );
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let f = instance
+        .get_typed_func::<(i32, i32), i64>(&store, "f")
+        .unwrap();
+    let out = write_i64_list(&mut store, &instance, &[1, 2]);
+    let o = write_i64_list(&mut store, &instance, &[1, 2]);
+    f.call(&mut store, (out, o)).unwrap();
+    assert_eq!(read_i64_elem(&store, &instance, out, 0), 9);
+    let o2 = write_i64_list(&mut store, &instance, &[1, 3]);
+    f.call(&mut store, (out, o2)).unwrap();
+    assert_eq!(read_i64_elem(&store, &instance, out, 0), 8);
+}
+
+#[test]
+fn cluster_a_list_truthiness_is_a_length_test() {
+    let wasm = compile_wasm(
+        "def t(xs: list[int]) -> int:\n    if xs:\n        return 1\n    return 0\n\
+         def w(xs: list[int]) -> int:\n    while xs:\n        return 1\n    return 0\n\
+         def n(xs: list[int]) -> bool:\n    return not xs\n\
+         def x(xs: list[int]) -> int:\n    return 1 if xs else 0\n\
+         def a(xs: list[int], k: int) -> int:\n    if xs and k > 0:\n        return 1\n    return 0\n",
+    );
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let empty = write_i64_list(&mut store, &instance, &[]);
+    let zeros = write_i64_list(&mut store, &instance, &[0, 0]);
+    let some = write_i64_list(&mut store, &instance, &[1, 2, 3]);
+    for name in ["t", "w", "x"] {
+        let f = instance.get_typed_func::<i32, i64>(&store, name).unwrap();
+        assert_eq!(f.call(&mut store, empty).unwrap(), 0, "{name}([])");
+        assert_eq!(
+            f.call(&mut store, zeros).unwrap(),
+            1,
+            "{name}([0, 0]): non-empty is TRUE"
+        );
+        assert_eq!(f.call(&mut store, some).unwrap(), 1, "{name}([1,2,3])");
+    }
+    let n = instance.get_typed_func::<i32, i32>(&store, "n").unwrap();
+    assert_eq!(n.call(&mut store, empty).unwrap(), 1);
+    assert_eq!(n.call(&mut store, some).unwrap(), 0);
+    let a = instance
+        .get_typed_func::<(i32, i64), i64>(&store, "a")
+        .unwrap();
+    assert_eq!(a.call(&mut store, (some, 1)).unwrap(), 1);
+    assert_eq!(a.call(&mut store, (empty, 1)).unwrap(), 0);
+    assert_eq!(a.call(&mut store, (some, 0)).unwrap(), 0);
+}
+
+#[test]
+fn cluster_a_bool_coercion_is_a_truth_test_not_a_wrap() {
+    // `-> bool` of an int/float value is Python bool(): 2**32 is True (it
+    // wrapped to 0 before), NaN is True, -0.0 is False.
+    let wasm = compile_wasm(
+        "def b(x: int) -> bool:\n    return x\n\
+         def bf(x: float) -> bool:\n    return x\n\
+         def ba(x: int, y: int) -> bool:\n    return x and y\n",
+    );
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let b = instance.get_typed_func::<i64, i32>(&store, "b").unwrap();
+    assert_eq!(b.call(&mut store, 1i64 << 32).unwrap(), 1);
+    assert_eq!(b.call(&mut store, 0).unwrap(), 0);
+    assert_eq!(b.call(&mut store, -1).unwrap(), 1);
+    let bf = instance.get_typed_func::<f64, i32>(&store, "bf").unwrap();
+    assert_eq!(bf.call(&mut store, 0.5).unwrap(), 1);
+    assert_eq!(bf.call(&mut store, -0.0).unwrap(), 0);
+    assert_eq!(bf.call(&mut store, f64::NAN).unwrap(), 1);
+    let ba = instance
+        .get_typed_func::<(i64, i64), i32>(&store, "ba")
+        .unwrap();
+    assert_eq!(ba.call(&mut store, (1, 1i64 << 32)).unwrap(), 1);
+    assert_eq!(ba.call(&mut store, (0, 5)).unwrap(), 0);
+}
+
+#[test]
+fn cluster_a_user_locals_named_like_scratch_slots_are_not_rebound() {
+    // Name-binding arm (codex r1 hint): a user local whose name LOOKS like a
+    // scratch slot must keep its own local: the slots are `$`-named, which no
+    // Python identifier can spell, so no collision is possible by construction.
+    let wasm = compile_wasm(
+        "def f(__lg_i64: int, __chl_i64: int, __chr_i64: int, __lc_ix: int) -> int:\n\
+         \x20   t = (__lg_i64 and __chl_i64) + (0 < (__chr_i64 + 1) < 9)\n\
+         \x20   return t * 100 + __lg_i64 + __chl_i64 + __chr_i64 + __lc_ix\n",
+    );
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let f = instance
+        .get_typed_func::<(i64, i64, i64, i64), i64>(&store, "f")
+        .unwrap();
+    // (3 and 5) + (0 < 8 < 9) = 5 + 1 = 6 -> 600 + 3 + 5 + 7 + 11 = 626
+    assert_eq!(f.call(&mut store, (3, 5, 7, 11)).unwrap(), 626);
+}
+
+#[test]
+fn cluster_a_bool_coercion_only_at_the_return_boundary() {
+    // opus r1/B1: `emit_convert` no longer truth-tests every I32 target — and since
+    // r5 the three B1 witnesses (an int into a `list[bool]` element, `x: bool = v`, a
+    // list literal `[True, v]`) are REFUSED by the one slot predicate (an int in an
+    // i32 bool slot wraps `2**32` to 0): the only coercion site is the `-> bool` return.
+    assert_stays_js(
+        "def ann(v: int) -> int:\n    f: bool = v\n    return f\n",
+        "the local `f`",
+    );
+    assert_stays_js(
+        "def lit(v: int) -> int:\n    buf = [True, v]\n    return buf[1]\n",
+        "a list-literal element slot",
+    );
+    assert_stays_js(
+        "def lit2(v: float) -> int:\n    buf = [1, v]\n    return buf[1]\n",
+        "a list-literal element slot",
+    );
+    // A float literal list with an int element is exact (int into a float slot).
+    let wasm = compile_wasm("def lit3(v: int) -> float:\n    buf = [1.5, v]\n    return buf[1]\n");
+    validate_wasm(&wasm);
+    assert_eq!(call_i64_f64(&wasm, "lit3", 7), 7.0);
+}
+
+#[test]
+fn cluster_a_same_list_compares_reflexively_even_through_nan() {
+    // opus r1/SF6: CPython's identity shortcut (`x is y or x == y`) makes `fs == fs`
+    // True and `fs < fs` False for `[nan]`; two DISTINCT NaN lists stay unequal.
+    let wasm = compile_wasm(
+        "def se(fs: list[float]) -> bool:\n    return fs == fs\n\
+         def sl(fs: list[float]) -> bool:\n    return fs < fs\n\
+         def sg(fs: list[float]) -> bool:\n    return fs >= fs\n\
+         def de(a: list[float], b: list[float]) -> bool:\n    return a == b\n",
+    );
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let p = write_f64_list(&mut store, &instance, &[f64::NAN, 1.0]);
+    let q = write_f64_list(&mut store, &instance, &[f64::NAN, 1.0]);
+    let se = instance.get_typed_func::<i32, i32>(&store, "se").unwrap();
+    let sl = instance.get_typed_func::<i32, i32>(&store, "sl").unwrap();
+    let sg = instance.get_typed_func::<i32, i32>(&store, "sg").unwrap();
+    let de = instance
+        .get_typed_func::<(i32, i32), i32>(&store, "de")
+        .unwrap();
+    assert_eq!(se.call(&mut store, p).unwrap(), 1);
+    assert_eq!(sl.call(&mut store, p).unwrap(), 0);
+    assert_eq!(sg.call(&mut store, p).unwrap(), 1);
+    assert_eq!(de.call(&mut store, (p, q)).unwrap(), 0);
+    assert_eq!(de.call(&mut store, (p, p)).unwrap(), 1);
+}
+
+#[test]
+fn cluster_a_typed_admission_refuses_unrepresentable_logic_values() {
+    // opus r2/NEW-1: decided at the TYPE layer (logic_join), so a list-valued
+    // SUBSCRIPT or a `for` target is caught exactly like a list param.
+    for src in [
+        "def f(xs: list[int], k: int) -> int:\n    return xs and k\n",
+        "def f(xs: list[int], k: int) -> int:\n    v = xs or k\n    return 0\n",
+        "def f(xs: list[int], k: int) -> int:\n    return (xs and k) + 1\n",
+        "def f(xs: list[int], k: int) -> int:\n    return 1 if k else (xs and k)\n",
+        "def f(n: int, k: int) -> int:\n    buf = [0] * n\n    return buf and k\n",
+        "def f(n: int, k: int) -> int:\n    a = [0] * n\n    b = a\n    return k or b\n",
+        "def f(k: int) -> int:\n    return [[1, 2]][0] and k\n",
+        "def f(k: int) -> int:\n    a = [[1, 2]]\n    b = a[0]\n    return b and k\n",
+        "def f(xs: list[int], k: int) -> int:\n    for b in [xs]:\n        return b and k\n    return 0\n",
+        "def f(xs: list[int], k: int) -> int:\n    return abs(xs and k)\n",
+        "def f(xs: list[int], k: int) -> bool:\n    return (xs and k) == 1\n",
+    ] {
+        assert_stays_js(src, "no common WASM type");
+    }
+}
+
+#[test]
+fn cluster_a_typed_admission_keeps_representable_logic() {
+    // Test positions (truth value only) and two lists of ONE element type (the
+    // join is the list type: `xs or ys` carries the deciding list exactly).
+    for src in [
+        "def f(xs: list[int], k: int) -> int:\n    if xs and k > 0:\n        return 1\n    return 0\n",
+        "def f(xs: list[int], k: int) -> int:\n    while xs or k:\n        return 1\n    return 0\n",
+        "def f(xs: list[int], k: int) -> int:\n    assert xs and k\n    return 1\n",
+        "def f(xs: list[int], k: int) -> int:\n    return 1 if (xs and k) else 0\n",
+        "def f(xs: list[int], k: int) -> bool:\n    return not (xs and k)\n",
+        "def f(xs: list[int], k: int) -> int:\n    if (k > 0 and xs) or (not xs and k < 0):\n        return 1\n    return 0\n",
+        "def f(a: int, b: int) -> int:\n    return a and b\n",
+        "def f(xs: list[int], ys: list[int]) -> int:\n    return (xs or ys)[0]\n",
+        "def f(xs: list[int], ys: list[int]) -> int:\n    zs = xs and ys\n    return zs[0]\n",
+    ] {
+        let module = pyths_parser::parse(src).expect("parse");
+        let out = codegen_wasm(&module);
+        assert!(!out.wasm.is_empty(), "should stay eligible: {src}: {:?}", out.rejected_functions);
+    }
+    // And the two-list value case computes the deciding LIST.
+    let wasm =
+        compile_wasm("def f(xs: list[int], ys: list[int]) -> int:\n    return (xs or ys)[0]\n");
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let empty = write_i64_list(&mut store, &instance, &[]);
+    let ys = write_i64_list(&mut store, &instance, &[7, 8]);
+    let xs = write_i64_list(&mut store, &instance, &[3]);
+    let f = instance
+        .get_typed_func::<(i32, i32), i64>(&store, "f")
+        .unwrap();
+    assert_eq!(f.call(&mut store, (empty, ys)).unwrap(), 7);
+    assert_eq!(f.call(&mut store, (xs, ys)).unwrap(), 3);
+}
+
+#[test]
+fn cluster_a_typed_admission_refuses_container_under_scalar_return_and_bool_slot_wrap() {
+    // opus r2/NEW-2: `-> int: return xs` surfaced the heap pointer; NEW-7: an
+    // int stored into a `list[bool]` element wrapped `2**32` to 0.
+    assert_stays_js(
+        "def li(xs: list[int]) -> int:\n    return xs\n",
+        "container value under a scalar return type",
+    );
+    assert_stays_js(
+        "def lf(fs: list[float]) -> float:\n    return fs\n",
+        "container value under a scalar return type",
+    );
+    assert_stays_js(
+        "def lb(xs: list[int]) -> bool:\n    return xs\n",
+        "container value under a scalar return type",
+    );
+    assert_stays_js(
+        "def s(xs: list[bool], v: int) -> int:\n    xs[0] = v\n    return 0\n",
+        "list element slot",
+    );
+    // A bool-valued store into list[bool] stays admitted.
+    let wasm =
+        compile_wasm("def s(xs: list[bool], v: int) -> int:\n    xs[0] = v > 0\n    return 0\n");
+    validate_wasm(&wasm);
+}
+
+#[test]
+fn cluster_a_typed_admission_sees_through_ifexpr_and_concat() {
+    // opus r3/NEW-r3-1: `expr_type` erases a list-valued IfExpr / `+` to I64; the
+    // container-preserving static type must refuse these wherever they appear.
+    for src in [
+        "def h(xs: list[int], ys: list[int], c: int, k: int) -> int:\n    return (xs if c else ys) and k\n",
+        "def r(xs: list[int], ys: list[int], c: int) -> int:\n    return xs if c else ys\n",
+        "def r2(xs: list[int], ys: list[int], c: int) -> float:\n    return xs if c else ys\n",
+        "def hc(xs: list[int], ys: list[int]) -> int:\n    return xs + ys\n",
+        "def ml(xs: list[int], ys: list[int], c: int) -> int:\n    return len(xs if c else ys)\n",
+        "def mt(xs: list[int], ys: list[int], c: int) -> int:\n    if xs + ys:\n        return 1\n    return 0\n",
+        "def mx(xs: list[int], c: int) -> int:\n    return xs if c else 5\n",
+    ] {
+        let module = pyths_parser::parse(src).expect("parse");
+        let out = codegen_wasm(&module);
+        assert!(out.wasm.is_empty(), "must be refused: {src}");
+        assert!(
+            out.rejected_functions.iter().any(|(_, r)| r.contains("container-valued expression") || r.contains("no common WASM type") || r.contains("container value under a scalar return type")),
+            "{src}: {:?}",
+            out.rejected_functions
+        );
+    }
+    // The scalar-valued IfExpr / `+` are untouched.
+    let wasm =
+        compile_wasm("def s(a: int, b: int, c: int) -> int:\n    return (a if c else b) + a\n");
+    validate_wasm(&wasm);
+}
+
+#[test]
+fn cluster_a_typed_admission_store_rule_covers_every_store_site() {
+    // opus r3/NEW-r3-2: one store rule for Assign, AugAssign and AnnAssign.
+    assert_stays_js(
+        "def s(xs: list[bool], v: int) -> int:\n    xs[0] += v\n    return 0\n",
+        "list element slot",
+    );
+    assert_stays_js(
+        "def s(xs: list[bool]) -> int:\n    xs[0] += 1\n    return 0\n",
+        "list element slot",
+    );
+    assert_stays_js(
+        "def s(xs: list[bool], v: float) -> int:\n    xs[0] = v\n    return 0\n",
+        "list element slot",
+    );
+    // opus r3/NEW-r3-3: an assert MESSAGE is not lowered -> refused.
+    assert_stays_js(
+        "def m(ys: list[int], c: int) -> int:\n    assert c, ys[100]\n    return 1\n",
+        "`assert` with a message",
+    );
+    let wasm = compile_wasm("def ok(xs: list[bool], v: int) -> int:\n    xs[0] = v > 0\n    assert v >= 0\n    return 0\n");
+    validate_wasm(&wasm);
+}
+
+#[test]
+fn cluster_a_store_rule_covers_every_slot_type_and_return_none() {
+    // opus r4/NEW-r4-1: the store rule is about REPRESENTABILITY in the slot,
+    // for every (stored, slot) pair — not only the list[bool] slot.
+    assert_stays_js(
+        "def s(xs: list[int], v: float) -> float:\n    xs[0] = v\n    return xs[0]\n",
+        "list element slot",
+    );
+    assert_stays_js(
+        "def s(xs: list[int]) -> int:\n    xs[0] += 1.5\n    return xs[0]\n",
+        "list element slot",
+    );
+    assert_stays_js(
+        "def s(xs: list[int], ys: list[int]) -> int:\n    xs[0] = ys\n    return xs[0]\n",
+        "list element slot",
+    );
+    assert_stays_js(
+        "def s(fs: list[float], ys: list[int]) -> int:\n    fs[0] = ys\n    return 0\n",
+        "list element slot",
+    );
+    assert_stays_js(
+        "def s(bs: list[bool], ys: list[int]) -> int:\n    bs[0] = ys\n    return 0\n",
+        "list element slot",
+    );
+    // An int into a list[float] slot is Python's own exact coercion: admitted and correct.
+    let wasm =
+        compile_wasm("def s(fs: list[float], v: int) -> float:\n    fs[0] = v\n    return fs[0]\n");
+    validate_wasm(&wasm);
+    let (mut store, instance) = make_math_instance(&wasm);
+    let p = write_f64_list(&mut store, &instance, &[1.5, 2.5]);
+    let f = instance
+        .get_typed_func::<(i32, i64), f64>(&store, "s")
+        .unwrap();
+    assert_eq!(f.call(&mut store, (p, 7)).unwrap(), 7.0);
+    // opus r4/NEW-r4-3: `-> None` returning a value drops it -> refused.
+    assert_stays_js(
+        "def n(xs: list[int]) -> None:\n    return xs\n",
+        "`-> None` function returning a value",
+    );
+    assert_stays_js(
+        "def n(xs: list[int]) -> None:\n    return 5\n",
+        "`-> None` function returning a value",
+    );
+    let wasm = compile_wasm("def n(xs: list[int]) -> None:\n    xs[0] = 1\n    return\n");
+    validate_wasm(&wasm);
+    // opus r4/NEW-r4-2: a raise argument that can itself raise -> refused; literal/name ok.
+    assert_stays_js("def r(ys: list[int], c: int) -> int:\n    if c:\n        raise ValueError(ys[100])\n    return 0\n", "`raise` whose argument");
+    let wasm = compile_wasm(
+        "def r(c: int) -> int:\n    if c:\n        raise ValueError(c)\n    return 0\n",
+    );
+    validate_wasm(&wasm);
+}
+
+#[test]
+fn cluster_a_slot_rule_covers_local_return_and_argument_slots() {
+    // opus r5/NEW-r5-1: the LOCAL slot (annotated or first-assignment-typed).
+    assert_stays_js(
+        "def f(fs: list[float]) -> float:\n    x: int = fs[0]\n    return x + 0.5\n",
+        "the local `x`",
+    );
+    assert_stays_js(
+        "def f(xs: list[int], ys: list[int]) -> int:\n    x: int = ys\n    return x - x\n",
+        "the local `x`",
+    );
+    assert_stays_js(
+        "def f(fs: list[float]) -> float:\n    x: bool = fs[0]\n    return x + 0.5\n",
+        "the local `x`",
+    );
+    assert_stays_js(
+        "def f(v: int) -> int:\n    x: list[int] = v\n    return len(x)\n",
+        "the local `x`",
+    );
+    assert_stays_js(
+        "def f(fs: list[float]) -> float:\n    s = 0\n    s = fs[0]\n    return s\n",
+        "the local `s`",
+    );
+    assert_stays_js(
+        "def f(a: float) -> int:\n    x: int = a\n    return x\n",
+        "the local `x`",
+    );
+    // opus r5/NEW-r5-2: the RETURN slot (float under -> int); int under -> float stays.
+    assert_stays_js(
+        "def f(a: float) -> int:\n    return a\n",
+        "float value under an `int` return type",
+    );
+    assert_stays_js(
+        "def f(a: int, b: int) -> int:\n    return a / b\n",
+        "float value under an `int` return type",
+    );
+    assert_stays_js(
+        "def f(fs: list[float]) -> int:\n    return fs[0]\n",
+        "float value under an `int` return type",
+    );
+    let wasm = compile_wasm("def f(a: int) -> float:\n    return a\n");
+    validate_wasm(&wasm);
+    assert_eq!(call_i64_f64(&wasm, "f", 7), 7.0);
+    // Call-ARGUMENT slots: no conversion at a user call, so the static type must match
+    // (the callee itself stays admitted; only the caller is refused, with the reason).
+    let module = pyths_parser::parse(
+        "def callee(n: int) -> int:\n    return n + 1\ndef caller(fs: list[float]) -> int:\n    return callee(fs[0])\n",
+    )
+    .expect("parse");
+    let out = codegen_wasm(&module);
+    assert!(
+        out.compiled_functions.contains(&"callee".to_string()),
+        "{:?}",
+        out.rejected_functions
+    );
+    assert!(
+        out.rejected_functions
+            .iter()
+            .any(|(n, r)| n == "caller" && r.contains("passing a F64 value to parameter `n`")),
+        "{:?}",
+        out.rejected_functions
+    );
+    // The r5-3 module: the innocent `callee` / `good` stay admitted now that the two
+    // culprits are refused WITH a reason (no blind alphabetical demotion).
+    let module = pyths_parser::parse(
+        "def good(n: int) -> int:\n    return n + 1\ndef callee(n: int) -> int:\n    return n + 1\n\
+         def caller(fs: list[float]) -> int:\n    return callee(fs[0])\n\
+         def param_retype(x: int, fs: list[float]) -> int:\n    x = fs[0]\n    return x\n",
+    )
+    .expect("parse");
+    let out = codegen_wasm(&module);
+    assert!(
+        out.compiled_functions.contains(&"good".to_string()),
+        "{:?}",
+        out.rejected_functions
+    );
+    assert!(
+        out.compiled_functions.contains(&"callee".to_string()),
+        "{:?}",
+        out.rejected_functions
+    );
+    assert_eq!(
+        out.rejected_functions.len(),
+        2,
+        "{:?}",
+        out.rejected_functions
+    );
 }

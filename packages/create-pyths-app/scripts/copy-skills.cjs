@@ -13,6 +13,10 @@ const map = [
   ["SKILL.psc.md", "compressing-ps-to-psc.md"],
 ];
 
+// S10: clear the generated skills/ dir FIRST so a stale skills/old.md from a previous prepack cannot
+// survive into the packed payload (it would ship in the npm tarball AND the wheel-vendored copy, and
+// -- being on both sides -- pass the raw-byte mirror compare). Recreate it clean, then copy.
+fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
 for (const [src, dst] of map) {
   const from = path.join(root, src);
@@ -20,6 +24,12 @@ for (const [src, dst] of map) {
     console.error(`copy-skills: missing source ${from}`);
     process.exit(1);
   }
-  fs.copyFileSync(from, path.join(outDir, dst));
+  // Normalize CRLF -> LF on write so the packed payload is byte-stable across platforms:
+  // the canonical SKILL*.md are LF in git but check out CRLF on a default-autocrlf Windows
+  // clone, and this runs at `npm pack` time -> a raw copyFileSync would bake CRLF into the
+  // wheel's vendored copy on Windows while a Linux CI leg packs LF, RED-ing the raw-byte
+  // scaffolder mirror gate + the web-parity `git diff` (opus M7 review BLOCKER-1).
+  const bytes = fs.readFileSync(from, "utf8").replace(/\r\n/g, "\n");
+  fs.writeFileSync(path.join(outDir, dst), bytes);
   console.log(`copy-skills: skills/${dst}`);
 }

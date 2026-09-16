@@ -1,0 +1,50 @@
+# pythscribe artifacts + built Gradio component: byte-exact on every checkout (the artifact
+# manifest hashes these files; CRLF conversion would invalidate every hash -- review R1/B1).
+examples/**/__pythscribe__/** -text
+pythscribe/gradio/wasm_function/backend/**/templates/** -text
+*.wasm binary
+examples/gradio-image-preprocess/test_images/*.jpg binary
+examples/gradio-image-preprocess/*.ipynb -text
+pythscribe/ffi/*.mjs -text
+pythscribe/gradio/wasm_function/frontend/list_buffer.mjs -text
+# v0.2.5 callback path: pin the React-island source + shim (LF) so a default-autocrlf Windows clone
+# does not churn them / drift the build (S8)
+pythscribe/gradio/wasm_function/frontend/*.tsx -text
+pythscribe/gradio/wasm_function/frontend/*.ts -text
+# M3: the Streamlit component's vendored shim MUST stay byte-identical to pythscribe/ffi/list_buffer.mjs
+# (the 3-way identity gate); pin -text so a default-autocrlf Windows clone does not check it out CRLF
+# (review B2). The whole component dir is a static asset -- no line-ending conversion.
+pythscribe/streamlit/wasm_component/* -text
+# M1.5: notebooks + committed evidence are hashed/compared byte-for-byte on every checkout
+examples/wasm-use-cases/*.ipynb -text
+examples/wasm-use-cases/*.json -text
+# M0 (self-contained pip wheel, spec 13-09-26): the npm runtime payload is compared RAW-BYTE across
+# checkout / dist/runtime-payload/ / the wheel's vendored copy / the published tarball, and the
+# compiler embeds it via include_str!. NO normalization anywhere -- so pin LF on every checkout
+# (a default-autocrlf Windows clone would otherwise embed + vendor CRLF and every gate goes RED).
+runtime/** -text
+pythscribe/_runtime/** -text
+# M7 (spec 13-09-26): the vendored create-pyths-app scaffolder is byte-compared raw against
+# dist/scaffolder-payload/ (scripts/verify_scaffolder_mirror.py) -- pin LF so a default-autocrlf
+# Windows clone does not check it out CRLF and turn the mirror gate RED. BOTH the vendored copy AND
+# the SOURCE must be pinned: `prepare_scaffolder_payload` runs `npm pack` over the source working
+# tree, so if the source checked out CRLF on Windows the packed payload (and thus the vendored copy)
+# would be CRLF while a Linux CI leg packs LF -> the mirror gate + the web-parity `git diff` RED
+# cross-platform (opus M7 review BLOCKER-1). Pin the source too so `npm pack` is byte-stable LF.
+packages/create-pyths-app/** -text
+pythscribe/_web/create-pyths-app/** -text
+# the pip package MIT notice is byte-compared to runtime/LICENSE (test_packaging) and shipped in every wheel
+pythscribe/LICENSE -text
+# M5 (spec 13-09-26): the generated third-party inventory is sha256-bound -- inventory.json records every
+# notice text's hash and scripts/verify_wheel_license.py re-hashes the bytes INSIDE every built wheel; the
+# win_amd64 wheel leg builds from a Windows checkout, so a CRLF conversion there would RED every wheel.
+# Byte-exact on every checkout; the generator writes LF and `--check` diffs byte-for-byte.
+third_party/** -text
+about.toml -text
+pythscribe/LICENSES-MAP.md -text
+# M6.1 (spec 13-09-26, requirements §5.4 stamp idempotence): every package.json publish.mjs stamps is
+# compared RAW-BYTE against `JSON.stringify(j, null, 2) + "\n"` on a tag ref (`--check`); pin LF so a
+# default-autocrlf Windows clone cannot make the pre-tag gate RED on line endings alone.
+npm/pythscribe/package.json -text
+npm/@pythscribe/*/package.json -text
+packages/*/package.json -text

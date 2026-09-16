@@ -1,0 +1,19 @@
+{
+  "_comment": "S9: the ONE structural authority for the npm publish set AND the R-NI evidence set. npm/publish.mjs derives PLATFORM_PKGS/EXTRA_DIRS from it; scripts/require_evidence.py derives NPM_PLUGIN_PACKAGES/NPM_WRAPPER and asserts the platform/payload names agree with its (triple / manifest-key) maps. Replaces the prior regex-linked duplicate. Paths are repo-root-relative package directories.",
+  "platform": [
+    "@pythscribe/cli-win32-x64",
+    "@pythscribe/cli-linux-x64",
+    "@pythscribe/cli-linux-arm64",
+    "@pythscribe/cli-darwin-x64",
+    "@pythscribe/cli-darwin-arm64"
+  ],
+  "payload": {
+    "pyths-runtime": "runtime",
+    "create-pyths-app": "packages/create-pyths-app"
+  },
+  "plugins": {
+    "vite-plugin-pyths": "packages/vite-plugin-pyths",
+    "next-plugin-pyths": "packages/next-plugin-pyths"
+  },
+  "wrapper": "pythscribe"
+}

@@ -1,0 +1,10 @@
+# repro 11 (S4): `abs = lambda ...` at module scope is a binder of `abs`.
+# DEMOTE: use
+def use(x: int) -> int:
+    return abs(x)
+
+
+print(use(-5))
+abs = lambda z: z * 3
+print(use(-5))
+print(abs(-5))

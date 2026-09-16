@@ -1,0 +1,20 @@
+# a WASM chain g -> f -> abs where the whole chain is called at module scope BEFORE
+# the shadowing def (builtin for that call) and after (user): g and f both demote
+# (a WASM body bakes ONE binding). A chain only called AFTER stays WASM (20_*).
+# DEMOTE: f,g
+def f(x: int) -> int:
+    return abs(x)
+
+
+def g(x: int) -> int:
+    return f(x) + 1
+
+
+print(g(-5))
+
+
+def abs(x: int) -> int:
+    return x * 7
+
+
+print(g(-5))

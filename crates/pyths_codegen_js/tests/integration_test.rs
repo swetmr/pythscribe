@@ -1,4 +1,4 @@
-/// Integration tests that compile .ps fixtures and verify JS output.
+// Integration tests that compile .ps fixtures and verify JS output.
 
 fn compile(source: &str) -> String {
     let module = pyths_parser::parse(source).expect("Parse failed");
@@ -7,8 +7,10 @@ fn compile(source: &str) -> String {
 
 fn compile_worker(source: &str) -> String {
     let module = pyths_parser::parse(source).expect("Parse failed");
-    let mut opts = pyths_codegen_js::CodegenOptions::default();
-    opts.worker_runtime = true;
+    let opts = pyths_codegen_js::CodegenOptions {
+        worker_runtime: true,
+        ..Default::default()
+    };
     pyths_codegen_js::codegen_with_options(&module, &opts)
 }
 
@@ -697,7 +699,11 @@ fn test_except_exception_is_unconditional_catch_all() {
             "{base} must not be referenced as a JS class: {js}"
         );
         assert!(js.contains("catch (__exc)"), "JS: {js}");
-        assert!(js.contains("let e = __exc"), "binds the caught value: {js}");
+        // #491 B1: a module-level `e` bound only inside the handler is a
+        // module-hoisted `let e;`, so the alias is WRITTEN bare (`e = __exc;`)
+        // rather than shadowed by a catch-block `let e = __exc` — the outer
+        // binding is the one Python binds (and unbinds on handler exit).
+        assert!(js.contains("e = __exc;"), "binds the caught value: {js}");
     }
     // A user/builtin exception class still gets the instanceof guard.
     let js = compile("try:\n    x = 1\nexcept ValueError as e:\n    print(e)");
@@ -2297,6 +2303,26 @@ fn test_stdlib_import_functools() {
     );
 }
 
+// #478: keywords on a CALL-RESULT callee (`partial(f, 1)(2, z=3)`) must route
+// through __pyCallKw so they bind by name — not leak in as a bare trailing
+// positional object. Negative control: reverting the emit.rs branch to the
+// old `Name | Lambda`-only match makes this emit `partial(f, 1)(2, {z: 3})`
+// and the assertion fails.
+#[test]
+fn test_kwargs_on_call_result_callee_route_through_callkw() {
+    let js = compile("def f(x, y, z):\n    return z\nprint(f(0, 0, 0)(1)(2, z=3))\n");
+    assert!(
+        js.contains("__pyCallKw("),
+        "call-result callee with kwargs must route through __pyCallKw, got:\n{}",
+        js
+    );
+    assert!(
+        !js.contains("(2, {z: 3})"),
+        "kwargs must not leak as a bare trailing positional object, got:\n{}",
+        js
+    );
+}
+
 #[test]
 fn test_stdlib_import_collections() {
     let js = compile("from collections import Counter, deque");
@@ -3755,7 +3781,7 @@ fn test_method_lowering_dict_setdefault() {
 }
 
 #[test]
-fn test_method_lowering_runtime_imports_pyStrJoin() {
+fn test_method_lowering_runtime_imports_py_str_join() {
     // The runtime helper must be imported by the generated module.
     let js = compile("xs = [\"a\"]\ns = \", \".join(xs)");
     assert!(
@@ -3766,7 +3792,7 @@ fn test_method_lowering_runtime_imports_pyStrJoin() {
 }
 
 #[test]
-fn test_method_lowering_runtime_imports_pyDictGet() {
+fn test_method_lowering_runtime_imports_py_dict_get() {
     // Hybrid → Runtime form must register the runtime helper.
     let js = compile("xs = [{}]\nv = xs[0].get(\"k\", 0)");
     assert!(
@@ -3973,7 +3999,7 @@ fn assert_no_python_isms(name: &str, js: &str) {
 fn preview_at(s: &str, idx: usize) -> String {
     let start = idx.saturating_sub(40);
     let end = (idx + 60).min(s.len());
-    s[start..end].replace('\n', "\n")
+    s[start..end].to_string()
 }
 
 // =====================================================================
@@ -4438,7 +4464,7 @@ fn test_anti_pollution_sweep_all_fixtures() {
                 let idx = js.find(&pat).unwrap_or(0);
                 let lo = idx.saturating_sub(40);
                 let hi = (idx + 60).min(js.len());
-                let snippet = js[lo..hi].replace('\n', "\n");
+                let snippet = js[lo..hi].to_string();
                 violations.push(format!(
                     "{}: forbidden `.{}(` survived\n    snippet: {}",
                     path.file_name().unwrap().to_string_lossy(),
@@ -4463,7 +4489,7 @@ fn test_anti_pollution_sweep_all_fixtures() {
 }
 
 #[test]
-fn test_style_variable_receiver_wraps_in_pyNormalizeStyle() {
+fn test_style_variable_receiver_wraps_in_py_normalize_style() {
     // When `style=variable` (not Dict literal), codegen wraps in
     // pyNormalizeStyle so the runtime can convert snake→camel keys.
     let source = r#"
@@ -4546,7 +4572,7 @@ y = create_element("div", "s", style={"border_radius": "6px"})
 }
 
 #[test]
-fn test_factory_style_variable_wraps_in_pyNormalizeStyle() {
+fn test_factory_style_variable_wraps_in_py_normalize_style() {
     // Dynamic style value on the factory path wraps in pyNormalizeStyle,
     // exactly like the PSX path.
     let source = r#"
@@ -5606,7 +5632,7 @@ def Widget():
 // dispatches by container type.
 
 #[test]
-fn in_op_auto_imports_pyContains() {
+fn in_op_auto_imports_py_contains() {
     let js = compile(
         r#"
 def has_key(d, k):
@@ -5631,7 +5657,7 @@ def has_key(d, k):
 }
 
 #[test]
-fn not_in_op_auto_imports_pyContains() {
+fn not_in_op_auto_imports_py_contains() {
     let js = compile(
         r#"
 def missing(d, k):
@@ -8787,10 +8813,7 @@ fn test_duplicate_import_deduped() {
     );
     // even when the first import is part of a multi-name line
     let jm = compile("from collections import Counter, defaultdict\nfrom collections import defaultdict\nd = defaultdict(int)");
-    assert_eq!(
-        jm.matches("defaultdict").filter(|_| true).count() >= 1,
-        true
-    );
+    assert!(jm.matches("defaultdict").filter(|_| true).count() >= 1);
     assert!(
         !jm.contains("import { defaultdict } from"),
         "second defaultdict line dropped:\n{}",

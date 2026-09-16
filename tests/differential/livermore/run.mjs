@@ -33,6 +33,9 @@ const PYTHS_BIN = process.env.PYTHS_BIN ?? path.join(
     process.platform === "win32" ? "pyths.exe" : "pyths");
 const RUNTIME_INDEX = path.join(REPO_ROOT, "runtime", "src", "index.js");
 const SCRATCH = path.join(__dirname, ".scratch");
+// Idempotent: a previous run's outputs would make `pyths` refuse to overwrite a .wasm
+// it cannot prove it created (a message that reads like a compiler bug).
+await fs.rm(SCRATCH, { recursive: true, force: true });
 await fs.mkdir(SCRATCH, { recursive: true });
 
 let pythonOk = true;

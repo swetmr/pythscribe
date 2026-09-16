@@ -1,0 +1,10 @@
+# repro 11 (S4): a module-level for-target named like a builtin rebinds it.
+# DEMOTE: use
+def use(x: int) -> int:
+    return abs(x)
+
+
+print(use(-5))
+for abs in [lambda z: z + 1]:
+    pass
+print(use(-5))

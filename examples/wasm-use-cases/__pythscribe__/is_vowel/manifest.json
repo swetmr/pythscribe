@@ -1,0 +1,29 @@
+{
+  "compiler": {
+    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "name": "pyths",
+    "version": "0.2.5"
+  },
+  "entry": "is_vowel.js",
+  "files": {
+    "is_vowel.glue.js": "51ccd26cf12b4baf7ab4ec0e3e8ba473f7460fb8115e0637a171b74410c96102",
+    "is_vowel.js": "abb5a9ee7de52a0bfa8ac9877221a9dcd9ff46aa592691ef2811f7ed02fdf773",
+    "is_vowel.ps": "3bee9c5bb9472ec52b93d4fb38cbddec31f00a5b849d39b3ce39c2c296e4cb4c",
+    "is_vowel.wasm": "bd8e7229f14538fb8ce7a821016da58adb3e2b15e2780641f381294174308f3a"
+  },
+  "function": "is_vowel",
+  "glue": "is_vowel.glue.js",
+  "manifest_sha256": "31ae685e267dedd5a7d1ca7aeea5d7fd0dbffed727435d27b2b613beaedebb48",
+  "optimizer": {
+    "applied": false,
+    "error": null,
+    "id": "none",
+    "path_sha256": null
+  },
+  "runtime_dir": null,
+  "schema": 1,
+  "source_file": "kernels.py",
+  "source_sha256": "3bee9c5bb9472ec52b93d4fb38cbddec31f00a5b849d39b3ce39c2c296e4cb4c",
+  "target": "js+wasm",
+  "wasm": "is_vowel.wasm"
+}

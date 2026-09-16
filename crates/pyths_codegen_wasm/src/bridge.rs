@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use crate::abi;
 use crate::types::WasmType;
 use crate::WasmExportInfo;
 
 /// Runtime target for the generated bridge / glue code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BridgeTarget {
-    /// Browser (default). Uses `WebAssembly.instantiateStreaming(fetch(url))` with `arrayBuffer` fallback.
+    /// Browser (default). Uses `WebAssembly.compileStreaming(fetch(url))` with `arrayBuffer` fallback.
     Browser,
     /// Cloudflare Workers. WASM bytes are embedded as base64 in the JS module
     /// (Workers cannot fetch sibling files at runtime). Includes a default
@@ -165,6 +166,38 @@ fn sanitize_js_param(name: &str) -> String {
     }
 }
 
+/// M2.1 (spec 13-09-26 §5.6): the WASM ABI contract inlined into the glue from the
+/// ONE source (`abi.rs`) — `__PYTHS_ABI` — plus `__checkPythsAbi(module)`, which
+/// every loader runs on the compiled `WebAssembly.Module` BEFORE instantiating it
+/// (compile → check → instantiate; instantiation is what runs a `start` function,
+/// so a refused module never executes — codex m2 blocker). It reads the module's
+/// own `pyths.abi` custom section and compares
+/// major AND both layout strings FIELD BY FIELD (a mutant that drops one field's
+/// comparison is caught by the per-field patched-module controls, validation
+/// §G-ABI-3 (v)/(vi)). A module whose section is absent, duplicated, malformed
+/// or disagreeing is refused with a loud `Error` naming the field and both
+/// sides — never instantiated, never silently misread at the wrong layout.
+fn emit_abi_check(out: &mut String) {
+    out.push_str(&format!(
+        "const __PYTHS_ABI = {{ abi: {}, list_layout: {:?}, array_layout: {:?} }};\n",
+        abi::PYTHS_ABI_MAJOR,
+        abi::LIST_LAYOUT_VERSION,
+        abi::ARRAY_LAYOUT_VERSION
+    ));
+    out.push_str("function __checkPythsAbi(module) {\n");
+    out.push_str(&format!(
+        "  const secs = WebAssembly.Module.customSections(module, {:?});\n",
+        abi::ABI_SECTION_NAME
+    ));
+    out.push_str("  if (secs.length !== 1) throw new Error('pythscribe: WASM ABI check failed: expected exactly one `pyths.abi` custom section, found ' + secs.length + ' (this .wasm was not emitted by the pyths compiler that emitted this glue; rebuild the artifact)');\n");
+    out.push_str("  let got;\n");
+    out.push_str("  try { got = JSON.parse(new TextDecoder().decode(new Uint8Array(secs[0]))); } catch (e) { throw new Error('pythscribe: WASM ABI check failed: `pyths.abi` section is not valid JSON (' + e.message + ')'); }\n");
+    out.push_str("  for (const f of ['abi', 'list_layout', 'array_layout']) {\n");
+    out.push_str("    if (got[f] !== __PYTHS_ABI[f]) throw new Error('pythscribe: WASM ABI mismatch on `' + f + '`: module=' + JSON.stringify(got[f]) + ' glue=' + JSON.stringify(__PYTHS_ABI[f]) + ' -- rebuild the artifact with the matching pyths compiler (a mismatched layout would be read at the wrong width; refused, never silently)');\n");
+    out.push_str("  }\n");
+    out.push_str("}\n");
+}
+
 /// Render the `imports` JS object that gets passed to `WebAssembly.instantiate`.
 fn render_imports_object(math_imports: &BTreeSet<String>, needs_dicts: bool) -> String {
     if math_imports.is_empty() && !needs_dicts {
@@ -306,6 +339,10 @@ pub fn generate_bridge_for_target(
         out.push_str(DICT_HOST);
     }
 
+    // M2.1: the ABI contract + loud check, declared BEFORE the loader's
+    // top-level await runs (a `const` in the TDZ would throw).
+    emit_abi_check(&mut out);
+
     match target {
         BridgeTarget::Browser => {
             emit_loader_browser(&mut out, wasm_filename, math_imports, needs_dicts)
@@ -384,6 +421,13 @@ pub fn generate_bridge_for_target(
     // (Previously referenced-but-undefined → ReferenceError at runtime: B-031.)
     if uses_list_boundary(exports) {
         emit_list_helpers(&mut out);
+    }
+
+    // M2a-3b: typed-array marshalling helpers — emitted whenever an export takes
+    // an `Array[dtype, ndim]` param, so `__array_to_wasm` / `__array_write_back`
+    // are defined. Byte-agrees with `pythscribe/runtime/array_buffer.py`.
+    if uses_array_boundary(exports) {
+        emit_array_helpers(&mut out);
     }
 
     // Normalize a WASM i64 result (always a BigInt) back to a Number when
@@ -548,14 +592,83 @@ pub fn generate_bridge_for_target(
             }
         }
 
+        // #484: SYMMETRIC marshalling for mutable `list` out-parameters. A list
+        // arg is marshalled into linear memory through a NAMED local
+        // (`__wb_arg_<i>`) rather than inline, so the (possibly in-place-mutated)
+        // buffer can be copied BACK into the caller's JS array on return — the
+        // inverse direction the old glue silently dropped. `writeback` carries
+        // (param index, sanitized JS name, element kind) for every list param;
+        // scalar/str/dict/tuple/closure params keep their inline conversion, so
+        // a function WITHOUT list params emits byte-identical glue to before.
+        //
+        // OUT OF SCOPE (orthogonal, pre-existing): ALIASED list params — the
+        // SAME JS array passed to two parameters, `f(xs, xs)`. The glue marshals
+        // each list param into an INDEPENDENT buffer (it has no alias dedup), so
+        // two mutated buffers write back to the shared array last-writer-wins,
+        // not composed as CPython's single-object aliasing would. Write-back does
+        // not introduce this — the buffers were already independent on the IN
+        // direction — and closing it is an INPUT-marshalling change (dedup equal
+        // array params to one buffer), tracked separately from #484.
+        let writeback: Vec<(usize, String, String)> = export
+            .params
+            .iter()
+            .zip(js_names.iter())
+            .enumerate()
+            .filter_map(|(i, ((_, ty), js))| match ty {
+                WasmType::PtrList(inner) => {
+                    Some((i, js.clone(), list_elem_kind(inner).to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        // M2a-3b: SYMMETRIC marshalling for `Array[dtype, ndim]` out-parameters —
+        // the typed-array counterpart of the #484 list write-back. A caller-
+        // allocated `TypedArray` is marshalled IN through `__array_to_wasm` (its
+        // pointer bound to a `__wb_arg_<i>` local) and the (in-place-filled)
+        // buffer copied BACK into the SAME TypedArray on return — the only way a
+        // scalar-return @wasm kernel produces array output (#364). Carries
+        // (param index, sanitized JS name, dtype spelling, ndim).
+        //
+        // OUT OF SCOPE (same known limitation as the #484 list case): ALIASED
+        // array params — the SAME TypedArray passed to two parameters, `f(x, x)`.
+        // Each array param is marshalled into an INDEPENDENT WASM buffer (no alias
+        // dedup), so a cross-element kernel (`out[i] = a[i-1]`) computes from the
+        // pristine input buffer and last-writer-wins on the shared array, NOT the
+        // in-place propagation CPython's aliasing would show. This matches the
+        // SERVER path (`array_buffer.py` also uses independent buffers), so it is
+        // NOT a js+wasm regression; it is the documented `caller-allocated,
+        // distinct out-buffer` precondition (closing it is an input-marshalling
+        // alias-dedup change, tracked separately — the #484 aliasing note).
+        let array_writeback: Vec<(usize, String, &'static str, u32)> = export
+            .params
+            .iter()
+            .zip(js_names.iter())
+            .enumerate()
+            .filter_map(|(i, ((_, ty), js))| match ty {
+                WasmType::PtrArray { dtype, ndim } => {
+                    Some((i, js.clone(), dtype.spelling(), *ndim))
+                }
+                _ => None,
+            })
+            .collect();
+        let has_writeback = !writeback.is_empty() || !array_writeback.is_empty();
+
         // Build the call arguments with type conversions. SECURITY (#13): pass
         // the sanitized JS binding name into the conversion so every reference
-        // matches the (possibly `$`-suffixed) parameter declaration.
+        // matches the (possibly `$`-suffixed) parameter declaration. A list
+        // param references its hoisted `__wb_arg_<i>` local (declared in the
+        // prelude below) so the same pointer is available for write-back.
         let converted_args: Vec<String> = export
             .params
             .iter()
             .zip(js_names.iter())
-            .map(|((_, ty), js)| convert_js_to_wasm(js, ty))
+            .enumerate()
+            .map(|(i, ((_, ty), js))| match ty {
+                // A list OR array param references its hoisted `__wb_arg_<i>`
+                // local so the same pointer is available for write-back.
+                WasmType::PtrList(_) | WasmType::PtrArray { .. } => format!("__wb_arg_{}", i),
+                _ => convert_js_to_wasm(js, ty),
+            })
             .collect();
 
         let call_expr = format!("__wasm.{}({})", export.name, converted_args.join(", "));
@@ -597,19 +710,62 @@ pub fn generate_bridge_for_target(
         // Pointer return values are converted (copied out to JS) BEFORE the
         // `finally` runs, so the reset never clobbers a value still in use.
         let indent = if needs_strings { "    " } else { "  " };
+        // #484: prelude marshals each list param into its `__wb_arg_<i>` local
+        // (inside the arena scope — allocs are reclaimed by the `finally`); the
+        // write-back copies each buffer back into its JS array after the call,
+        // AFTER `ovf_check` (an i64-overflowed buffer holds wrapped garbage — the
+        // twin re-run redoes the mutation faithfully, so ovf returns/throws
+        // BEFORE write-back) but BEFORE `__check_err` (a deliberate Python
+        // exception raised MID-kernel leaves the buffer holding the faithful
+        // PARTIAL mutation — CPython aliasing makes that partial write visible to
+        // the caller alongside the raise, so write-back must run before the
+        // exception propagates). A WASM trap throws during the call itself, so
+        // neither runs and the twin re-executes from the original array. Both
+        // strings are empty for a function without list params (inert glue).
+        let mut prelude = String::new();
+        for (i, js, kind) in &writeback {
+            prelude.push_str(&format!(
+                "{}const __wb_arg_{} = __list_to_wasm({}, {:?});\n",
+                indent, i, js, kind
+            ));
+        }
+        // M2a-3b: array params marshal in alongside list params (same arena
+        // scope, same `__wb_arg_<i>` binding convention).
+        for (i, js, dtype, ndim) in &array_writeback {
+            prelude.push_str(&format!(
+                "{}const __wb_arg_{} = __array_to_wasm({}, {:?}, {});\n",
+                indent, i, js, dtype, ndim
+            ));
+        }
+        let mut wb = String::new();
+        for (i, js, kind) in &writeback {
+            wb.push_str(&format!(
+                "{}__list_write_back({}, __wb_arg_{}, {:?});\n",
+                indent, js, i, kind
+            ));
+        }
+        for (i, js, dtype, ndim) in &array_writeback {
+            wb.push_str(&format!(
+                "{}__array_write_back({}, __wb_arg_{}, {:?}, {});\n",
+                indent, js, i, dtype, ndim
+            ));
+        }
         let mut body = String::new();
+        body.push_str(&prelude);
         match &export.return_type {
             None => {
                 body.push_str(&format!("{}{};\n", indent, call_expr));
                 ovf_check(&mut body, indent);
+                body.push_str(&wb);
                 if needs_errors {
                     body.push_str(&format!("{}__check_err();\n", indent));
                 }
             }
             Some(ret_ty) => {
-                if has_ovf || needs_errors {
+                if has_ovf || needs_errors || has_writeback {
                     body.push_str(&format!("{}const __raw = {};\n", indent, call_expr));
                     ovf_check(&mut body, indent);
+                    body.push_str(&wb);
                     if needs_errors {
                         body.push_str(&format!("{}__check_err();\n", indent));
                     }
@@ -707,20 +863,34 @@ fn emit_loader_browser(
     out.push_str("  const isNode = typeof globalThis.process !== 'undefined'\n");
     out.push_str("    && globalThis.process.versions != null\n");
     out.push_str("    && typeof globalThis.process.versions.node === 'string';\n");
+    // M2.1 (codex m2 blocker): COMPILE -> CHECK -> INSTANTIATE. Every branch only
+    // COMPILES (`WebAssembly.compile[Streaming]` never runs the start function);
+    // the ABI check runs on that `WebAssembly.Module`, and only a module that
+    // passed is instantiated (instantiation is what runs `start`). Mirrors the
+    // tab shim (`list_buffer.mjs::instantiate`) ordering exactly.
+    out.push_str("  let __module;\n");
     out.push_str("  if (isNode) {\n");
     out.push_str("    const { readFile } = await import('node:fs/promises');\n");
     out.push_str("    const { fileURLToPath } = await import('node:url');\n");
     out.push_str("    const bytes = await readFile(fileURLToPath(url));\n");
-    out.push_str("    return (await WebAssembly.instantiate(bytes, imports)).instance.exports;\n");
+    out.push_str("    __module = await WebAssembly.compile(bytes);\n");
+    // Browser/Workers/Deno: fetch with streaming compilation when available.
+    out.push_str("  } else if (typeof WebAssembly.compileStreaming === 'function') {\n");
+    out.push_str("    __module = await WebAssembly.compileStreaming(fetch(url));\n");
+    out.push_str("  } else {\n");
+    out.push_str("    const bytes = await fetch(url).then(r => r.arrayBuffer());\n");
+    out.push_str("    __module = await WebAssembly.compile(bytes);\n");
     out.push_str("  }\n");
-    // Browser/Workers/Deno: fetch with streaming when available.
-    out.push_str("  if (typeof WebAssembly.instantiateStreaming === 'function') {\n");
-    out.push_str(
-        "    return (await WebAssembly.instantiateStreaming(fetch(url), imports)).instance.exports;\n",
-    );
-    out.push_str("  }\n");
-    out.push_str("  const bytes = await fetch(url).then(r => r.arrayBuffer());\n");
-    out.push_str("  return (await WebAssembly.instantiate(bytes, imports)).instance.exports;\n");
+    emit_check_then_instantiate(out);
+}
+
+/// The shared tail of every loader (M2.1, codex m2 blocker): the ABI check on the
+/// COMPILED module, then — and only then — instantiation. A wrong-ABI module whose
+/// `start` function traps or never returns is refused BEFORE it can run.
+fn emit_check_then_instantiate(out: &mut String) {
+    out.push_str("  __checkPythsAbi(__module);\n");
+    out.push_str("  const __instance = await WebAssembly.instantiate(__module, imports);\n");
+    out.push_str("  return __instance.exports;\n");
     out.push_str("})();\n");
 }
 
@@ -742,10 +912,8 @@ fn emit_loader_workers(
     out.push_str("})();\n");
     out.push_str("const __wasm = await (async () => {\n");
     out.push_str(&render_imports_object(math_imports, needs_dicts));
-    out.push_str(
-        "  return (await WebAssembly.instantiate(__wasm_bytes, imports)).instance.exports;\n",
-    );
-    out.push_str("})();\n");
+    out.push_str("  const __module = await WebAssembly.compile(__wasm_bytes);\n");
+    emit_check_then_instantiate(out);
 }
 
 /// WASI loader for Node.js. Uses `node:wasi` and `node:fs` to load and
@@ -776,12 +944,11 @@ fn emit_loader_wasi(
         js_single_quoted(wasm_filename)
     ));
     out.push_str("  const bytes = await readFile(fileURLToPath(url));\n");
-    out.push_str("  const instance = (await WebAssembly.instantiate(bytes, imports)).instance;\n");
-    out.push_str("  return instance.exports;\n");
-    out.push_str("})();\n");
+    out.push_str("  const __module = await WebAssembly.compile(bytes);\n");
+    emit_check_then_instantiate(out);
 }
 
-/// Deno loader: Deno.readFile + WebAssembly.instantiate.
+/// Deno loader: Deno.readFile + WebAssembly.compile → ABI check → instantiate.
 fn emit_loader_deno(
     out: &mut String,
     wasm_filename: &str,
@@ -798,8 +965,8 @@ fn emit_loader_deno(
         js_single_quoted(wasm_filename)
     ));
     out.push_str("  const bytes = await Deno.readFile(url);\n");
-    out.push_str("  return (await WebAssembly.instantiate(bytes, imports)).instance.exports;\n");
-    out.push_str("})();\n");
+    out.push_str("  const __module = await WebAssembly.compile(bytes);\n");
+    emit_check_then_instantiate(out);
 }
 
 /// Append a CF Workers `fetch` handler that exposes the compiled exports
@@ -965,6 +1132,184 @@ fn emit_list_helpers(out: &mut String) {
     out.push_str("  }\n");
     out.push_str("  return out;\n");
     out.push_str("}\n");
+    out.push('\n');
+    // #484: SYMMETRIC marshalling. `__list_to_wasm` copies a mutable `list`
+    // parameter INTO linear memory; on return the (possibly in-place-mutated)
+    // buffer must be copied BACK into the SAME JS array so an out-parameter
+    // fill kernel (the only way to get array output out of a scalar-return
+    // @wasm kernel — #364) is visible to the caller, exactly as CPython's
+    // aliasing semantics make it. This is the inverse of `__list_to_wasm`, but
+    // it MUTATES `arr` in place (not a fresh array like `__list_from_wasm`), so
+    // the caller's binding observes the write — the ONE write-back authority
+    // for every element kind (i64 / f64 / i32-bool). FIXED-CAPACITY CONTRACT: a
+    // length-changing mutation cannot be reflected into the fixed-cap buffer, so
+    // a changed length header is refused LOUDLY (never a silent truncation);
+    // length-changing list methods (append/pop/clear/extend) are already refused
+    // at WASM admission and stay on the faithful JS path, so this guard is the
+    // belt-and-suspenders second layer. The i32 branch yields real booleans: the
+    // only admitted i32-element list is `list[bool]` (#364), whose element repr
+    // is a Python bool — matching the pure-JS twin so the glue and JS paths agree.
+    out.push_str("function __list_write_back(arr, ptr, kind) {\n");
+    out.push_str("  const view = new DataView(__wasm.memory.buffer);\n");
+    out.push_str("  const n = view.getInt32(ptr, true);\n");
+    out.push_str("  if (n !== arr.length) throw new Error('PythScribe: @wasm out-parameter list length changed (' + arr.length + ' -> ' + n + '); a fixed-capacity linear-memory buffer cannot reflect a length-changing mutation \u{2014} compile with --target js for that kernel');\n");
+    out.push_str("  const esize = kind === 'i32' ? 4 : 8;\n");
+    // `typed` = the caller passed a TypedArray (the low-level channel, e.g.
+    // BigInt64Array for list[int]) rather than a plain Array. A BigInt64Array
+    // element MUST be assigned a BigInt (a Number throws), and a plain Array
+    // wants the JS-idiomatic value (Number-in-safe-range for a Python int repr,
+    // a real boolean for list[bool]). Distinguishing them keeps write-back from
+    // breaking a valid read-only call made with a typed array (no silent drop,
+    // no spurious throw).
+    out.push_str("  const typed = ArrayBuffer.isView(arr);\n");
+    out.push_str("  for (let i = 0; i < n; i++) {\n");
+    out.push_str("    const off = ptr + 8 + i * esize;\n");
+    out.push_str("    if (kind === 'f64') arr[i] = view.getFloat64(off, true);\n");
+    out.push_str("    else if (kind === 'i64') { const v = view.getBigInt64(off, true); arr[i] = typed ? v : ((v >= -9007199254740991n && v <= 9007199254740991n) ? Number(v) : v); }\n");
+    out.push_str(
+        "    else { const v = view.getInt32(off, true); arr[i] = typed ? v : (v !== 0); }\n",
+    );
+    out.push_str("  }\n");
+    out.push_str("}\n");
+}
+
+/// Whether any export takes an `Array[dtype, ndim]` param (so the glue must
+/// define the typed-array marshalling helpers). Array RETURNS are refused at
+/// admission (#377 → M6), so only params matter here.
+fn uses_array_boundary(exports: &[WasmExportInfo]) -> bool {
+    exports.iter().any(|e| {
+        e.params
+            .iter()
+            .any(|(_, ty)| matches!(ty, WasmType::PtrArray { .. }))
+    })
+}
+
+/// Emit `__array_to_wasm` / `__array_write_back` — the js+wasm TYPED-ARRAY
+/// marshallers (M2a-3b). They byte-agree with the SERVER channel
+/// `pythscribe/runtime/array_buffer.py` and the codegen's `PtrArray` load/store
+/// (`emit.rs`): the 16-byte ×8 header `[dtype tag:i32 @0][ndim:i32 @4]
+/// [shape0:i32 @8][pad:i32 @12]` with the element region at ptr+16, row-major.
+/// The dtype tag codes are `ArrayDtype` declaration order
+/// (int32=0, int64=1, float32=2, float64=3, uint8=4) — the SAME single source as
+/// `array_buffer.DTYPE_TAG`.
+///
+/// The TOTAL runtime check (requirements B1) lives in `__array_to_wasm`: the JS
+/// buffer MUST be a `TypedArray` whose constructor and `BYTES_PER_ELEMENT` match
+/// the compiled-for dtype, and ndim must be 1 — else it throws a `RangeError`,
+/// which the #364 ladder (`__isWasmFault`) reroutes to the exact JS twin
+/// (a twinless edge target surfaces the loud error). A dtype/width/ndim mismatch
+/// is therefore NEVER flat-copied and read at the wrong width (no silent misread).
+/// The element region is crossed in ONE bulk `.set()` each way — "buffer, not
+/// elements".
+fn emit_array_helpers(out: &mut String) {
+    out.push('\n');
+    // dtype metadata: TypedArray ctor + element width + the header dtype tag.
+    // BigInt64Array elements are BigInt; the others are Number. Kept in
+    // `ArrayDtype` declaration order so the tag == the array index it is defined
+    // at is coincidental — the tag is written EXPLICITLY.
+    out.push_str("const __ARR_DTYPES = {\n");
+    out.push_str("  int32:   { ctor: Int32Array,    esize: 4, tag: 0 },\n");
+    out.push_str("  int64:   { ctor: BigInt64Array, esize: 8, tag: 1 },\n");
+    out.push_str("  float32: { ctor: Float32Array,  esize: 4, tag: 2 },\n");
+    out.push_str("  float64: { ctor: Float64Array,  esize: 8, tag: 3 },\n");
+    out.push_str("  uint8:   { ctor: Uint8Array,    esize: 1, tag: 4 },\n");
+    out.push_str("};\n");
+    out.push('\n');
+    // A single admitted-dtype TypedArray row check (shared by 1-D and each 2-D
+    // row): the buffer must be a TypedArray of EXACTLY the compiled-for dtype
+    // (constructor + BYTES_PER_ELEMENT). A plain Array, a wrong-dtype TypedArray
+    // or a DataView is refused — RangeError → the #364 ladder reroutes to the JS
+    // twin; never flat-copied and read at the wrong width (the silent-misread
+    // class the server `check_array_buffer` also bars).
+    out.push_str("function __arrRowOk(row, d) {\n");
+    out.push_str("  return ArrayBuffer.isView(row) && row.constructor === d.ctor && row.BYTES_PER_ELEMENT === d.esize;\n");
+    out.push_str("}\n");
+    out.push('\n');
+    // __array_to_wasm(arr, dtype, ndim): the TOTAL runtime check + bulk copy in.
+    // ndim=1: `arr` is a flat TypedArray. ndim=2: `arr` is an Array of `nrows`
+    // rows, each a TypedArray of the compiled-for dtype, all of equal length
+    // `ncols` (rectangular / C-contiguous). A non-{1,2} ndim, a wrong row type,
+    // or a ragged 2-D input is a boundary fault (RangeError → twin).
+    out.push_str("function __array_to_wasm(arr, dtype, ndim) {\n");
+    out.push_str("  const d = __ARR_DTYPES[dtype];\n");
+    out.push_str("  let nrows, ncols, n;\n");
+    out.push_str("  if (ndim === 1) {\n");
+    out.push_str("    if (!__arrRowOk(arr, d)) {\n");
+    out.push_str("      const got = (arr && arr.constructor && arr.constructor.name) ? arr.constructor.name : typeof arr;\n");
+    out.push_str("      throw new RangeError('pythscribe: Array[' + dtype + '] expects a ' + d.ctor.name + ' buffer (dtype/width match); got ' + got + ' \u{2014} refused (rerouted to the JS path, never read at the wrong width)');\n");
+    out.push_str("    }\n");
+    out.push_str("    nrows = arr.length; ncols = 0; n = arr.length;\n");
+    out.push_str("  } else if (ndim === 2) {\n");
+    // A 2-D array crosses as an Array of same-dtype rows. A flat TypedArray, a
+    // non-array, a ragged shape, or a wrong row dtype is refused (no silent
+    // strided / wrong-width read — the server `check_array_buffer` bars the same).
+    out.push_str("    if (!Array.isArray(arr)) throw new RangeError('pythscribe: Array[' + dtype + ', 2] expects an array of ' + d.ctor.name + ' rows; got ' + (typeof arr) + ' \u{2014} refused');\n");
+    out.push_str("    nrows = arr.length;\n");
+    out.push_str("    ncols = 0;\n");
+    // Each row is validated (TypedArray of the compiled-for dtype/width) BEFORE its
+    // `.length` is read, so a null / non-array row 0 is a RangeError (rerouted to the
+    // twin), never a raw JS TypeError. ncols is taken from the validated row 0.
+    out.push_str("    for (let r = 0; r < nrows; r++) {\n");
+    out.push_str("      if (!__arrRowOk(arr[r], d)) throw new RangeError('pythscribe: Array[' + dtype + ', 2] row ' + r + ' must be a ' + d.ctor.name + ' buffer (dtype/width match) \u{2014} refused');\n");
+    out.push_str("      if (r === 0) ncols = arr[0].length;\n");
+    out.push_str("      if (arr[r].length !== ncols) throw new RangeError('pythscribe: Array[' + dtype + ', 2] is ragged (row ' + r + ' length ' + arr[r].length + ' != ' + ncols + '); only C-contiguous rectangular 2-D arrays cross \u{2014} refused');\n");
+    out.push_str("    }\n");
+    out.push_str("    n = nrows * ncols;\n");
+    out.push_str("  } else {\n");
+    out.push_str("    throw new RangeError('pythscribe: Array marshalling supports ndim \u{2208} {1, 2}; got ndim=' + ndim + ' \u{2014} refused');\n");
+    out.push_str("  }\n");
+    // Allocate header + elements, rounded up to a multiple of 8 (array_buffer
+    // `array_alloc_size`), plus 8 slack so the returned base can be aligned UP to
+    // a multiple of 8 regardless of the current bump pointer — a JS TypedArray
+    // view over WASM memory THROWS on a non-width-aligned byte offset, and the
+    // ×8 header keeps ptr+16 8-aligned once the base is (requirements B3).
+    out.push_str("  const allocSize = ((16 + n * d.esize + 7) & ~7) + 8;\n");
+    out.push_str("  const raw = __wasm.__alloc(allocSize);\n");
+    out.push_str("  const ptr = (raw + 7) & ~7;\n");
+    // Header — written with a DataView (unaligned-safe): dtype tag @0, ndim @4,
+    // shape0 (rows) @8, shape1 (cols; 0 for 1-D) @12. Elements @ptr+16.
+    // The DataView is created AFTER __alloc (which may grow + detach memory).
+    out.push_str("  const view = new DataView(__wasm.memory.buffer);\n");
+    out.push_str("  view.setInt32(ptr, d.tag, true);\n");
+    out.push_str("  view.setInt32(ptr + 4, ndim, true);\n");
+    out.push_str("  view.setInt32(ptr + 8, nrows, true);\n");
+    out.push_str("  view.setInt32(ptr + 12, ncols, true);\n");
+    // Element region: 1-D = one bulk `.set()`; 2-D = one bulk `.set()` per row
+    // (row-major, contiguous — "buffer not elements", never per-element).
+    out.push_str("  if (ndim === 1) {\n");
+    out.push_str("    new d.ctor(__wasm.memory.buffer, ptr + 16, n).set(arr);\n");
+    out.push_str("  } else {\n");
+    out.push_str("    for (let r = 0; r < nrows; r++) new d.ctor(__wasm.memory.buffer, ptr + 16 + r * ncols * d.esize, ncols).set(arr[r]);\n");
+    out.push_str("  }\n");
+    out.push_str("  return ptr;\n");
+    out.push_str("}\n");
+    out.push('\n');
+    // __array_write_back(arr, ptr, dtype, ndim): self-checking bulk copy OUT.
+    // Mirrors `array_buffer.read_back_element_bytes` — the header is re-parsed and
+    // VALIDATED against the compiled-for (dtype tag, ndim, shape) before the
+    // element region is trusted, so a drifted / corrupted header is refused
+    // (a plain Error — a genuine corruption, NOT a boundary fault to reroute:
+    // matches the list write-back length-guard disposition, propagates loud).
+    out.push_str("function __array_write_back(arr, ptr, dtype, ndim) {\n");
+    out.push_str("  const d = __ARR_DTYPES[dtype];\n");
+    out.push_str("  const view = new DataView(__wasm.memory.buffer);\n");
+    out.push_str("  const tag = view.getInt32(ptr, true);\n");
+    out.push_str("  const hdrNdim = view.getInt32(ptr + 4, true);\n");
+    out.push_str("  const nrows = view.getInt32(ptr + 8, true);\n");
+    out.push_str("  const ncols = view.getInt32(ptr + 12, true);\n");
+    out.push_str("  if (tag !== d.tag) throw new Error('PythScribe: @wasm array write-back dtype tag ' + tag + ' != expected ' + d.tag + ' (' + dtype + '); a wrong-width read would corrupt values \u{2014} refused');\n");
+    out.push_str("  if (hdrNdim !== ndim) throw new Error('PythScribe: @wasm array write-back ndim ' + hdrNdim + ' != expected ' + ndim + '; refused');\n");
+    out.push_str("  if (ndim === 1) {\n");
+    out.push_str("    if (nrows !== arr.length) throw new Error('PythScribe: @wasm array out-parameter length changed (' + arr.length + ' -> ' + nrows + '); a fixed-capacity linear-memory buffer cannot reflect a length-changing mutation \u{2014} compile with --target js for that kernel');\n");
+    out.push_str("    arr.set(new d.ctor(__wasm.memory.buffer, ptr + 16, nrows));\n");
+    out.push_str("  } else {\n");
+    out.push_str("    if (nrows !== arr.length) throw new Error('PythScribe: @wasm 2-D array out-parameter row count changed (' + arr.length + ' -> ' + nrows + '); refused');\n");
+    out.push_str("    for (let r = 0; r < nrows; r++) {\n");
+    out.push_str("      if (arr[r].length !== ncols) throw new Error('PythScribe: @wasm 2-D array out-parameter row ' + r + ' length changed (' + arr[r].length + ' -> ' + ncols + '); refused');\n");
+    out.push_str("      arr[r].set(new d.ctor(__wasm.memory.buffer, ptr + 16 + r * ncols * d.esize, ncols));\n");
+    out.push_str("    }\n");
+    out.push_str("  }\n");
+    out.push_str("}\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -1004,7 +1349,7 @@ fn emit_list_helpers(out: &mut String) {
 /// value), every arm of `is_numeric_kernel_param`, and every arm of
 /// `is_scalar_wasm_return` (incl. the void-return `none`/`void` rows).
 fn marshalling_alphabet() -> Vec<(String, pyths_types::types::Type)> {
-    use pyths_types::types::Type;
+    use pyths_types::types::{ArrayDtype, Type};
     let leaves = vec![
         ("int", Type::Int),
         ("float", Type::Float),
@@ -1044,6 +1389,26 @@ fn marshalling_alphabet() -> Vec<(String, pyths_types::types::Type)> {
         "callable<int,none>".to_string(),
         Type::Callable(vec![Type::Int], Box::new(Type::NoneType)),
     ));
+    // M2a-4/M2b: numeric arrays — the crossable buffer shapes. BOTH 1-D and
+    // 2-D arrays are now admitted params (`is_numeric_kernel_param` arg bit=1)
+    // and cross the boundary, so both appear in the marshalling alphabet (the
+    // arg conversion `__array_to_wasm(x, dtype, ndim)` threads ndim). Dtype
+    // order matches `WasmArrayDtype` / `cert::admission_table`; per dtype, ndim
+    // ascends 1 then 2 (matching the Lean `marshalAlphabet` order).
+    for dt in [
+        ArrayDtype::Int32,
+        ArrayDtype::Int64,
+        ArrayDtype::Float32,
+        ArrayDtype::Float64,
+        ArrayDtype::Uint8,
+    ] {
+        for ndim in [1u32, 2] {
+            shapes.push((
+                format!("array<{},{}>", dt.spelling(), ndim),
+                Type::Array(dt, ndim),
+            ));
+        }
+    }
     shapes
 }
 
@@ -1102,6 +1467,44 @@ pub fn marshalling_table() -> String {
             bit(is_scalar_wasm_return(&ty)),
             ret_expr
         );
+    }
+
+    // Section 1b: write-back rows (#484). SYMMETRIC marshalling — every list
+    // param the glue copies IN via `__list_to_wasm` is copied BACK via
+    // `__list_write_back` on return (the scalar-return out-parameter fill idiom,
+    // the only way #364 leaves to produce array output). One row per shape whose
+    // WASM representation is a list pointer, mirroring the `arg` rows'
+    // `__list_to_wasm` conversions: `x` = the JS array (mutated in place), `p` =
+    // the linear-memory pointer `__list_to_wasm` returned. The element kind is
+    // the SAME `list_elem_kind` the `arg`/`ret` list rows bind, so write-back's
+    // value fidelity is the arg/ret rows' fidelity in the inverse direction.
+    for (name, ty) in marshalling_alphabet() {
+        match to_wasm_type(&ty) {
+            Some(WasmType::PtrList(inner)) => {
+                let _ = writeln!(
+                    out,
+                    "wb {} -> __list_write_back(x, p, {:?})",
+                    name,
+                    list_elem_kind(&inner)
+                );
+            }
+            // M2a-4: array out-parameter write-back — the typed-array
+            // counterpart of the #484 list write-back. An admitted 1-D array
+            // param copied IN via `__array_to_wasm` is copied BACK via
+            // `__array_write_back` (bridge.rs array write-back block), mutating
+            // the caller's TypedArray in place (the scalar-return array-output
+            // idiom). Byte-mirrors the Lean `marshalWbRow` array arm.
+            Some(WasmType::PtrArray { dtype, ndim }) => {
+                let _ = writeln!(
+                    out,
+                    "wb {} -> __array_write_back(x, p, {:?}, {})",
+                    name,
+                    dtype.spelling(),
+                    ndim
+                );
+            }
+            _ => {}
+        }
     }
 
     // Section 2: overflow/failure dispositions, derived from REAL probe
@@ -1289,6 +1692,36 @@ fn convert_js_to_wasm(name: &str, ty: &WasmType) -> String {
         WasmType::PtrDict(_, _) => format!("__dict_to_wasm({})", name),
         WasmType::PtrTuple(_) => format!("__tuple_to_wasm({})", name),
         WasmType::PtrClosure { .. } => format!("__closure_to_wasm({})", name),
+        // M2a-3b: FIRST-CLASS array glue. A `TypedArray` param is marshalled
+        // into WASM linear memory in the `array_buffer.py` layout (16-byte ×8
+        // header `[dtype tag @0][ndim @4][shape0 @8][pad @12]`, elements @16),
+        // byte-agreeing with the Rust server marshaller and the codegen's
+        // `PtrArray` load/store (`emit.rs`: elems@16, shape0@8). `__array_to_wasm`
+        // runs the TOTAL runtime check — the buffer MUST be a `TypedArray` of the
+        // compiled-for dtype/ndim, else it throws a `RangeError` so `__isWasmFault`
+        // reroutes to the exact JS twin (#364; a twinless edge target surfaces the
+        // loud error). Never a silent misread. NB: in the CURRENT codegen every
+        // array param is bound through the write-back local `__wb_arg_<i>` and its
+        // pointer produced by `__array_to_wasm` in the PRELUDE (see the array
+        // write-back block below), so this inline arm is not reached today; it is
+        // kept correct-and-defensive and becomes the marshalling-table derivation
+        // site once M2a-4 adds `Type::Array` shapes to `marshalling_alphabet`.
+        WasmType::PtrArray { dtype, ndim } => {
+            format!(
+                "__array_to_wasm({}, {:?}, {})",
+                name,
+                dtype.spelling(),
+                ndim
+            )
+        }
+        // A bare F32 scalar never crosses the boundary (f32 is only an array
+        // element load/store type; array elements promote to f64 on the compute
+        // stack — M2a-0 review W1). Defensive throw, never a compiler panic.
+        WasmType::F32 => format!(
+            "(()=>{{throw new RangeError('pythscribe: a bare f32 scalar is not a boundary type \
+             (f32 is only an array element width). arg={}')}})()",
+            name
+        ),
     }
 }
 
@@ -1310,5 +1743,15 @@ fn convert_wasm_to_js(expr: &str, ty: &WasmType) -> String {
         WasmType::PtrDict(_, _) => format!("__dict_from_wasm({})", expr),
         WasmType::PtrTuple(_) => format!("__tuple_from_wasm({})", expr),
         WasmType::PtrClosure { .. } => format!("__closure_from_wasm({})", expr),
+        // Non-scalar array RETURNS are #377 → M6 (never in M2 scope), and
+        // `check_signature` refuses an `Array` return from WASM admission, so a
+        // well-formed admitted function never reaches this arm. Emit a throwing
+        // `RangeError` (routed to the JS twin by the #364 ladder) rather than a
+        // compiler panic, defensively. F32 is never a top-level return type.
+        WasmType::F32 | WasmType::PtrArray { .. } => format!(
+            "(()=>{{throw new RangeError('pythscribe: Array/f32 return marshalling is out of \
+             scope (array returns are #377/M6). expr={}')}})()",
+            expr
+        ),
     }
 }

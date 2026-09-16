@@ -1,0 +1,35 @@
+{
+  "compiler": {
+    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "name": "pyths",
+    "version": "0.2.5"
+  },
+  "entry": "pii_scan.js",
+  "files": {
+    "pii_scan.glue.js": "0589a256d17ebf8795ff8cd5d2d38eb105bdeef93f59a0dd8c788ffd4dada9f1",
+    "pii_scan.js": "90ba5ad29f87e6e20c4b6cc88443749c15b7f49a9e84b9310b80d1b28a6f9c0e",
+    "pii_scan.ps": "e446e0a7c722e9e0747e39714aa6638ed0c09ae448b9ac69716575a34b93e537",
+    "pii_scan.wasm": "f360d7ddef80945ad52648e08656a61677895040b5dec02d73ca7a3f99ba94ea",
+    "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
+    "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
+    "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
+    "pyths-runtime/react.js": "79c85d9599d3a6b7c813d83d538ab225ac0fd8776857f7fdba1512096099df47",
+    "pyths-runtime/runtime.js": "21a474e1f6aa2f959a2101a46be393190a923576fb67e3e78edba39c7ddd0b78",
+    "pyths-runtime/types.js": "b5af591c394a1984715054cd5c8c100ffdc2ea1c6b85e01bf3ae33e2cf1b265b"
+  },
+  "function": "pii_scan",
+  "glue": "pii_scan.glue.js",
+  "manifest_sha256": "1d1aafa578b0979a051907379ff85d8cc24759e4816b19df65889b511b2fd417",
+  "optimizer": {
+    "applied": false,
+    "error": null,
+    "id": "none",
+    "path_sha256": null
+  },
+  "runtime_dir": "pyths-runtime",
+  "schema": 1,
+  "source_file": "kernels.py",
+  "source_sha256": "e446e0a7c722e9e0747e39714aa6638ed0c09ae448b9ac69716575a34b93e537",
+  "target": "js+wasm",
+  "wasm": "pii_scan.wasm"
+}

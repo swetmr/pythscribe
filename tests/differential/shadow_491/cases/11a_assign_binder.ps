@@ -1,0 +1,14 @@
+# repro 11 (fable S4): a plain ASSIGNMENT rebinds a builtin name at module scope.
+# `abs = len` -> abs IS len; a WASM caller must not bake the builtin abs.
+# DEMOTE: use
+def use(x: int) -> int:
+    return abs(x)
+
+
+print(use(-5))
+abs = len
+print(abs([1, 2, 3]))
+try:
+    print(use(-5))
+except TypeError:
+    print("TypeError")

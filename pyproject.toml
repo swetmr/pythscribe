@@ -1,0 +1,113 @@
+[build-system]
+requires = ["setuptools>=77"]
+# M1.3 (spec 13-09-26): the platform-wheel tag is a `cmdclass` hook in setup.py (NOT an in-tree
+# `backend-path` backend -- see the rationale there): `py3-none-<platform>` when the native compiler
+# is staged at pythscribe/_bin/ (cibuildwheel legs), BINARY-LESS `py3-none-any` with a visible
+# notice otherwise (source-install policy), and an sdist that carries the binary is refused.
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pythscribe"
+version = "0.2.5"
+description = "`@wasm` for ordinary Python: run a compiled kernel in the browser tab, in-process on the server (sandboxed, GIL-free, bit-for-bit), or as plain Python -- with a load-bearing fallback and framework adapters (Gradio first)."
+readme = "pythscribe/README.md"
+requires-python = ">=3.10"
+# M5 (spec 13-09-26): the wheel is MIXED -- the pip runtime, the adapters and the vendored JS runtime
+# payload are MIT; the compiler binary bundled at pythscribe/_bin/pyths[.exe] (M1) is FSL-1.1-ALv2 and
+# statically links third-party crates under their own licences. PEP 639: the expression names both,
+# and `license-files` ships EVERY notice into <dist-info>/licenses/ (paths preserved): the MIT text,
+# the FSL text, the vendored runtime's own MIT notice, the per-path map, and the per-target third-party
+# inventory GENERATED from Cargo.lock by scripts/gen_third_party_notices.py (drift-gated). Verified on
+# every built wheel by scripts/verify_wheel_license.py (validation §H1). Repo-level map: LICENSING.md.
+license = "MIT AND LicenseRef-FSL-1.1-ALv2"
+license-files = [
+  "pythscribe/LICENSE",                        # MIT -- the pip package + gradio_wasmfunction
+  "LICENSE.md",                                # FSL-1.1-ALv2 -- the bundled compiler binary
+  "pythscribe/_runtime/pyths-runtime/LICENSE", # MIT -- the vendored pyths-runtime payload's own notice
+  "pythscribe/LICENSES-MAP.md",                # the per-path map (which installed path is under which licence)
+  "third_party/**/*",                          # the third-party inventory: inventory.json + notices/*.txt + THIRD_PARTY_NOTICES.md
+]
+keywords = ["webassembly", "wasm", "gradio", "streamlit", "sandbox", "wasmtime", "compiler", "python"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Compilers",
+  "Topic :: Scientific/Engineering",
+]
+# Deliberately NO runtime dependencies: `import pythscribe` must work in plain CPython
+# with neither the compiler, nor wasmtime, nor any framework installed (plan §5/§6:
+# fallback-first). The adapters LAZY-import their framework; the server path lazy-imports
+# wasmtime. Every extra below adds DEPENDENCIES only -- the pythscribe code (both adapters,
+# the vendored Gradio component, the server runtime) always ships (bundle-all-in-one).
+dependencies = []
+
+[project.scripts]
+# M1.1: the Python LAUNCHER -- `build` (+ the M7 set) in Python, everything else forwarded verbatim
+# to the bundled native binary resolved by find_pyths() (launcher-excluded; never recurses).
+pyths = "pythscribe._launcher:main"
+
+[project.urls]
+Homepage = "https://github.com/swetmr/pythscribe"
+Source = "https://github.com/swetmr/pythscribe"
+Issues = "https://github.com/swetmr/pythscribe/issues"
+Documentation = "https://github.com/swetmr/pythscribe/blob/main/pythscribe/README.md"
+
+[project.optional-dependencies]
+server = ["wasmtime>=48"]
+gradio = ["gradio>=6,<7"]
+streamlit = ["streamlit>=1.37"]
+all = ["wasmtime>=48", "gradio>=6,<7", "streamlit>=1.37"]  # NEVER nodejs-wheel-binaries (validation §J-extras)
+# M7.1 (user LOCKED 2026-09-13): the SINGLE opt-in extra that vendors a Node runtime for the `.ps` frontend
+# tooling (`pyths new / install / dev`) on a machine without Node on PATH. Declared here (M6.4) because the
+# README's environment table names it and the README gate (scripts/readme_spots.py) refuses an undeclared
+# extra; M7 wires the resolver (PYTHS_NODE -> PATH -> vendored) and the engines.node lockstep gate (M7-7).
+web-bundled = ["nodejs-wheel-binaries>=22.12,<23"]
+test = ["pytest>=8", "pytest-timeout>=2", "hypothesis>=6", "playwright>=1.50", "wasmtime>=48", "gradio>=6,<7",
+        "pyyaml>=6",  # M4 workflow-lint (tests/pythscribe/test_wheel_m4_acceptance.py parses release.yml / publish-pypi.yml)
+        # M1 (examples/gradio-image-preprocess): the reference resize, the notebook and its executor
+        "pillow>=10", "numpy>=1.26", "matplotlib>=3.8", "nbformat>=5", "nbclient>=0.10", "ipykernel>=6"]
+
+[tool.setuptools]
+packages = [
+  "pythscribe", "pythscribe.build", "pythscribe.gradio", "pythscribe.ffi", "pythscribe.runtime", "pythscribe.streamlit",
+  # M7 (spec 13-09-26): the pure-Python frontend tooling (find_node / find_scaffolder resolvers). The
+  # vendored `create-pyths-app` scaffolder ships as package DATA under it (globs below), mirror-gated.
+  "pythscribe._web",
+  # the Gradio custom component, VENDORED into this wheel (no separate install; M1.5 §E)
+  "gradio_wasmfunction",
+]
+
+[tool.setuptools.package-dir]
+gradio_wasmfunction = "pythscribe/gradio/wasm_function/backend/gradio_wasmfunction"
+
+[tool.setuptools.package-data]
+# M0 (spec 13-09-26): the prepared `pyths-runtime` npm payload is VENDORED into the wheel at
+# pythscribe/_runtime/pyths-runtime/ (package-root-relative paths preserved so the `exports` map
+# resolves; all 34 .js.map + LICENSE). Refreshed ONLY by `scripts/prepare_release_payloads.py
+# --vendor`; gated raw-byte by `scripts/verify_runtime_mirror.py`. `find_runtime_dir()` resolves it.
+"pythscribe" = ["LICENSE", "_runtime/pyths-runtime/**/*",
+  # M7 (spec 13-09-26): the prepared `create-pyths-app` scaffolder payload VENDORED into the wheel at
+  # pythscribe/_web/create-pyths-app/ (a few KB, package-root-relative paths preserved so `node
+  # index.js` resolves). Refreshed ONLY by `scripts/prepare_release_payloads.py --vendor`; gated
+  # raw-byte by `scripts/verify_scaffolder_mirror.py`. find_scaffolder() resolves it. Register (not
+  # parse) so the vendored copy is not double-indexed.
+  "_web/create-pyths-app/**/*",
+  # M1.3: the FINALIZED native compiler B_t, staged per cibuildwheel leg (gitignored; never in the
+  # sdist -- MANIFEST.in prunes it). find_pyths() resolves it; wheel_passthrough.py gates it.
+  "_bin/pyths", "_bin/pyths.exe"]
+"pythscribe.build" = ["*.mjs"]
+"pythscribe.ffi" = ["*.mjs"]
+"pythscribe.gradio" = ["*.js"]  # fix B: the in-tab image client inlined by browser.py
+# M3: the Streamlit custom component (vanilla ES-module frontend + a byte-identical shim copy),
+# VENDORED into the wheel (no separate install; mirrors the Gradio component)
+"pythscribe.streamlit" = ["wasm_component/*"]
+"gradio_wasmfunction" = ["templates/**/*", "*.pyi"]
+
+[tool.pytest.ini_options]
+# every Python test surface in the repo -- adding a root pyproject must not SHRINK what a
+# bare `pytest` collects (review R1/SF8)
+testpaths = ["tests/pythscribe"]

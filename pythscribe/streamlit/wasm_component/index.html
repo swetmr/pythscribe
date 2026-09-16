@@ -1,0 +1,465 @@
+<!doctype html>
+<!--
+  pythscribe WasmComponent (v0.2.5) -- runs a `@wasm` kernel's compiled bundle IN THE
+  BROWSER TAB inside a Streamlit custom component (a sandboxed iframe). TWO payload kinds:
+
+  * PREPROCESSING (the shipped M3 path, no `kind` / `kind != "callback"`): instantiate ONCE,
+    call the kernel ONCE, `setComponentValue(...)` the result back to the Streamlit script (a
+    one-shot value-in / value-out). See `pythscribe.streamlit.dispatch`/`result_of`.
+
+  * CALLBACK (v0.2.5, `kind: "callback"`): instantiate ONCE from base64 `wasm_b64`, then host an
+    interactive `<input type=range>` whose `oninput` calls the compiled kernel SYNCHRONOUSLY and
+    re-renders IN THIS IFRAME DOM. It NEVER calls `setComponentValue` per drag -- so a slider
+    drag causes ZERO Streamlit server reruns (the class of interaction Streamlit's
+    rerun-the-whole-script model cannot do round-trip-free). See `slider_compute`.
+
+  THE IFRAME SEAM (requirements §3): the user's `@wasm` artifact lives beside their source, NOT
+  in this vendored dir; a cross-origin fetch into the sandboxed iframe would need CORS + app-level
+  static serving. So the Python side base64-encodes the artifact `.wasm` INTO the component args
+  (`payload.wasm_b64`); this frontend decodes it to an ArrayBuffer and instantiates through the
+  SAME FFI shim the Gradio component uses (`./list_buffer.mjs`, a byte-identical copy -- committed
+  gate). Nothing is computed here; the kernel export is the WASM.
+
+  TEST HOOK (`payload._test_hold`, v0.2.5 B4-r / codex SF-6): a documented, env-gated test-only
+  field. When `true`, the callback branch AWAITS a RELEASE BARRIER between decoding the bytes and
+  `ffi.instantiate`, INSIDE the cached instantiate promise, until the test calls
+  `window.__pythscribe_test_release()` (backstop: auto-released after TEST_BARRIER_BACKSTOP_MS so a
+  dead test cannot wedge the iframe -- a test-only budget that exceeds every E2E wait, NOT the
+  production RUN_TIMEOUT_MS). While held, `window.__pythscribe_test.rendersWhileHeld` counts the callback
+  renders that arrived -- so a test can PROVE a same-`source_sha256` re-render overlapped the
+  in-flight instantiate (a timed sleep cannot: the re-render may land after ready and the control
+  is vacuous), and the promise cache (one instantiate) is told apart from a resolved-kernel cache
+  (two). Emitted ONLY by `slider_compute` under an env var; production apps never set it; a
+  non-boolean value is ignored + `console.warn`-ed (never an error state). NOT part of identity.
+
+  Protocol: the documented Streamlit component protocol v1 (raw postMessage), so this ships with
+  no npm/React build -- the thinnest re-wrap.
+-->
+<meta charset="utf-8" />
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; font-size: 13px; color: #333; }
+  .status { color: #666; margin: 2px 0 6px; }
+  pre { font-family: ui-monospace, monospace; font-size: 11px; background: #f6f6f6;
+        padding: 6px; border-radius: 4px; max-height: 14rem; overflow: auto; white-space: pre-wrap; }
+  #cb { padding: 0 2px; }
+  #cb-label { display: none; }   /* the label is rendered in the Streamlit column, above the iframe */
+  #cb-slider { width: 100%; accent-color: #2b8a3e; }
+  #cb-ends { display: flex; justify-content: space-between; font-size: 11px; color: #888; margin-top: 2px; font-family: system-ui, sans-serif; }
+  #cb-wrap { position: relative; padding-top: 18px; }   /* room for the value bubble above the track */
+  #cb-bubble { position: absolute; top: 0; transform: translateX(-50%); font-size: 12px; color: #444; white-space: nowrap; }
+  #cb-line { margin-top: 4px; }
+  #cb-result { font-family: ui-monospace, monospace; font-size: 15px; }
+  #cb-result[data-error] { color: #b00020; }
+  #cb-latency { color: #2b8a3e; font-size: 12px; margin-left: 10px; }
+  #cb-stale { color: #999; font-size: 11px; }
+</style>
+<div class="status" data-testid="wasm-status" id="status">idle</div>
+<pre data-testid="wasm-payload" id="payload"></pre>
+
+<!-- v0.2.5 callback path UI (hidden until a `kind:"callback"` render) -->
+<div id="cb" hidden>
+  <div id="cb-label"></div>
+  <div id="cb-wrap"><div id="cb-bubble" data-testid="cb-val"></div><input type="range" id="cb-slider" data-testid="cb-slider" disabled /></div>
+  <div id="cb-ends"><span>0</span><span>10</span></div>
+  <div id="cb-line"><span id="cb-result" data-testid="cb-result"></span><span id="cb-latency" data-testid="cb-latency"></span></div>
+  <div id="cb-stale" data-testid="cb-stale"></div>
+</div>
+
+<script type="module">
+  import * as ffi from "./list_buffer.mjs";
+
+  const RUN_TIMEOUT_MS = 15000;
+  const statusEl = document.getElementById("status");
+  const payloadEl = document.getElementById("payload");
+
+  // ---- Streamlit component protocol v1 (child side) ----------------------------------------
+  function post(type, extra) {
+    window.parent.postMessage({ isStreamlitMessage: true, type, ...extra }, "*");
+  }
+  // S-20: post the frame height only when it CHANGES from the last posted value. This makes an
+  // observer feedback loop impossible by construction (a re-post that does not change the height
+  // is dropped) even if the iframe CSS later gains `height:100%`; it is a strict reduction of
+  // redundant posts for BOTH kinds.
+  let lastPostedHeight = -1;
+  function setFrameHeight() {
+    const h = document.documentElement.scrollHeight;
+    if (h === lastPostedHeight) return;
+    lastPostedHeight = h;
+    post("streamlit:setFrameHeight", { height: h });
+  }
+  function setComponentValue(value) {
+    post("streamlit:setComponentValue", { value, dataType: "json" });
+  }
+
+  let lastNonce = null; // the last dispatch nonce we have SEEN (guards re-renders + stale runs)
+
+  function f64bits(n) {
+    const dv = new DataView(new ArrayBuffer(8));
+    dv.setFloat64(0, n, true); // little-endian: matches pythscribe float_from_bits (struct '<d')
+    let s = "";
+    for (let i = 0; i < 8; i++) s += dv.getUint8(i).toString(16).padStart(2, "0");
+    return s;
+  }
+
+  function b64ToBytes(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  function withTimeout(p, ms) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`timeout after ${ms} ms (bundle did not load/run)`)), ms);
+      p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+    });
+  }
+
+  /** true iff `payload` is still the latest dispatch (guards a superseded in-flight run -- the
+   * still_current guard from Index.svelte; without it a slow run(n2) can overwrite a newer
+   * run(n3) result). */
+  function stillCurrent(payload) {
+    return payload.nonce === lastNonce;
+  }
+
+  // ==========================================================================================
+  // PREPROCESSING PATH (shipped M3) -- unchanged. Guarded below by the ABSENCE of kind:"callback".
+  // ==========================================================================================
+  async function run(payload) {
+    statusEl.textContent = "running in browser";
+    try {
+      const bytes = b64ToBytes(payload.wasm_b64);
+      const kernel = await withTimeout(ffi.instantiate(bytes.buffer), RUN_TIMEOUT_MS);
+      const rt = payload.return_type || "float";
+      const r = ffi.call(kernel, payload.fn, payload.param_types, payload.args, { returnType: rt });
+      const raw = r.value;
+      if (typeof raw === "bigint") {
+        // an int result outside 2**53 crosses as BigInt, which JSON cannot carry: refuse loudly
+        throw new Error("BigInt result cannot cross the Streamlit return path (int kernels are not admitted in M0)");
+      }
+      if (typeof raw !== "number") {
+        // belt-and-braces for the return-type contract (dispatch already refuses ret != float):
+        // a non-number (undefined for `-> None`, Boolean for `-> bool`) must not become a silent
+        // Number()/nan on the browser path (review B3)
+        throw new Error(`kernel returned a non-float (${typeof raw}); M0 admits only float returns`);
+      }
+      const value = Number(raw);
+      if (!stillCurrent(payload)) return;  // a newer dispatch superseded this run (review B1)
+      const exportPresent = Array.isArray(kernel.exportNames) && kernel.exportNames.includes(payload.fn);
+      const result = {
+        value: Number.isFinite(value) ? value : null,
+        bits: f64bits(value),                 // authoritative: -0.0/inf/nan survive the JSON hop
+        path: "browser-wasm",
+        python_calls: 0,                       // browser path never ran the Python body
+        wasm_how: kernel.how,                  // "bytes" -- proves WebAssembly.compile(ArrayBuffer)
+        wasm_export: exportPresent ? payload.fn : null, // the COMPILED export name (unfakeable)
+        exports: kernel.exportNames,
+        wasm_supported: typeof WebAssembly === "object",
+        layout_version: ffi.LAYOUT_VERSION,
+        user_agent: navigator.userAgent
+      };
+      publish({ ...payload, error: null, result });
+    } catch (e) {
+      if (!stillCurrent(payload)) return;  // a newer dispatch superseded this run (review B1)
+      // any browser-side failure -> null result + error; the Python side runs the fallback
+      publish({ ...payload, result: null, error: String((e && e.message) || e) });
+    }
+  }
+
+  /** Drop the heavy base64 bundle so it is not echoed back through the return path, stored in
+   * widget state, resent on every rerun, or rendered into the DOM (review SF3). result_of never
+   * needs it; `wasm_bytes`/`source_sha256` stay as provenance. */
+  function slim(obj) {
+    if (!obj || typeof obj !== "object") return obj;
+    const { wasm_b64, ...rest } = obj;
+    return rest;
+  }
+
+  function publish(value) {
+    payloadEl.textContent = JSON.stringify(slim(value), null, 2);
+    const r = value.result;
+    statusEl.textContent = value.error ? "error: " + value.error : r ? `done (${r.path})` : "idle";
+    setComponentValue(slim(value));
+    setFrameHeight();
+  }
+
+  // ==========================================================================================
+  // CALLBACK PATH (v0.2.5, kind:"callback") -- in-iframe slider, synchronous recompute, no rerun.
+  // ==========================================================================================
+  const cbEl = document.getElementById("cb");
+  const cbLabelEl = document.getElementById("cb-label");
+  const cbSlider = document.getElementById("cb-slider");
+  const cbResult = document.getElementById("cb-result");
+  const cbLatency = document.getElementById("cb-latency");
+  const cbBubble = document.getElementById("cb-bubble");
+  const cbStale = document.getElementById("cb-stale");
+
+  // B3-r: the ONE mutable binding the `oninput` handler resolves the kernel through -- never a
+  // closure captured at first render (else a same-name/new-sha swap renders A(x') under B's name).
+  // S-18: `current` is replaced as ONE object only when the new kernel's promise RESOLVES.
+  let current = null;             // { kernel, payload, returnType } or null (not ready)
+  let currentIdentity = null;     // the identity string of the payload `current` was built from
+  let cbReady = false;            // gate: oninput is a no-op until true (drag-before-ready)
+  let lastGood = null;            // last renderable value's display text (for data-stale, S-8)
+  // codex B2: ONE supersession authority for BOTH settle branches of a callback load. Every
+  // identity-changing render (and a kind switch, SF-4) bumps this; a load whose captured seq is no
+  // longer current is IGNORED whether it RESOLVES or REJECTS. (The old guard compared identities
+  // on the resolve branch only, so a superseded FAILING load A that rejected AFTER a newer valid
+  // load B had resolved clobbered B's result with error:LoadError.)
+  let cbRenderSeq = 0;
+
+  // B4/B4-r: instantiate exactly once per source_sha256. Cache the PROMISE (not the resolved
+  // kernel) so a re-render that arrives WHILE the first instantiate is in flight reuses it;
+  // evict on rejection so a transient failure retries on the next render.
+  let instantiations = 0;
+  const kernelPromises = new Map();  // source_sha256 -> Promise<kernel>
+
+  // S-19 / SF-6 test hook: a RELEASE BARRIER (see the header). `held` + `rendersWhileHeld` are the
+  // observables a test reads to prove a re-render overlapped an in-flight instantiate.
+  // Backstop for a HELD barrier only (never arms in production: `_test_hold` is test-only). It must
+  // exceed the E2E harness's per-wait budget (60 s per `_wait_*`), so a test flow that parks A,
+  // drives B to ready and only then releases A by hand can never be auto-released mid-flow on a
+  // slow machine -- if a flow ever took this long it would already have failed its own wait. It is
+  // deliberately NOT the production instantiate timeout (RUN_TIMEOUT_MS, 15 s), which is far too
+  // short a budget for a multi-render test flow. Mirrored by the E2E (TEST_BARRIER_BACKSTOP_MS).
+  const TEST_BARRIER_BACKSTOP_MS = 120000;
+  const testState = { held: false, rendersWhileHeld: 0 };
+  let testBarrier = null;            // { promise, release, timer } while a held instantiate is pending
+  window.__pythscribe_test = testState;
+  /** Release `b` iff it is STILL the current barrier (codex r2 nit: a barrier's auto-release timer
+   * is bound to its own instance and cancelled on manual release, so a stale timer from a barrier
+   * released by hand can never release a NEWER barrier early). */
+  function releaseBarrier(b) {
+    if (!b || testBarrier !== b) return false;
+    clearTimeout(b.timer);
+    testBarrier = null;
+    testState.held = false;
+    b.release();
+    return true;
+  }
+  window.__pythscribe_test_release = () => releaseBarrier(testBarrier);
+  function holdBarrier() {
+    if (!testBarrier) {
+      let release;
+      const promise = new Promise((r) => { release = r; });
+      const b = { promise, release, timer: null };
+      b.timer = setTimeout(() => releaseBarrier(b), TEST_BARRIER_BACKSTOP_MS); // THIS barrier only: never wedge the iframe
+      testBarrier = b;
+      testState.held = true;
+      testState.rendersWhileHeld = 0;
+    }
+    return testBarrier.promise;
+  }
+
+  function identityOf(p) {
+    // disabled/theme (Streamlit per-render fields), label and _test_hold are NOT identity.
+    return JSON.stringify([p.source_sha256, p.fn, p.param_types, p.return_type, p.min, p.max, p.step]);
+  }
+
+  function instantiateCached(payload) {
+    const sha = payload.source_sha256;
+    const hit = kernelPromises.get(sha);
+    if (hit) return hit;               // in flight OR resolved -> reuse (never a 2nd instantiate)
+    const pr = (async () => {
+      const bytes = b64ToBytes(payload.wasm_b64);
+      const h = payload._test_hold;
+      if (h === true) {
+        await holdBarrier();           // S-19 test hook: BETWEEN decode and instantiate (the race)
+      } else if (h !== undefined && h !== null && h !== false) {
+        console.warn("pythscribe: _test_hold ignored (non-boolean):", h); // nit: ignore, never error
+      }
+      instantiations += 1;             // counts one ACTUAL instantiate per distinct sha
+      return await ffi.instantiate(bytes.buffer);
+    })();
+    pr.catch(() => { kernelPromises.delete(sha); }); // evict on rejection (B4)
+    kernelPromises.set(sha, pr);
+    return pr;
+  }
+
+  function cbSet(name, val) {
+    if (val === null || val === undefined) cbResult.removeAttribute(name);
+    else cbResult.setAttribute(name, String(val));
+  }
+
+  function toErrorState(name, code) {
+    // S-8: on ANY error remove data-value/data-bits so a harness reading them reads NOTHING (a
+    // stale-equal number cannot masquerade as correct); the last-good number moves to data-stale.
+    cbResult.removeAttribute("data-value");
+    cbResult.removeAttribute("data-bits");
+    cbSet("data-path", "browser-wasm");
+    cbSet("data-error", name || "Error");
+    if (code !== undefined && code !== null && Number(code) >= 100) cbSet("data-error-code", code);
+    else cbResult.removeAttribute("data-error-code");
+    cbResult.textContent = "error: " + (name || "Error");
+    cbLatency.textContent = "";
+    if (lastGood !== null) { cbStale.textContent = "last good: " + lastGood; cbStale.setAttribute("data-stale", lastGood); }
+    setFrameHeight();
+  }
+
+  function renderValue(x) {
+    if (!cbReady || !current) return;  // drag before ready / no kernel -> no-op (never a TypeError)
+    // the current slider value, as a bubble above the thumb (updates as it slides)
+    var _mn = current.payload.min, _mx = current.payload.max;
+    var _pct = (_mx > _mn) ? (Number(x) - _mn) / (_mx - _mn) : 0;
+    cbBubble.textContent = Number(x).toFixed(1);
+    cbBubble.style.left = (_pct * 100) + "%";
+    let r, cbMs;
+    try {
+      const _t0 = performance.now();
+      r = ffi.call(current.kernel, current.payload.fn, current.payload.param_types, [x], { returnType: current.returnType }).value;
+      cbMs = performance.now() - _t0;
+    } catch (e) {
+      toErrorState(e && e.name, e && e.code); // a raising kernel THROWS (shim __err_code) -> error state
+      return;
+    }
+    if (!ffi.isRenderableScalar(r)) { toErrorState("ValueError"); return; } // non-finite -> error (S-7)
+    // success: clear any prior error, write the marker + value attributes
+    cbResult.removeAttribute("data-error");
+    cbResult.removeAttribute("data-error-code");
+    cbStale.removeAttribute("data-stale");
+    cbStale.textContent = "";
+    const exportPresent = Array.isArray(current.kernel.exportNames) && current.kernel.exportNames.includes(current.payload.fn);
+    cbSet("data-path", "browser-wasm");
+    cbSet("data-wasm-how", current.kernel.how);
+    cbSet("data-wasm-export", exportPresent ? current.payload.fn : null);
+    cbSet("data-x-bits", f64bits(x));                 // S-5: the EXACT consumed input, for the oracle
+    cbSet("data-instantiations", instantiations);
+    cbSet("data-ready", 1);
+    if (current.returnType === "float") {
+      cbSet("data-bits", f64bits(r));                 // S-3: authoritative compare for float returns
+      cbResult.removeAttribute("data-value");
+      cbResult.textContent = "f(x) = " + Number(r).toFixed(1);   // 1 decimal (matches the server side)
+    } else {                                          // int return: exact decimal in data-value (S-17)
+      cbSet("data-value", String(r));                 // BigInt renders via String() too (S-7)
+      cbResult.removeAttribute("data-bits");
+      cbResult.textContent = String(r);
+    }
+    lastGood = cbResult.textContent;
+    cbSet("data-ms", cbMs.toFixed(3));                 // exact client-side compute latency, for the oracle
+    cbLatency.textContent = Math.round(cbMs) + " ms · in browser · 0 reruns";
+    setFrameHeight();
+  }
+
+  /** codex SF-3: the DISPLAY is cleared the moment the contract changes (the mutable `current`
+   * was already atomic; the result text + data-bits/data-value/data-x-bits under a NEW label were
+   * not). The last-good number moves to data-stale so nothing renderable is lost silently. */
+  function clearResultDisplay() {
+    for (const a of ["data-value", "data-bits", "data-x-bits", "data-error", "data-error-code",
+                     "data-wasm-export", "data-wasm-how", "data-path"]) cbResult.removeAttribute(a);
+    cbResult.textContent = "loading";
+    cbLatency.textContent = "";
+    if (lastGood !== null) { cbStale.textContent = "last good: " + lastGood; cbStale.setAttribute("data-stale", lastGood); }
+  }
+
+  /** codex SF-4: a kind switch on the SAME keyed iframe (callback -> preprocessing) must HIDE and
+   * DEACTIVATE the callback UI and invalidate every pending callback load; without this A's
+   * slider stays visible + operational beside B's preprocessing output, and a late-resolving
+   * callback load would re-enable it. ONE authority: the seq bump is the same supersession the
+   * settle branches check (B2). */
+  function deactivateCallback() {
+    cbRenderSeq += 1;
+    currentIdentity = null;
+    current = null;
+    cbReady = false;
+    cbSlider.disabled = true;
+    cbSet("data-ready", 0);
+    clearResultDisplay();
+    cbEl.hidden = true;
+  }
+
+  async function onRenderCallback(payload) {
+    if (testState.held) testState.rendersWhileHeld += 1;   // SF-6 observable (test hook only)
+    cbEl.hidden = false;
+    payloadEl.hidden = true;                          // the raw-payload pre is preprocessing-only
+    statusEl.hidden = true;                           // callback mode: no "idle" status line above the slider
+    cbLabelEl.textContent = payload.label || payload.fn;
+    const id = identityOf(payload);
+    if (id === currentIdentity && current) {
+      // idempotent: same contract -> touch NOTHING (slider position + last result preserved,
+      // kernel not re-instantiated). An unrelated rerun re-sends `render`; this is that arm.
+      setFrameHeight();
+      return;
+    }
+    // identity changed (or first render). S-18: ready-gate + disable FIRST; never a piecewise update.
+    const seq = ++cbRenderSeq;                        // B2: this load's supersession token
+    currentIdentity = id;
+    cbReady = false;
+    current = null;                                   // no drag computes under a stale kernel
+    cbSlider.disabled = true;
+    cbSet("data-ready", 0);
+    clearResultDisplay();                             // SF-3: no stale result under the new label
+    statusEl.textContent = "loading";
+    // configure + clamp the thumb into the new [min,max] (B3)
+    cbSlider.min = String(payload.min);
+    cbSlider.max = String(payload.max);
+    cbSlider.step = String(payload.step);
+    let x = Number(cbSlider.value);
+    if (!Number.isFinite(x) || x < payload.min) x = payload.min;
+    if (x > payload.max) x = payload.max;
+    cbSlider.value = String(x);
+    setFrameHeight();
+
+    let kernel;
+    try {
+      kernel = await instantiateCached(payload);
+    } catch (e) {
+      if (seq !== cbRenderSeq) return;               // B2: a superseded load's REJECTION is ignored too
+      cbSet("data-instantiations", instantiations);
+      toErrorState("LoadError");
+      statusEl.textContent = "error: " + String((e && e.message) || e);
+      return;
+    }
+    if (seq !== cbRenderSeq) return;                 // a newer render / kind switch superseded this load
+    // S-18: replace `current` as ONE object only now that the promise RESOLVED.
+    current = { kernel, payload, returnType: payload.return_type || "float" };
+    cbReady = true;
+    cbSlider.disabled = false;
+    cbSet("data-instantiations", instantiations);
+    statusEl.textContent = "ready";
+    renderValue(Number(cbSlider.value));             // recompute synchronously (never a stale result)
+  }
+
+  cbSlider.addEventListener("input", () => {
+    // NB: NO setComponentValue here -- that is what would trigger a Streamlit server rerun.
+    renderValue(Number(cbSlider.value));
+  });
+
+  // ==========================================================================================
+  function onRender(args) {
+    const payload = args && args.payload;
+    if (payload && typeof payload === "object" && payload.kind === "callback") {
+      void onRenderCallback(payload);
+      return;
+    }
+    // ---- preprocessing path ----
+    if (!cbEl.hidden) deactivateCallback();          // SF-4: a kind switch retires the callback UI
+    statusEl.hidden = false;                          // restore the status line for the preprocessing path
+    payloadEl.hidden = false;
+    payloadEl.textContent = JSON.stringify(slim(payload), null, 2);
+    setFrameHeight();
+    if (!payload || typeof payload !== "object") { statusEl.textContent = "idle"; return; }
+    // Only the browser path runs here (result:null + wasm bytes present). A payload whose
+    // result was already produced server-side (Python fallback) is just displayed.
+    if (payload.result) { statusEl.textContent = `done (${payload.result.path})`; return; }
+    if (!payload.wasm_b64) { statusEl.textContent = "no artifact (Python fallback)"; return; }
+    if (payload.nonce === lastNonce) return; // a re-render of a dispatch we already ran/are running
+    lastNonce = payload.nonce;
+    void run(payload);
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "streamlit:render") onRender(event.data.args);
+  });
+
+  // B5: an iframe mounted inside a HIDDEN st.tabs panel posts scrollHeight==0; a client-side tab
+  // click fires no `streamlit:render`, so re-post the height when the iframe gains a viewport /
+  // resizes. Required for BOTH kinds. The S-20 idempotence guard in setFrameHeight makes the
+  // duplicate posts (RO + IO) harmless and loop-proof.
+  try {
+    new ResizeObserver(() => setFrameHeight()).observe(document.documentElement);
+    new IntersectionObserver(() => setFrameHeight()).observe(document.body);
+  } catch (e) { /* observers unavailable -> the initial setFrameHeight still fires */ }
+
+  post("streamlit:componentReady", { apiVersion: 1 });
+  setFrameHeight();
+</script>

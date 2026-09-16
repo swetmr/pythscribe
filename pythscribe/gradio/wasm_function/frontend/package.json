@@ -1,0 +1,44 @@
+{
+  "name": "gradio_wasmfunction",
+  "version": "0.6.2",
+  "description": "Gradio UI packages",
+  "type": "module",
+  "author": "",
+  "license": "ISC",
+  "private": false,
+  "main_changeset": true,
+  "exports": {
+    ".": {
+      "gradio": "./Index.svelte",
+      "svelte": "./dist/Index.svelte",
+      "types": "./dist/Index.svelte.d.ts"
+    },
+    "./example": {
+      "gradio": "./Example.svelte",
+      "svelte": "./dist/Example.svelte",
+      "types": "./dist/Example.svelte.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@gradio/atoms": "0.26.1",
+    "@gradio/statustracker": "0.15.3",
+    "@gradio/utils": "0.14.0",
+    "@xyflow/react": "^12.8.0",
+    "@zerodevx/svelte-json-view": "^1.0.11",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "svelte": "^5.48.0"
+  },
+  "devDependencies": {
+    "@gradio/preview": "0.17.0"
+  },
+  "peerDependencies": {
+    "svelte": "^5.48.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gradio-app/gradio.git",
+    "directory": "js/fallback"
+  }
+}

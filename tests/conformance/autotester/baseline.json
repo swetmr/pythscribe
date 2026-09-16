@@ -84,8 +84,8 @@
       "total": 77
     },
     "docstrings": {
-      "verdict": "diverge",
-      "matched": 7,
+      "verdict": "pass",
+      "matched": 10,
       "total": 10
     },
     "exceptions": {

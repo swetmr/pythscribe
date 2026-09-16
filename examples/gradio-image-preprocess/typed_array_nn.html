@@ -1,0 +1,101 @@
+<!doctype html>
+<!-- v0.2.5 M2c: the FIRST-CLASS TYPED-ARRAY image demo. A uint8 2-D nearest-neighbor downscale
+     runs IN THE BROWSER over first-class typed arrays (Uint8Array rows viewed directly over WASM
+     linear memory), marshalled by the SAME pythscribe FFI shim the Gradio component imports
+     (pythscribe/ffi/list_buffer.mjs -> its typed-array path). Only `*`/`+` indexing, so the uint8
+     kernel admits on the WASM fast path (box-average needs floor-div -> M6/#493; that demo is the
+     unchanged list-buffer `downscale_box`). Serve the REPO ROOT and open
+     /examples/gradio-image-preprocess/typed_array_nn.html so the absolute imports resolve. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>pythscribe @wasm typed-array nearest-neighbor downscale</title></head>
+<body style="font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 60rem;">
+  <h2>Resize in the browser with a <code>@wasm</code> uint8 2-D typed-array kernel</h2>
+  <p>Nearest-neighbor downscale of a 2-D <code>Array[uint8, 2]</code> image ([H, W&times;3] RGB bytes),
+     run through <code>downscale_nn.wasm</code> via the pythscribe typed-array FFI shim. Layout:
+     <code id="layout"></code>.</p>
+  <p><input type="file" id="file" accept="image/*"> max side
+     <input type="number" id="maxdim" value="256" style="width:5rem"> px</p>
+  <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+    <div><div>input</div><canvas id="src" style="border:1px solid #ccc; max-width:20rem"></canvas></div>
+    <div><div>@wasm nearest-neighbor output</div><canvas id="dst" style="border:1px solid #ccc; max-width:20rem"></canvas></div>
+  </div>
+  <pre id="status" data-testid="status" style="background:#f5f5f5; padding:.5rem; white-space:pre-wrap;"></pre>
+
+  <script type="module">
+    import * as ffi from "/pythscribe/ffi/list_buffer.mjs";
+
+    const WASM_URL = "/examples/gradio-image-preprocess/__pythscribe__/downscale_nn/downscale_nn.wasm";
+    const PARAM_TYPES = ["Array[uint8, 2]", "int", "int", "int", "Array[uint8, 2]"];
+    document.getElementById("layout").textContent = ffi.ARRAY_LAYOUT_VERSION;
+
+    // twin of reference.choose_scale / the box_scale kernel: integer box factor bringing the
+    // long side to <= max_dim (>=1). Used to pick the nearest-neighbor stride.
+    function chooseScale(w, h, maxDim) {
+      const big = Math.max(w, h);
+      return big <= maxDim ? 1 : Math.ceil(big / maxDim);
+    }
+
+    let _kernel = null;
+    async function kernel() { return (_kernel ??= await ffi.instantiate(WASM_URL)); }
+
+    /** The load-bearing typed-array path, exposed for the E2E. `imgRows` = array of `H`
+     * Uint8Array rows, each `W*3` (row-major RGB). Returns { ret, rows } where rows is `oh`
+     * arrays of `ow*3`. Runs entirely through the shim's typed-array marshalling over WASM memory. */
+    window.pythscribeNN = async function (imgRows, scale, oh, ow) {
+      const k = await kernel();
+      const out = [];
+      for (let r = 0; r < oh; r++) out.push(new Uint8Array(ow * 3));
+      const img = imgRows.map((row) => (row instanceof Uint8Array ? row : Uint8Array.from(row)));
+      const res = ffi.call(k, "downscale_nn", PARAM_TYPES, [img, scale, oh, ow, out],
+                           { readBack: [4], returnType: "int" });
+      return { ret: Number(res.value), rows: res.outs[4].map((r) => Array.from(r)),
+               exports: k.exportNames, layout: ffi.ARRAY_LAYOUT_VERSION };
+    };
+
+    // ---- interactive UI (decode -> typed arrays -> @wasm -> canvas) ---------------------------
+    async function onFile(file) {
+      const status = document.getElementById("status");
+      try {
+        const maxDim = parseInt(document.getElementById("maxdim").value, 10) || 256;
+        const bmp = await createImageBitmap(file, { imageOrientation: "none", colorSpaceConversion: "none" });
+        const w = bmp.width, h = bmp.height;
+        const sc = document.getElementById("src"); sc.width = w; sc.height = h;
+        const sctx = sc.getContext("2d", { willReadFrequently: true });
+        sctx.drawImage(bmp, 0, 0); bmp.close();
+        const rgba = sctx.getImageData(0, 0, w, h).data;
+        // RGBA -> 2-D uint8 [H, W*3] rows (strip alpha)
+        const imgRows = [];
+        for (let y = 0; y < h; y++) {
+          const row = new Uint8Array(w * 3);
+          for (let x = 0, j = (y * w) * 4, o = 0; x < w; x++, j += 4, o += 3) {
+            row[o] = rgba[j]; row[o + 1] = rgba[j + 1]; row[o + 2] = rgba[j + 2];
+          }
+          imgRows.push(row);
+        }
+        const scale = chooseScale(w, h, maxDim);
+        const oh = Math.floor(h / scale), ow = Math.floor(w / scale);
+        const t0 = performance.now();
+        const r = await window.pythscribeNN(imgRows, scale, oh, ow);
+        const ms = (performance.now() - t0).toFixed(1);
+        // out rows -> RGBA -> canvas
+        const dst = document.getElementById("dst"); dst.width = ow; dst.height = oh;
+        const outImg = new ImageData(ow, oh);
+        for (let y = 0; y < oh; y++) {
+          const row = r.rows[y];
+          for (let x = 0, o = 0, j = (y * ow) * 4; x < ow; x++, o += 3, j += 4) {
+            outImg.data[j] = row[o]; outImg.data[j + 1] = row[o + 1]; outImg.data[j + 2] = row[o + 2]; outImg.data[j + 3] = 255;
+          }
+        }
+        dst.getContext("2d").putImageData(outImg, 0, 0);
+        status.textContent = `in ${w}x${h} -> out ${ow}x${oh} (scale ${scale}); kernel returned ${r.ret} px; ${ms} ms; layout ${r.layout}`;
+      } catch (e) {
+        status.textContent = "error: " + (e && e.message ? e.message : e);
+      }
+    }
+    document.getElementById("file").addEventListener("change", (ev) => {
+      const f = ev.currentTarget.files && ev.currentTarget.files[0];
+      if (f) void onFile(f);
+    });
+  </script>
+</body>
+</html>

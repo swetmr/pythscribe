@@ -1,0 +1,35 @@
+{
+  "compiler": {
+    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "name": "pyths",
+    "version": "0.2.5"
+  },
+  "entry": "spin.js",
+  "files": {
+    "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
+    "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
+    "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
+    "pyths-runtime/react.js": "79c85d9599d3a6b7c813d83d538ab225ac0fd8776857f7fdba1512096099df47",
+    "pyths-runtime/runtime.js": "21a474e1f6aa2f959a2101a46be393190a923576fb67e3e78edba39c7ddd0b78",
+    "pyths-runtime/types.js": "b5af591c394a1984715054cd5c8c100ffdc2ea1c6b85e01bf3ae33e2cf1b265b",
+    "spin.glue.js": "fe7e1d29b77feb4414753d052728c084a600232ad261d465d0526d647fc67d13",
+    "spin.js": "ccb8a53cd0c01bd107bf17714e34e4f4b36c8058ca8ab92d62112cb369874ee2",
+    "spin.ps": "6b16dbfaa8e5155b65e3c6e5565962b3d189c661b3aee3c6a401f59c5e344247",
+    "spin.wasm": "1510b1684ae12f20719f0ec4f6a2bd28a6ee05e1a4510d515ada9ae6d51d0956"
+  },
+  "function": "spin",
+  "glue": "spin.glue.js",
+  "manifest_sha256": "54caeb09d8f57a8d4f9175413fab994a7ece7e6e3969dd6e88458079c06dda0f",
+  "optimizer": {
+    "applied": false,
+    "error": null,
+    "id": "none",
+    "path_sha256": null
+  },
+  "runtime_dir": "pyths-runtime",
+  "schema": 1,
+  "source_file": "kernels.py",
+  "source_sha256": "6b16dbfaa8e5155b65e3c6e5565962b3d189c661b3aee3c6a401f59c5e344247",
+  "target": "js+wasm",
+  "wasm": "spin.wasm"
+}

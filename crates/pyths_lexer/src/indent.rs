@@ -742,7 +742,7 @@ mod tests {
         let result = lex_recovering("x = $1\ny = @#2");
         // Should have errors for $ and # (# starts a comment, so just $ and potentially others)
         // Actually @ is valid (Token::At), and # starts a comment, so only $ is invalid
-        assert!(result.errors.len() >= 1);
+        assert!(!result.errors.is_empty());
         // Tokens for valid parts should still be present
         let has_x = result
             .tokens

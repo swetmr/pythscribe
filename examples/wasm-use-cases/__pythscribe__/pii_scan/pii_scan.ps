@@ -1,0 +1,12 @@
+@wasm
+def pii_scan(text: list[int], min_run: int) -> float:
+    runs = 0.0
+    cur = 0
+    for ch in text:
+        if ch >= 48 and ch <= 57:
+            cur = cur + 1
+            if cur == min_run:
+                runs = runs + 1.0
+        else:
+            cur = 0
+    return runs

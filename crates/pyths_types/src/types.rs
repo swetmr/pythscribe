@@ -1,6 +1,79 @@
 use pyths_syntax::ast::{Expr, ExprKind};
 use pyths_syntax::operators::{BinOp, UnaryOp};
 
+/// Fixed-width numeric element dtype of a WASM numeric `Array` boundary type
+/// (M2 array/buffer ABI). These are NumPy-style dtypes whose arithmetic is
+/// modular-wrap (distinct from Python's unbounded `int`), crossed as a bulk
+/// buffer. The 5 spellings admitted are `int32`, `int64`, `float32`,
+/// `float64`, `uint8`.
+///
+/// **M2a-0 (types foundation):** the enum + its width/spelling machinery is
+/// added here so `Type::Array` and `WasmType::PtrArray` are representable, but
+/// NO annotation yet parses to `Type::Array` (that is M2a-1) and NO codegen
+/// consumes it (that is M2a-3). Every consumer arm added in this chunk is an
+/// unreachable stub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArrayDtype {
+    Int32,
+    Int64,
+    Float32,
+    Float64,
+    Uint8,
+}
+
+impl ArrayDtype {
+    /// Element size in bytes in linear memory: `uint8` = 1, `int32`/`float32`
+    /// = 4, `int64`/`float64` = 8.
+    pub fn size_bytes(self) -> u32 {
+        match self {
+            ArrayDtype::Uint8 => 1,
+            ArrayDtype::Int32 | ArrayDtype::Float32 => 4,
+            ArrayDtype::Int64 | ArrayDtype::Float64 => 8,
+        }
+    }
+
+    /// The canonical annotation spelling (`int32`, `int64`, `float32`,
+    /// `float64`, `uint8`).
+    pub fn spelling(self) -> &'static str {
+        match self {
+            ArrayDtype::Int32 => "int32",
+            ArrayDtype::Int64 => "int64",
+            ArrayDtype::Float32 => "float32",
+            ArrayDtype::Float64 => "float64",
+            ArrayDtype::Uint8 => "uint8",
+        }
+    }
+
+    /// Whether the element is a floating-point dtype (`float32`/`float64`).
+    /// The M2a-3 codegen loads float elements onto the f64 compute stack and
+    /// integer elements onto the i64 compute stack, so the load/store width and
+    /// the extend/narrow direction key off this.
+    pub fn is_float(self) -> bool {
+        matches!(self, ArrayDtype::Float32 | ArrayDtype::Float64)
+    }
+
+    /// Whether the element is a *signed* integer dtype (`int32`/`int64`).
+    /// `uint8` is the only unsigned integer dtype; it zero-extends on load and
+    /// wraps mod-256 on store (`i32.store8`). Signed ints sign-extend on load.
+    pub fn is_signed_int(self) -> bool {
+        matches!(self, ArrayDtype::Int32 | ArrayDtype::Int64)
+    }
+
+    /// Parse a dtype-token spelling. Any other spelling ⇒ `None` (loud refusal
+    /// discipline — a non-admitted dtype stays JS). Used by the M2a-1
+    /// annotation parser; provided here so the alphabet is single-sourced.
+    pub fn from_spelling(s: &str) -> Option<ArrayDtype> {
+        match s {
+            "int32" => Some(ArrayDtype::Int32),
+            "int64" => Some(ArrayDtype::Int64),
+            "float32" => Some(ArrayDtype::Float32),
+            "float64" => Some(ArrayDtype::Float64),
+            "uint8" => Some(ArrayDtype::Uint8),
+            _ => None,
+        }
+    }
+}
+
 /// Internal type representation for the type checker.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -17,6 +90,14 @@ pub enum Type {
     Union(Vec<Type>),
     Named(String),
     Callable(Vec<Type>, Box<Type>),
+    /// A WASM numeric `Array[dtype, ndim]` boundary type (M2 array/buffer ABI):
+    /// a fixed-width, C-contiguous numeric buffer of `dtype` elements with
+    /// `ndim` dimensions (1 or 2). Crossed as a bulk buffer, never per-element.
+    ///
+    /// **M2a-0 stub:** representable but not yet produced — annotation parsing
+    /// (`resolve_type`) is M2a-1, admission (`is_wasm_eligible`) is M2a-1, and
+    /// codegen is M2a-3. No program can construct this variant in this chunk.
+    Array(ArrayDtype, u32),
     /// Generic type parameter inside a stub-declared signature. Bound
     /// to a concrete type at each call site via [`unify`] and
     /// [`substitute`] in the checker. Outside of generic resolution,
@@ -70,6 +151,7 @@ impl std::fmt::Display for Type {
                 let parts: Vec<_> = params.iter().map(|t| t.to_string()).collect();
                 write!(f, "Callable[[{}], {}]", parts.join(", "), ret)
             }
+            Type::Array(dtype, ndim) => write!(f, "Array[{}, {}]", dtype.spelling(), ndim),
             Type::TypeVar(name) => write!(f, "{}", name),
             Type::Any => write!(f, "Any"),
             Type::Void => write!(f, "void"),
@@ -128,6 +210,13 @@ pub fn resolve_type(annotation: &Expr) -> Type {
                             Type::Tuple(vec![resolve_type(index)])
                         }
                     }
+                    // M2 array/buffer ABI (M2a-1): `Array[dtype]` (1-D) /
+                    // `Array[dtype, ndim]` (ndim ∈ {1,2}) parses to
+                    // `Type::Array`. Admission stays GATED OFF until M2a-3
+                    // (see `wasm_analysis::is_numeric_kernel_param`), so an
+                    // array-param function routes to the JS fallback for now —
+                    // parsing the annotation here does NOT enable WASM emission.
+                    "Array" => resolve_array_annotation(index),
                     "Union" => {
                         if let ExprKind::Tuple(elts) = &index.kind {
                             Type::Union(elts.iter().map(resolve_type).collect())
@@ -159,6 +248,53 @@ pub fn resolve_type(annotation: &Expr) -> Type {
             }
         }
         _ => Type::Any,
+    }
+}
+
+/// Parse the subscript of an `Array[...]` annotation (M2 array/buffer ABI,
+/// M2a-1). Accepts `Array[dtype]` (ndim defaults to 1) and
+/// `Array[dtype, ndim]` (ndim ∈ {1, 2}), where `dtype` is one of the 5
+/// admitted spellings (`int32`/`int64`/`float32`/`float64`/`uint8`, single-
+/// sourced by [`ArrayDtype::from_spelling`]). Any other shape — a non-dtype
+/// token (`Array[banana]`), an unsupported width (`Array[float16]`), a
+/// missing/non-integer/out-of-range ndim, or extra tuple elements — is
+/// REFUSED to `Type::Any` (the sound-by-refusal discipline: a buffer whose
+/// element width the compiler cannot name is not an array param and stays on
+/// the JS path). A bare `Array` name with no subscript never reaches here and
+/// resolves to `Type::Named("Array")`, likewise not an admitted array.
+fn resolve_array_annotation(index: &Expr) -> Type {
+    // Split the subscript into a dtype token and an ndim (defaulting to 1).
+    let (dtype_expr, ndim): (&Expr, u32) = match &index.kind {
+        ExprKind::Tuple(elts) => match elts.as_slice() {
+            [dtype_expr, ndim_expr] => match array_ndim_value(ndim_expr) {
+                Some(ndim) => (dtype_expr, ndim),
+                // Non-integer ndim, or ndim ∉ {1, 2} (strided/ndim>2 is refused
+                // — only 1-D and 2-D C-contiguous are ever admitted).
+                None => return Type::Any,
+            },
+            // `Array[]`, `Array[a, b, c]`, … — not a valid array spelling.
+            _ => return Type::Any,
+        },
+        // `Array[dtype]` — single token, ndim defaults to 1.
+        _ => (index, 1),
+    };
+    match &dtype_expr.kind {
+        ExprKind::Name(spelling) => match ArrayDtype::from_spelling(spelling) {
+            Some(dtype) => Type::Array(dtype, ndim),
+            // Unknown/unsupported width (`banana`, `float16`, `int8`, …).
+            None => Type::Any,
+        },
+        _ => Type::Any,
+    }
+}
+
+/// The `ndim` token of an `Array[dtype, ndim]` annotation must be a positive
+/// integer literal in {1, 2} (1-D / 2-D C-contiguous only). Anything else
+/// (non-literal, negative, zero, or > 2) yields `None`, refusing the array.
+fn array_ndim_value(expr: &Expr) -> Option<u32> {
+    match &expr.kind {
+        ExprKind::IntLiteral(n) if *n == 1 || *n == 2 => Some(*n as u32),
+        _ => None,
     }
 }
 
@@ -481,5 +617,129 @@ pub fn unify(target: &Type, source: &Type, bindings: &mut Bindings) -> bool {
         // Anything else: no new bindings to record, defer to is_assignable
         // semantics (which already covers Any and concrete-equality cases).
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod array_annotation_tests {
+    //! M2a-1: `resolve_type` parsing of the `Array[dtype, ndim]` annotation
+    //! surface. Anti-vacuity: each positive parse (an admitted array shape)
+    //! is PAIRED with a negative control (a bare/wrong-dtype/bad-ndim spelling
+    //! that MUST NOT parse to an admitted `Type::Array`) — a mutant that dropped
+    //! the refusal (e.g. defaulted an unknown dtype to a real width) would turn
+    //! a control RED.
+    use super::*;
+    use pyths_syntax::ast::{Expr, ExprKind};
+    use pyths_syntax::span::Span;
+
+    fn sp() -> Span {
+        Span::dummy()
+    }
+    fn name(n: &str) -> Expr {
+        Expr::name(n, sp())
+    }
+    fn int(n: i128) -> Expr {
+        Expr::new(ExprKind::IntLiteral(n), sp())
+    }
+    fn tuple(elts: Vec<Expr>) -> Expr {
+        Expr::new(ExprKind::Tuple(elts), sp())
+    }
+    /// `Array[<index>]`
+    fn array_ann(index: Expr) -> Expr {
+        Expr::new(
+            ExprKind::Subscript {
+                value: Box::new(name("Array")),
+                index: Box::new(index),
+                optional: false,
+            },
+            sp(),
+        )
+    }
+
+    // ---- POSITIVE: every admitted (dtype, ndim) parses to Type::Array ----
+
+    #[test]
+    fn array_1d_all_dtypes_parse() {
+        // `Array[dtype]` — ndim defaults to 1.
+        let cases = [
+            ("int32", ArrayDtype::Int32),
+            ("int64", ArrayDtype::Int64),
+            ("float32", ArrayDtype::Float32),
+            ("float64", ArrayDtype::Float64),
+            ("uint8", ArrayDtype::Uint8),
+        ];
+        for (spelling, dt) in cases {
+            assert_eq!(
+                resolve_type(&array_ann(name(spelling))),
+                Type::Array(dt, 1),
+                "Array[{spelling}] should parse to a 1-D array of {dt:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn array_2d_explicit_ndim_parses() {
+        assert_eq!(
+            resolve_type(&array_ann(tuple(vec![name("float32"), int(2)]))),
+            Type::Array(ArrayDtype::Float32, 2)
+        );
+        assert_eq!(
+            resolve_type(&array_ann(tuple(vec![name("int32"), int(2)]))),
+            Type::Array(ArrayDtype::Int32, 2)
+        );
+        // ndim=1 written explicitly is equivalent to the bare `Array[dtype]`.
+        assert_eq!(
+            resolve_type(&array_ann(tuple(vec![name("uint8"), int(1)]))),
+            Type::Array(ArrayDtype::Uint8, 1)
+        );
+    }
+
+    // ---- NEGATIVE CONTROLS: none of these may parse to an admitted array ----
+
+    #[test]
+    fn bare_list_is_not_an_admitted_array() {
+        // A bare `list` cannot name the element width → not an array param.
+        assert_eq!(resolve_type(&name("list")), Type::List(Box::new(Type::Any)));
+        assert!(!matches!(resolve_type(&name("list")), Type::Array(_, _)));
+        // `ndarray` is a lowercase non-builtin → Any, never an array.
+        assert_eq!(resolve_type(&name("ndarray")), Type::Any);
+        // A bare `Array` (no subscript, so no width) → Named, NOT an array.
+        assert!(!matches!(resolve_type(&name("Array")), Type::Array(_, _)));
+    }
+
+    #[test]
+    fn unknown_dtype_refuses_to_any() {
+        // `Array[banana]` / `Array[float16]` / `Array[int8]` — the dtype is not
+        // one of the 5 admitted widths → loud refusal to Any (stays JS).
+        for bad in ["banana", "float16", "int8", "int", "float", "complex64"] {
+            let ty = resolve_type(&array_ann(name(bad)));
+            assert_eq!(ty, Type::Any, "Array[{bad}] must refuse to Any");
+            assert!(!matches!(ty, Type::Array(_, _)));
+        }
+    }
+
+    #[test]
+    fn bad_ndim_refuses_to_any() {
+        // ndim must be a literal in {1, 2}: 0, 3, negative, or non-literal refuse.
+        for bad_ndim in [0i128, 3, 4, -1] {
+            let ty = resolve_type(&array_ann(tuple(vec![name("float64"), int(bad_ndim)])));
+            assert_eq!(ty, Type::Any, "Array[float64, {bad_ndim}] must refuse");
+            assert!(!matches!(ty, Type::Array(_, _)));
+        }
+        // Non-integer ndim token.
+        assert_eq!(
+            resolve_type(&array_ann(tuple(vec![name("float64"), name("two")]))),
+            Type::Any
+        );
+        // Too many tuple elements (`Array[float64, 2, 3]`).
+        assert_eq!(
+            resolve_type(&array_ann(tuple(vec![name("float64"), int(2), int(3)]))),
+            Type::Any
+        );
+        // Wrong dtype AND explicit ndim still refuses (dtype gate is total).
+        assert_eq!(
+            resolve_type(&array_ann(tuple(vec![name("float16"), int(2)]))),
+            Type::Any
+        );
     }
 }

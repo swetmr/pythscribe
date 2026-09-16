@@ -4,9 +4,14 @@ use pyths_codegen_wasm::types::WasmType;
 use pyths_codegen_wasm::{generate_bridge_js, WasmCodegenOutput, WasmExportInfo};
 
 fn make_output(exports: Vec<WasmExportInfo>, needs_pow: bool) -> WasmCodegenOutput {
+    // Mirror the real compiler: `needs_strings` (== "needs the heap/arena") is set
+    // for ANY heap-boundary param/return, which `is_any_ptr()` captures (string,
+    // list, dict, tuple, closure, AND array) — so array/list tests exercise the
+    // production arena `try/finally` placement of the marshalling prelude, not a
+    // heap-less shape (bridge review nit, 2026-09-04).
     let needs_strings = exports.iter().any(|e| {
-        e.params.iter().any(|(_, ty)| matches!(ty, WasmType::Ptr))
-            || matches!(e.return_type, Some(WasmType::Ptr))
+        e.params.iter().any(|(_, ty)| ty.is_any_ptr())
+            || e.return_type.as_ref().is_some_and(|ty| ty.is_any_ptr())
     });
     let mut math_imports = BTreeSet::new();
     if needs_pow {
@@ -262,11 +267,7 @@ fn test_bridge_streaming_fallback() {
         false,
     );
     let glue = generate_bridge_js(&output, "./test.wasm", None);
-    assert!(
-        glue.contains("instantiateStreaming"),
-        "Has streaming: {}",
-        glue
-    );
+    assert!(glue.contains("compileStreaming"), "Has streaming: {}", glue);
     assert!(glue.contains("arrayBuffer"), "Has fallback: {}", glue);
     // Universal loader: detects Node and uses fs.readFile because
     // Node's fetch() can't resolve file: URLs.
@@ -621,6 +622,81 @@ fn test_bridge_defines_list_helpers_for_list_param() {
 }
 
 #[test]
+fn test_bridge_writes_back_list_out_param() {
+    // #484: SYMMETRIC marshalling. A mutable list param must be marshalled
+    // through a NAMED local and copied BACK on return, so an in-place fill
+    // kernel's mutation is visible to the caller (the pre-fix glue dropped it).
+    let output = make_output(
+        vec![WasmExportInfo {
+            name: "fill".to_string(),
+            params: vec![
+                (
+                    "out".to_string(),
+                    WasmType::PtrList(Box::new(WasmType::I64)),
+                ),
+                ("n".to_string(), WasmType::I64),
+            ],
+            return_type: Some(WasmType::I64),
+        }],
+        false,
+    );
+    let glue = generate_bridge_js(&output, "./test.wasm", None);
+    // The write-back helper must be DEFINED (the ONE authority)...
+    assert!(
+        glue.contains("function __list_write_back(arr, ptr, kind)"),
+        "list-out-param glue must define __list_write_back: {glue}"
+    );
+    // ...the list arg hoisted to a named local so its pointer survives the call...
+    assert!(
+        glue.contains("const __wb_arg_0 = __list_to_wasm(out, \"i64\")")
+            && glue.contains("__wasm.fill(__wb_arg_0,"),
+        "list arg must be hoisted and passed by its local: {glue}"
+    );
+    // ...and written BACK to the SAME JS array after the call.
+    assert!(
+        glue.contains("__list_write_back(out, __wb_arg_0, \"i64\")"),
+        "list out-param must be written back on return: {glue}"
+    );
+    // The fixed-capacity contract is enforced LOUDLY (never a silent truncation).
+    assert!(
+        glue.contains("if (n !== arr.length) throw new Error("),
+        "write-back must refuse a length-changing mutation loudly: {glue}"
+    );
+    // The i32 (bool) branch yields a real boolean for a plain array so the glue
+    // matches the JS twin; a TypedArray caller (the low-level channel) gets the
+    // type-compatible value instead — so write-back never throws on a valid
+    // read-only call made with a BigInt64Array (codex review, 2026-09-04).
+    assert!(
+        glue.contains("const typed = ArrayBuffer.isView(arr);")
+            && glue.contains("arr[i] = typed ? v : ((v >= -9007199254740991n && v <= 9007199254740991n) ? Number(v) : v);")
+            && glue.contains("arr[i] = typed ? v : (v !== 0);"),
+        "write-back must be TypedArray-safe (BigInt for BigInt64Array) and boolean for a plain list[bool]: {glue}"
+    );
+}
+
+#[test]
+fn test_bridge_no_write_back_without_list_param() {
+    // Byte-identity guard: a function WITHOUT list params emits NO write-back
+    // machinery — the fix is inert for the scalar/str surface.
+    let output = make_output(
+        vec![WasmExportInfo {
+            name: "add".to_string(),
+            params: vec![
+                ("a".to_string(), WasmType::I64),
+                ("b".to_string(), WasmType::I64),
+            ],
+            return_type: Some(WasmType::I64),
+        }],
+        false,
+    );
+    let glue = generate_bridge_js(&output, "./test.wasm", None);
+    assert!(
+        !glue.contains("__list_write_back") && !glue.contains("__wb_arg_"),
+        "no-list glue must not emit write-back machinery: {glue}"
+    );
+}
+
+#[test]
 fn test_bridge_defines_list_from_wasm_for_list_return() {
     let output = make_output(
         vec![WasmExportInfo {
@@ -708,5 +784,229 @@ fn test_bridge_no_list_helpers_when_not_needed() {
         !glue.contains("__list_from_wasm"),
         "No list helpers when unused: {}",
         glue
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M2a-3b: the js+wasm TYPED-ARRAY glue — layout byte-agreement + refusal channel
+// ---------------------------------------------------------------------------
+
+/// The typed-array HEADER LAYOUT the glue emits is byte-identical to the SERVER
+/// channel `pythscribe/runtime/array_buffer.py` and to the codegen's `PtrArray`
+/// load/store (`emit.rs`: `ARRAY_ELEM_OFFSET = 16`, `shape0 @ +8`). This test
+/// PINS every offset + dtype tag as an exact string, so ANY layout drift
+/// (an offset moved, a tag renumbered) goes RED — the K7 declared-binding
+/// discipline extended to the array header (the paired negative control for the
+/// layout: the assertions below cannot pass on a shifted header).
+#[test]
+fn test_bridge_array_header_layout_byte_agreement() {
+    use pyths_types::types::ArrayDtype;
+    // One export per dtype so every `__ARR_DTYPES` tag/width row is emitted.
+    let dtypes = [
+        ArrayDtype::Int32,
+        ArrayDtype::Int64,
+        ArrayDtype::Float32,
+        ArrayDtype::Float64,
+        ArrayDtype::Uint8,
+    ];
+    let exports: Vec<WasmExportInfo> = dtypes
+        .iter()
+        .map(|dt| WasmExportInfo {
+            name: format!("k_{}", dt.spelling()),
+            params: vec![(
+                "a".to_string(),
+                WasmType::PtrArray {
+                    dtype: *dt,
+                    ndim: 1,
+                },
+            )],
+            return_type: None,
+        })
+        .collect();
+    let output = make_output(exports, false);
+    let glue = generate_bridge_js(&output, "./test.wasm", None);
+
+    // The marshalling helpers must be DEFINED (referenced-but-undefined would be
+    // a ReferenceError at runtime — the B-031 class).
+    assert!(
+        glue.contains("function __array_to_wasm(arr, dtype, ndim)")
+            && glue.contains("function __array_write_back(arr, ptr, dtype, ndim)"),
+        "array glue must define both marshallers: {glue}"
+    );
+
+    // dtype tag codes == `ArrayDtype` declaration order == `array_buffer.DTYPE_TAG`
+    // (int32=0, int64=1, float32=2, float64=3, uint8=4) with the correct element
+    // widths. The `esize` is bound to `ArrayDtype::size_bytes` (the SINGLE SOURCE
+    // the codegen load/store width also derives from) and checked ROW-LOCALLY —
+    // this is the shipping-binding of the WIDTH leg of the Lean `.ptrArray`
+    // value-exactness (the M2a-4a marshalling row carries only the dtype spelling,
+    // not the width; without a row-local size_bytes bind, flipping one dtype's
+    // esize to another admitted width — e.g. int32→8 — would slip past a
+    // whole-glue `contains("esize: 4")` because float32 also has esize 4. This
+    // closes the M2a-4a-review SF-1 gap in-chunk).
+    for (dt, ctor, tag) in [
+        (ArrayDtype::Int32, "Int32Array", 0),
+        (ArrayDtype::Int64, "BigInt64Array", 1),
+        (ArrayDtype::Float32, "Float32Array", 2),
+        (ArrayDtype::Float64, "Float64Array", 3),
+        (ArrayDtype::Uint8, "Uint8Array", 4),
+    ] {
+        let spelling = dt.spelling();
+        let esize = dt.size_bytes(); // the type-system single source of the width
+                                     // Extract THIS dtype's `__ARR_DTYPES` row (the line `  <spelling>: { … }`)
+                                     // and assert ctor+esize+tag are ALL on it — a wrong width on one dtype is
+                                     // caught even when a sibling dtype legitimately shares that width.
+        let row = glue
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{spelling}:")))
+            .unwrap_or_else(|| panic!("missing __ARR_DTYPES.{spelling} row: {glue}"));
+        assert!(
+            row.contains(&format!("ctor: {ctor}"))
+                && row.contains(&format!("esize: {esize}"))
+                && row.contains(&format!("tag: {tag}")),
+            "dtype {spelling} row must bind ctor={ctor} esize={esize} (=size_bytes) tag={tag}: {row}"
+        );
+    }
+
+    // THE HEADER LAYOUT (16-byte times-8): dtype@0, ndim@4, shape0(rows)@8,
+    // shape1(cols; 0 for 1-D)@12, elems@16 (M2b: the M2a `pad` @12 is now
+    // shape1). Byte-identical to array_buffer.py `ARRAY_HEADER_BYTES=16` /
+    // `shape0 @8` / `shape1 @12` and to emit.rs `ARRAY_ELEM_OFFSET=16` /
+    // `ARRAY_COLS_OFFSET=12`. A shift of ANY of these fails this test.
+    assert!(
+        glue.contains("view.setInt32(ptr, d.tag, true);"),
+        "dtype tag @0: {glue}"
+    );
+    assert!(
+        glue.contains("view.setInt32(ptr + 4, ndim, true);"),
+        "ndim @4: {glue}"
+    );
+    assert!(
+        glue.contains("view.setInt32(ptr + 8, nrows, true);"),
+        "shape0 (rows) @8: {glue}"
+    );
+    assert!(
+        glue.contains("view.setInt32(ptr + 12, ncols, true);"),
+        "shape1 (cols) @12: {glue}"
+    );
+    assert!(
+        glue.contains("new d.ctor(__wasm.memory.buffer, ptr + 16, n).set(arr);"),
+        "1-D elements @16, bulk .set() copy IN: {glue}"
+    );
+    // M2b: 2-D lays each row contiguously at ptr+16 + r*ncols*esize (row-major).
+    assert!(
+        glue.contains(
+            "new d.ctor(__wasm.memory.buffer, ptr + 16 + r * ncols * d.esize, ncols).set(arr[r]);"
+        ),
+        "2-D rows @16 row-major, one bulk .set() per row: {glue}"
+    );
+    // Allocation is header+elements rounded to a multiple of 8, and the returned
+    // base is aligned UP to 8 (a TypedArray view over WASM memory throws on a
+    // misaligned byte offset — requirements B3).
+    assert!(
+        glue.contains("(16 + n * d.esize + 7) & ~7")
+            && glue.contains("const ptr = (raw + 7) & ~7;"),
+        "alloc rounds to x8 and returns an 8-aligned base (B3): {glue}"
+    );
+
+    // Write-back reads the SAME offsets and re-validates the header (drift guard):
+    // tag@0, ndim@4, shape0@8, shape1@12, elems@16 — a corrupted header is
+    // refused LOUDLY.
+    assert!(
+        glue.contains("const tag = view.getInt32(ptr, true);")
+            && glue.contains("const hdrNdim = view.getInt32(ptr + 4, true);")
+            && glue.contains("const nrows = view.getInt32(ptr + 8, true);")
+            && glue.contains("const ncols = view.getInt32(ptr + 12, true);")
+            && glue.contains("arr.set(new d.ctor(__wasm.memory.buffer, ptr + 16, nrows));"),
+        "write-back must read the header at the same offsets + bulk-copy elems@16: {glue}"
+    );
+    assert!(
+        glue.contains("if (tag !== d.tag) throw new Error(")
+            && glue.contains("if (hdrNdim !== ndim) throw new Error(")
+            && glue.contains("if (nrows !== arr.length) throw new Error("),
+        "write-back must refuse a drifted tag/ndim/length LOUDLY (never a silent misread): {glue}"
+    );
+}
+
+/// The TOTAL runtime check (requirements B1) is a `RangeError` — a boundary
+/// marshalling fault the #364 ladder (`__isWasmFault = ... || e instanceof
+/// RangeError`) reroutes to the JS twin, never a silent wrong-width read. This
+/// pins the refusal CHANNEL: a wrong-dtype / non-TypedArray / wrong-ndim buffer
+/// throws `RangeError` inside `__array_to_wasm` (so a twin-bearing js+wasm target
+/// reroutes; a twinless edge target surfaces the loud error). The paired
+/// negative control is the assertion that this is a `RangeError` (reroutes), not
+/// a silent flat-copy.
+#[test]
+fn test_bridge_array_mismatch_throws_rangeerror_reroute_channel() {
+    use pyths_types::types::ArrayDtype;
+    let output = make_output(
+        vec![WasmExportInfo {
+            name: "k".to_string(),
+            params: vec![(
+                "a".to_string(),
+                WasmType::PtrArray {
+                    dtype: ArrayDtype::Int32,
+                    ndim: 1,
+                },
+            )],
+            return_type: None,
+        }],
+        false,
+    );
+    let glue = generate_bridge_js(&output, "./test.wasm", None);
+    // dtype/width mismatch AND a non-TypedArray both refused via RangeError.
+    // The total per-row check compares BOTH constructor and element width
+    // (shared by 1-D and each 2-D row via `__arrRowOk`).
+    assert!(
+        glue.contains("row.constructor === d.ctor && row.BYTES_PER_ELEMENT === d.esize"),
+        "the total check (__arrRowOk) must compare BOTH constructor and element width: {glue}"
+    );
+    assert!(
+        glue.contains("throw new RangeError('pythscribe: Array['"),
+        "a dtype/width mismatch must throw a RangeError (reroutes to the twin): {glue}"
+    );
+    // M2b: ndim ∉ {1, 2} is refused via RangeError (the 2-D path is admitted; a
+    // 3-D / bad ndim reroutes to the twin, never a silent misread).
+    assert!(
+        glue.contains("Array marshalling supports ndim") && glue.contains("throw new RangeError("),
+        "a bad ndim must throw a RangeError: {glue}"
+    );
+    // The fault predicate that reroutes it must be present in a twin build. Real
+    // array kernels are `has_ovf` (they carry int arithmetic), so js+wasm emits
+    // the #364 ladder; construct such an output explicitly (make_output defaults
+    // has_ovf=false, which suppresses the twin ladder).
+    let ovf_output = WasmCodegenOutput {
+        wasm: vec![0x00],
+        compiled_functions: vec!["k".to_string()],
+        rejected_functions: vec![],
+        export_info: vec![WasmExportInfo {
+            name: "k".to_string(),
+            params: vec![(
+                "a".to_string(),
+                WasmType::PtrArray {
+                    dtype: ArrayDtype::Int32,
+                    ndim: 1,
+                },
+            )],
+            return_type: None,
+        }],
+        math_imports: BTreeSet::new(),
+        needs_strings: true,
+        needs_errors: false,
+        needs_dicts: false,
+        custom_exceptions: BTreeMap::new(),
+        has_ovf: true,
+    };
+    let twin_glue = generate_bridge_js(&ovf_output, "./test.wasm", Some("export function k(a){}"));
+    assert!(
+        twin_glue.contains("e instanceof RangeError"),
+        "the #364 fault predicate must classify RangeError a fault (reroute to twin): {twin_glue}"
+    );
+    // ...and the array-mismatch RangeError is thrown INSIDE the try body the
+    // ladder wraps, so the reroute is actually reachable for an array param.
+    assert!(
+        twin_glue.contains("__array_to_wasm(a,")
+            && twin_glue.contains("if (__isWasmFault(__e)) return __jsfb.k(a);"),
+        "the array marshaller runs inside the #364 try/catch that reroutes on fault: {twin_glue}"
     );
 }

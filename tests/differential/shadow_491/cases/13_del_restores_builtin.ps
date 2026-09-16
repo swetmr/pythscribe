@@ -1,0 +1,17 @@
+# `del abs` after a shadowing def restores the BUILTIN (CPython: the module global
+# is unbound, name lookup falls through to builtins). On the WASM side the `del` is
+# a later binder of `abs`, so the def is dead-by-name (not routed) and `use` demotes.
+# DEMOTE: abs,use
+def use(x: int) -> int:
+    return abs(x)
+
+
+def abs(x: int) -> int:
+    return x * 7
+
+
+print(abs(-5))
+print(use(-5))
+del abs
+print(abs(-5))
+print(use(-5))

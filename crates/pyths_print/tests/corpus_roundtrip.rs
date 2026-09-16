@@ -10,7 +10,7 @@ fn ps_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = e.unwrap().path();
         if p.is_dir() {
             ps_files(&p, out);
-        } else if p.extension().map_or(false, |x| x == "ps") {
+        } else if p.extension().is_some_and(|x| x == "ps") {
             out.push(p);
         }
     }

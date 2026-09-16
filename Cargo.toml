@@ -19,10 +19,17 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 license-file = "LICENSE.md"
 repository = "https://github.com/swetmr/pythscribe"
+
+# Release finalization (spec 13-09-26, requirements §5.3): the release binary B_t is STRIPPED by
+# the profile so the bytes cargo emits are the bytes both channels (npm platform packages and the
+# pip wheel) ship -- no later strip/re-sign step may rewrite them (the wheel gate hashes the
+# binary against this output).
+[profile.release]
+strip = "symbols"
 
 [workspace.dependencies]
 # Lexer

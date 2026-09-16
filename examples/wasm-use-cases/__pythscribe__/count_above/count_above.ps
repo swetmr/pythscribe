@@ -1,0 +1,7 @@
+@wasm
+def count_above(xs: list[float], thr: float) -> float:
+    n = 0.0
+    for x in xs:
+        if x > thr:
+            n = n + 1.0
+    return n

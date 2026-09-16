@@ -227,7 +227,7 @@ mod tests {
     fn ecosystem_stubs_parse_cleanly() {
         for module in ["lucide_react", "zustand", "swr", "react_hook_form"] {
             let src = stub_for(module).expect("stub registered");
-            pyths_parser::parse(src).expect(&format!("{}.pyi parses", module));
+            pyths_parser::parse(src).unwrap_or_else(|_| panic!("{}.pyi parses", module));
         }
     }
 
@@ -277,7 +277,8 @@ mod tests {
     fn decimal_and_fractions_stubs_parse_cleanly() {
         for module in ["decimal", "fractions"] {
             let src = stub_for(module).expect("stub registered");
-            let parsed = pyths_parser::parse(src).expect(&format!("{}.pyi parses", module));
+            let parsed =
+                pyths_parser::parse(src).unwrap_or_else(|_| panic!("{}.pyi parses", module));
             assert!(!parsed.body.is_empty(), "{}.pyi has declarations", module);
         }
     }
@@ -315,7 +316,7 @@ mod tests {
         let dir = scratch_dir("new_module");
         std::fs::write(dir.join("my_lib.pyi"), "def greet(name: str) -> str: ...\n").unwrap();
 
-        let result = resolve_stub("my_lib", &[dir.clone()]);
+        let result = resolve_stub("my_lib", std::slice::from_ref(&dir));
         let src = result.expect("project stub found");
         assert!(src.contains("def greet"), "project stub content: {}", src);
 
@@ -331,7 +332,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = resolve_stub("react", &[dir.clone()]);
+        let result = resolve_stub("react", std::slice::from_ref(&dir));
         let src = result.expect("override stub found");
         assert!(
             src.contains("use_state_v2"),
@@ -351,7 +352,7 @@ mod tests {
     fn missing_project_stub_falls_through_to_bundled() {
         let dir = scratch_dir("falltrough");
         // dir is empty — no react.pyi in it.
-        let result = resolve_stub("react", &[dir.clone()]);
+        let result = resolve_stub("react", std::slice::from_ref(&dir));
         let src = result.expect("falls through to bundled");
         // Bundled react.pyi declares standard hooks like use_state.
         assert!(

@@ -68,6 +68,117 @@ PSX uses pure Python syntax — HTML elements are function calls. The default fo
 pyths compile counter.ps -o counter.js
 ```
 
+## Installation
+
+**One `pip install` is the whole toolchain** — the ahead-of-time compiler (`pyths`, a prebuilt native binary bundled in the wheel), the JS runtime it links against, the `@wasm` decorator with its in-process sandboxed server path, and the Gradio / Streamlit adapters. No Node, no Rust, nothing downloaded after the install; it works offline.
+
+<!-- spot -->
+```bash
+pip install pythscribe              # compiler + `pyths` CLI + runtime + adapters -- node-free, offline
+pip install "pythscribe[server]"    # + wasmtime: run @wasm kernels in-process (sandboxed, GIL-free)
+uv pip install pythscribe           # or with uv -- a faster drop-in for pip (extras work the same)
+```
+
+<!-- spot -->
+```python
+# kernels.py
+from pythscribe import wasm
+
+@wasm
+def sum_sq(xs: list[float]) -> float:
+    acc = 0.0
+    for x in xs:
+        acc = acc + x * x
+    return acc
+
+print(sum_sq([1.0, 2.0, 3.0]))
+# → 14.0
+```
+
+<!-- spot -->
+```bash
+python kernels.py         # compiles sum_sq on first call with the bundled compiler and runs it under wasmtime
+# → 14.0
+pyths build kernels.py    # or build explicitly: a verified js+wasm artifact at __pythscribe__/sum_sq/ (commit it)
+pyths doctor              # what this machine can do
+```
+
+Without the build (or without `[server]`) the function is still your function — plain Python runs, and `binding_of(sum_sq).mode` tells you which path ran. The deep reference for the pip package — the three modes, the sandbox, typed arrays, the Gradio/Streamlit adapters, the honest Numba/NumPy split — is [`pythscribe/README.md`](./pythscribe/README.md).
+
+### Demos
+
+[`demos/`](./demos/) has three self-contained `@wasm` demos (`pip install -r demos/requirements.txt`):
+
+- **`gradio_multitab_demo.ipynb`** — a Gradio multi-tab app running compiled Python **in the browser** (`js=`): a Luhn validator and a PII scan whose input **never leaves the tab** — proved live by a 🔒 network monitor that stays `0` while you type — plus a server-side image filter and a placement-ceiling slider (client-side `@wasm` vs a server round-trip).
+- **`wasm_features_demo.ipynb`** — the honest capability/timing tour: `@wasm` vs plain Python vs NumPy vs Numba per kernel (competitive with Numba on scalar loops; NumPy/Numba win the vectorizable ones), bit-for-bit correctness, a fuel-sandbox trap, and server == browser == CPython.
+- **`streamlit_slider_demo/`** — a Streamlit slider that recomputes with **zero server reruns** (`streamlit run demos/streamlit_slider_demo/app.py`) beside a native `st.slider` that reruns the whole script.
+
+### What you get depends on the machine, not on an install tier
+
+| On a machine… | `pip install pythscribe` gives you |
+|---|---|
+| **Without Node** | compile `.py`/`.ps` to **JS and WASM** (`pyths build`, `pyths compile`), **`@wasm`** kernels running in-process (wasmtime, sandboxed, GIL-free) or in the browser tab, the **Gradio** and **Streamlit** adapters. Offline, no toolchain. |
+| **With Node** (any Node on PATH — or `pip install "pythscribe[web-bundled]"` to vendor one) | additionally the `.ps` **React / Next.js frontend**: `pyths new` scaffold, **dev server + HMR**, **npm package imports**, Vite/Next plugins wired to the same compiler. |
+
+Not sure what your machine can do? `pyths doctor`.
+
+Prebuilt wheels: Linux x86_64/aarch64 (glibc 2.28+), macOS x86_64/arm64, Windows x64. On any other platform `pip install` builds from source **without** the compiler: prebuilt `__pythscribe__/` artifacts and the Python fallback still work; `pyths build`/`pyths compile` do not — `pyths doctor` will say so.
+
+Extras add *dependencies* only, never PythScribe code: `[server]` (wasmtime), `[gradio]`, `[streamlit]`, `[all]` (those three), `[web-bundled]` (a vendored Node for the frontend tooling; `[all]` deliberately does not pull it).
+
+### The `.ps` frontend (React / Next.js) — with any Node on PATH
+
+```python
+# counter.ps
+from pyths.react import component, use_state
+
+@component
+def Counter():
+    count, set_count = use_state(0)
+    return div(class_name="counter", h1(f"Count: {count}"), button(on_click=lambda: set_count(count + 1), "+1"))
+```
+
+<!-- spot: node -->
+```bash
+pyths new my-app          # scaffold a Next.js + PythScribe app -- byte-identical to `npm create pyths-app`
+cd my-app
+pyths install             # npm install via the resolved Node (system Node, or the [web-bundled] one)
+pyths dev                 # dev server + HMR; every .ps is compiled by the same bundled compiler
+```
+
+The compiler is node-free; running a React/Next dev loop is irreducibly Node, so `pyths` uses the Node your machine has (`PYTHS_NODE` → PATH → the `[web-bundled]` one) and tells you exactly what to install when none can be found.
+
+### npm — the same compiler for the JavaScript ecosystem
+
+The npm distribution is the **parallel mirror** of the wheel, not a different build: one finalized `pyths` binary per platform and one prepared `pyths-runtime` payload go into **both** channels, the release manifest records their hashes, and the release fails if any published npm package differs from the wheel's bytes (`evidence/release_manifest.json` + `R-NI.json` on every GitHub Release).
+
+<!-- spot: node -->
+```bash
+npm install pythscribe    # `pyths` (native binary) + `pyths-runtime` + the Vite and Next.js plugins
+```
+
+**That one package brings the whole chain** — the `pyths` compiler (with your platform's prebuilt native binary), the `pyths-runtime`, and **both** framework plugins (`vite-plugin-pyths` and `next-plugin-pyths`) — so a **React / Vite _or_ Next.js** project is ready to compile `.ps` files out of the box. The plugins declare `vite`/`next` as *optional* peers, so you pull in only whichever framework you actually use.
+
+```bash
+npm create pyths-app@latest my-app     # scaffold a Next.js + PythScribe app (same bytes as `pyths new`)
+cd my-app && npm install && npm run dev
+npm install -g pythscribe              # standalone scripts: `pyths run app.ps` (the runtime is built into the CLI)
+```
+
+**Prefer your own base?** Scaffold with the framework's own tool (`npm create vite@latest my-app` / `npx create-next-app@latest my-app`), then `npm install pythscribe` and wire the plugin (see `docs/getting-started-with-vite.md` / `docs/getting-started-with-next.md`).
+
+### Build from source (alternative)
+
+```bash
+git clone https://github.com/swetmr/pythscribe.git
+cd pythscribe
+cargo build --release   # binary at target/release/pyths (requires Rust 1.70+)
+```
+
+Then `npm link` the `runtime/` and `packages/*` folders into your project instead of installing from npm.
+
+**Licence of what you install.** The pip wheel is a mixed distribution — `MIT AND LicenseRef-FSL-1.1-ALv2`: the Python package, the adapters and the JS runtime that ends up in your bundle are MIT; the bundled `pyths` compiler binary is FSL-1.1-ALv2 (source-available, Apache-2.0 after two years). Every notice ships inside the wheel; the per-component map is [`LICENSING.md`](./LICENSING.md).
+
 ## Features
 
 - **Python syntax** — `def`, `class`, `if/elif/else`, `for/while`, `match/case`, list comprehensions, f-strings, decorators, generators, async/await
@@ -85,7 +196,7 @@ pyths compile counter.ps -o counter.js
 - **Fast** — Rust-native compiler; ~124,000 lines/second; sub-millisecond compile times for typical files
 - **Source maps** — `--sourcemap` for debugging in browser DevTools
 - **Optional `.psc` compression** — opt-in compressed superset for AI-emitted code, **8.9% o200k / 9.3% cl100k additional token savings** on idiomatic code, on top of PythScribe's inherent reduction; `.ps` users see zero behavior change. See [`docs/compression.md`](docs/compression.md).
-- **Tested** — **4,000+ automated checks across 12 layers**: 1,984 Rust unit/integration tests, a **1,376-entry** CPython semantic differential corpus (fully green, cross-checked on a second JS engine — 1,375/1,376 identical across V8 and JavaScriptCore), the 24 Livermore kernels × {cpython, js, wasm}, a grammar acceptor gate, tri-track clone DOM parity (React as oracle), browser pixel + DOM-bytecode parity, Node auto-routing E2E, panic-resistance fuzzing, machine-checked Lean proofs bound to the shipping compiler, and a per-compilation subscript-routing certificate. `cargo test --workspace`: **green, 0 failing**. Full per-layer counts are in the [assurance paper](https://doi.org/10.5281/zenodo.21875694).
+- **Tested** — **4,000+ automated checks across 12 layers**: 2,100 Rust unit/integration tests, a **1,376-entry** CPython semantic differential corpus (fully green, cross-checked on a second JS engine — 1,375/1,376 identical across V8 and JavaScriptCore), the 24 Livermore kernels × {cpython, js, wasm}, a grammar acceptor gate, tri-track clone DOM parity (React as oracle), browser pixel + DOM-bytecode parity, Node auto-routing E2E, panic-resistance fuzzing, machine-checked Lean proofs bound to the shipping compiler, and a per-compilation subscript-routing certificate. `cargo test --workspace`: **green, 0 failing**. Full per-layer counts are in the [assurance paper](https://doi.org/10.5281/zenodo.21875694).
 
 > **Technical summary** — see [`technical_summary.md`](./technical_summary.md) for a 10-minute snapshot of where the project stands toward production parity with React + Next.js (gaps documented). Written for engineers, contributors, and anyone evaluating the toolchain.
 
@@ -96,7 +207,7 @@ PythScribe is agent-written, and this README won't pretend otherwise. Every clai
 | Tier | What's in it | How it's enforced |
 |---|---|---|
 | **Proved** (Lean 4, `verification/`) | `.psc`→`.ps` expansion (determinism, zone-safety, alias round-trip); subscript-routing read-safety plus a per-compilation certificate checker proved *sound and complete* against a model of the emitter; slice/index in-bounds safety; truthiness; `==` as an equivalence relation; WASM scratch non-interference; identifier-naming soundness (no Python identifier ever emits a bare JS reserved word); and statement/expression **preservation waves** over selected language fragments (arithmetic, bitwise, string methods, dict methods) | `lake build` + pinned `#print axioms`, in CI |
-| **Tested** (oracle-diverse — what proof doesn't reach) | Runtime semantics vs **CPython**: a 1,376-entry differential corpus, fully green and cross-checked on a second JS engine (V8 + JavaScriptCore — 1,375/1,376 identical); 24 Livermore kernels ×{JS, WASM}; React-oracle DOM-parity tests; pixel/DOM parity; a grammar acceptor gate; 1,984 Rust tests; panic fuzzing | `cargo test --workspace` + the differential/parity CI jobs |
+| **Tested** (oracle-diverse — what proof doesn't reach) | Runtime semantics vs **CPython**: a 1,376-entry differential corpus, fully green and cross-checked on a second JS engine (V8 + JavaScriptCore — 1,375/1,376 identical); 24 Livermore kernels ×{JS, WASM}; React-oracle DOM-parity tests; pixel/DOM parity; a grammar acceptor gate; 2,100 Rust tests; panic fuzzing | `cargo test --workspace` + the differential/parity CI jobs |
 | **Trusted** (audited, not proved) | The `.ps`→JS/WASM codegen *body fragment*; the Rust byte-scanner's refinement of the proved Lean classifier; the type-inference evidence feeding routing certificates; the runtime JS; and the toolchain (rustc, the Lean kernel, Node, CPython-as-oracle) | Audited + differentially bound — the honest floor |
 
 The value here is **oracle diversity and honest scope accounting**, not a claim of end-to-end proof. Proof covers selected fragments; everything else is held by the CPython differential and parity oracles; the rest is trusted and named as such.
@@ -139,61 +250,6 @@ In the framing of Amarasinghe's PLDI'26 keynote, `.psc` is a **LOIR** (a compres
 **Generation tokens** (does an LLM emit fewer tokens writing `.psc`?): zero-shot, at component scale, the `.psc` condition produces lower paired code-block token counts than `.ps` on **69 of 72** model–task pairs across **eight models from three vendors** (per-model median **7–25%**; pooled **20.1%**, 95% CI 14.9–25.2%). A decomposition attributes **3–5 percentage points** directly to the compressed representation; the remainder reflects prompt-associated structural economy.
 
 Full study, methodology, and reproducibility artifact — *"A Compressed Model-Facing Source Layer with Partially Verified Expansion"*: **https://doi.org/10.5281/zenodo.21386779**. The five-requirement LOIR analysis is in [`docs/loir.md`](docs/loir.md); the tier reference is [`docs/compression.md`](docs/compression.md).
-
-## Installation
-
-Everything installs from npm — no Rust toolchain required (installs `@latest` by default; all packages share one version).
-
-### Add PythScribe to a project
-
-```bash
-npm install pythscribe
-```
-
-**That one package brings the whole chain** — the `pyths` compiler (with your platform's prebuilt native binary), the `pyths-runtime`, and **both** framework plugins (`vite-plugin-pyths` and `next-plugin-pyths`) — so a **React / Vite _or_ Next.js** project is ready to compile `.ps` files out of the box. The plugins declare `vite`/`next` as *optional* peers, so you pull in only whichever framework you actually use — no extra install, no peer warnings.
-
-```bash
-pyths --version
-```
-
-### Scaffold a new app (fastest)
-
-```bash
-npm create pyths-app@latest my-app
-cd my-app && npm install && npm run dev
-```
-
-This scaffolds a ready-to-run **Next.js** + PythScribe app — compiler, runtime, and plugin already wired up.
-
-**Prefer your own base?** Scaffold with the framework's own tool, then add PythScribe and wire its plugin:
-
-```bash
-# React + Vite  (see docs/getting-started-with-vite.md)
-npm create vite@latest my-app
-cd my-app && npm install pythscribe
-
-# Next.js  (see docs/getting-started-with-next.md)
-npx create-next-app@latest my-app
-cd my-app && npm install pythscribe
-```
-
-### Standalone scripts
-
-`pyths run app.ps` needs only the compiler — the runtime is built into the CLI, which pulls the right binary for your platform (Linux, macOS, Windows — x64 and arm64) as an optional dependency:
-
-```bash
-npm install -g pythscribe
-```
-
-### Build from source (alternative)
-
-```bash
-git clone https://github.com/swetmr/pythscribe.git
-cd pythscribe
-cargo build --release   # binary at target/release/pyths (requires Rust 1.70+)
-```
-
-Then `npm link` the `runtime/` and `packages/*` folders into your project instead of installing from npm.
 
 ## Quick Start
 
@@ -477,7 +533,7 @@ pyths/
 ## Development
 
 ```bash
-# Rust workspace — compiler, parser, type checker, WASM codegen, CLI (1,984 tests)
+# Rust workspace — compiler, parser, type checker, WASM codegen, CLI (2,100 tests)
 cargo test --workspace
 
 # Specific crate
@@ -521,7 +577,7 @@ cargo bench -p pyths_codegen_js
 cargo build --release
 ```
 
-Total: **4,000+ automated checks across 12 layers** (1,984 cargo + 1,376 differential + 24 Livermore ×3 + clone-parity + pixel/DOM parity + acceptor corpus + Lean proofs + certificate corpus). CI runs them on every push (`.github/workflows/ci.yml`), including the Lean `verification` job and the tri-track `clones` job; the panic-resistance fuzz harness lives in `crates/pyths_cli/tests/fuzz_inputs.rs`. A separate weekly fuzz cron (`.github/workflows/fuzz.yml`) runs coverage-guided `cargo-fuzz` targets from `fuzz/`.
+Total: **4,000+ automated checks across 12 layers** (2,100 cargo + 1,376 differential + 24 Livermore ×3 + clone-parity + pixel/DOM parity + acceptor corpus + Lean proofs + certificate corpus). CI runs them on every push (`.github/workflows/ci.yml`), including the Lean `verification` job and the tri-track `clones` job; the panic-resistance fuzz harness lives in `crates/pyths_cli/tests/fuzz_inputs.rs`. A separate weekly fuzz cron (`.github/workflows/fuzz.yml`) runs coverage-guided `cargo-fuzz` targets from `fuzz/`.
 
 The full assurance study behind these layers — oracle-diverse testing, per-compilation routing certificates, machine-checked Lean verification, and explicit trust accounting — is written up in *"Layered Assurance for an Agent-Written Python-to-JavaScript/WebAssembly Compiler"*: **https://doi.org/10.5281/zenodo.21875694**.
 
@@ -531,7 +587,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, 
 
 ## License
 
-PythScribe is **source-available** under the **Functional Source License, Version 1.1 (Apache-2.0 Future License)** — `FSL-1.1-ALv2`. See [`LICENSE.md`](./LICENSE.md) for the full text.
+The **compiler** (this repository's `crates/`, the `pyths` CLI and npm plugins) is **source-available** under the **Functional Source License, Version 1.1 (Apache-2.0 Future License)** — `FSL-1.1-ALv2`. See [`LICENSE.md`](./LICENSE.md) for the full text. The parts that ship *inside your app* — the JS runtime (`runtime/`, `pyths-runtime`) and the pip runtime (`pythscribe/`) — are **MIT**; the per-component map is [`LICENSING.md`](./LICENSING.md).
 
 - ✅ **You may** use, copy, modify, self-host, and redistribute PythScribe for almost any purpose — including commercial use, internal tooling, production deployments, research, and building your own products on top of it.
 - 🚫 **You may not** put it to a **Competing Use** — i.e. make PythScribe (or a substantially similar substitute built from it) available to others as a commercial product or service that competes with PythScribe.

@@ -1,0 +1,129 @@
+{
+  "records": {
+    "determinism": {
+      "cpython_digest": "ffe2af0218263324216b0c3e250383a92a0c65155168dc9d7ae854d08636dd36",
+      "digests": [
+        "ffe2af0218263324216b0c3e250383a92a0c65155168dc9d7ae854d08636dd36",
+        "ffe2af0218263324216b0c3e250383a92a0c65155168dc9d7ae854d08636dd36",
+        "ffe2af0218263324216b0c3e250383a92a0c65155168dc9d7ae854d08636dd36"
+      ],
+      "equal_cpython": true,
+      "equal_node_v8": true,
+      "host_imports": [],
+      "identical_across_runs": true,
+      "kind": "determinism",
+      "n_states": 6,
+      "n_steps": 400,
+      "node_v8_digest": "ffe2af0218263324216b0c3e250383a92a0c65155168dc9d7ae854d08636dd36",
+      "runs": 3,
+      "seed": 0,
+      "wasm_sha256": "8f3a7957843da5ec988ea43027d8251c1121e0b079f38968c263c4bab1c82a25"
+    },
+    "isomorphic": {
+      "a": [
+        0.0,
+        1.5,
+        2.25,
+        3.0,
+        2.5,
+        1.0,
+        -0.5,
+        0.1
+      ],
+      "b": [
+        0.0,
+        0.2,
+        1.0,
+        2.0,
+        3.1,
+        3.0,
+        2.0,
+        1.0,
+        0.0,
+        -0.1
+      ],
+      "browser_bits": "0000000000000240",
+      "console_errors": [],
+      "cpython_bits": "0000000000000240",
+      "identical": true,
+      "kind": "isomorphic",
+      "mode": "server",
+      "path": "browser-wasm",
+      "python_calls": 0,
+      "server_bits": "0000000000000240",
+      "server_calls": 0,
+      "status": "done (browser-wasm)",
+      "wasm_fetched": true
+    },
+    "sandbox": {
+      "contained": true,
+      "fuel": 20000000,
+      "fuel_trap": {
+        "elapsed_s": 0.001905999961309135,
+        "error": "spin: fuel budget of 20000000 exhausted (execution bounded by the sandbox)",
+        "finite_call_fuel_used": 9,
+        "red_control": {
+          "outcome": "interrupted by epoch after 0.30s (INTERRUPT)",
+          "ran_for_s": 0.300406499998644,
+          "still_running_at_kill": true
+        },
+        "trapped": true
+      },
+      "io_attempt": {
+        "error": "io_attempt: import `wasi_snapshot_preview1.path_open` refused -- the sandbox grants no capability beyond the pure `math.*` functions (acos, asin, atan, atan2, ceil, cos, exp, fabs, floor, log, log10, log2, pow, sin, sqrt, tan); no filesystem, network, clock or environment is reachable from a kernel",
+        "red_control": {
+          "content": "pwned\n",
+          "wrote_file_under_wasi_linker": true
+        },
+        "refused": true
+      },
+      "kind": "sandbox",
+      "open_in_kernel": {
+        "artifact_exists": false,
+        "error": "pyths compile failed for `leak`:",
+        "refused_at_build": true
+      },
+      "snippet": {
+        "cpython_value": 342583,
+        "equal": true,
+        "fuel_used": 2250075,
+        "host_imports": [],
+        "value": 342583,
+        "wasm_bytes": 766
+      },
+      "workdir": "C:\\Users\\DELL\\pythscribe\\examples\\wasm-use-cases\\_sandbox_work"
+    },
+    "speedup": {
+      "all_equal": true,
+      "baseline": "interpreted CPython (the same function's Python body) -- NOT NumPy/Numba",
+      "cpython_s": 0.16290329990442842,
+      "cpython_value": 604,
+      "host_imports": [],
+      "kind": "speedup",
+      "n": 800,
+      "ratio": 13.107553793096827,
+      "reference": 604,
+      "repeats": 3,
+      "seed": 0,
+      "wasm_bytes": 1861,
+      "wasm_s": 0.012428199988789856,
+      "wasm_value": 604
+    },
+    "viterbi": {
+      "cpython_s": 0.02842739992775023,
+      "n_states": 12,
+      "n_steps": 1500,
+      "ratio": 1.9775995239562747,
+      "same_path": true,
+      "same_score_bits": true,
+      "wasm_s": 0.01437470002565533
+    }
+  },
+  "summary": {
+    "determinism_three_engines": true,
+    "isomorphic_identical": true,
+    "sandbox_contained": true,
+    "speedup_ratio": 13.107553793096827,
+    "viterbi_ratio": 1.9775995239562747
+  }
+}

@@ -1,0 +1,39 @@
+# #491 B1 class closure: `except E as N` with `global N` writes the MODULE binding for the
+# handler's duration (a module-level reader sees the exception) and CPython UNBINDS the
+# alias on handler exit (`try: ... finally: N = None; del N`) -- for a builtin-named alias
+# that restores the builtin, so `peek` (demoted: the cell is rebound) calls the builtin
+# again afterwards. Before the fix: a fresh catch-block `let N = __exc` -- the reader saw
+# the stale module value (`int`) during the handler (silent).
+# DEMOTE: peek
+def peek() -> int:
+    return abs(-3)
+
+
+e = 0
+
+
+def reader():
+    return type(e).__name__
+
+
+def f():
+    global e
+    try:
+        raise ValueError("boom")
+    except ValueError as e:
+        print(reader())
+    return "done"
+
+
+def g():
+    global abs
+    try:
+        raise ValueError("boom")
+    except ValueError as abs:
+        print(type(abs).__name__)
+    return peek()
+
+
+print(f())
+print(g())
+print(peek())
