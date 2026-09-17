@@ -1208,8 +1208,17 @@ jobs:
       - name: doctor in the NODE-ABSENT state (Node scrubbed from PATH; no [web-bundled])
         run: |
           . .venvB/bin/activate
-          NODE_DIR="$(dirname "$(command -v node)")"
-          SCRUBBED="$(echo "$PATH" | tr ':' '\n' | grep -v "^$NODE_DIR$" | paste -sd:)"
+          # Drop EVERY PATH dir that holds a `node` executable, not just the first `command -v node`
+          # dir: the runner carries node in more than one place (setup-node's toolcache AND the base
+          # image's /usr/local/bin), so removing a single dir leaves node reachable and doctor still
+          # reports it present -- the node-absent proof must actually make node absent.
+          SCRUBBED="$(echo "$PATH" | tr ':' '\n' | while IFS= read -r d; do
+            if [ -n "$d" ] && [ ! -e "$d/node" ]; then printf '%s\n' "$d"; fi
+          done | paste -sd:)"
+          command -v node >/dev/null 2>&1 && ORIG_HAS_NODE=1 || ORIG_HAS_NODE=0
+          [ "$ORIG_HAS_NODE" = 1 ] || { echo "precondition: node must be present before scrubbing"; exit 1; }
+          PATH="$SCRUBBED" command -v node >/dev/null 2>&1 \
+            && { echo "scrub failed: node still on PATH ($(PATH="$SCRUBBED" command -v node))"; exit 1; }
           PATH="$SCRUBBED" pyths doctor | tee /tmp/doc.txt
           grep -E '^Node: absent' /tmp/doc.txt
           if PATH="$SCRUBBED" pyths doctor --strict --require node ; then
