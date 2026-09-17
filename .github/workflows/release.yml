@@ -711,6 +711,14 @@ jobs:
     needs: manifest
     if: startsWith(github.ref, 'refs/tags/')   # GitHub Release only on a tag push, not workflow_dispatch
     runs-on: ubuntu-latest
+    # Attaching the loose per-target binaries to the GitHub Release is a human-download CONVENIENCE only:
+    # the real distribution is npm (byte-identity gated) + PyPI (evidence gated), the Release itself is
+    # created by the `manifest` job, and every evidence record is attached by its own `gh release upload`
+    # step -- nothing downstream reads these binary assets. So this job must NEVER fail the run (which would
+    # block the promotion's whole-run-success check). Advisory, like node-free-acceptance. (2026-09-18)
+    continue-on-error: true
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -721,10 +729,16 @@ jobs:
           path: artifacts
 
       - name: Attach the binaries to the Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          files: artifacts/**/*
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # softprops/action-gh-release targets Node 20 and fails on the forced Node 24 runtime with
+          # "Error creating asset temp dir". Use the SAME gh CLI the manifest/evidence steps use (the
+          # Release already exists); the per-target binaries are uniquely named so there is no asset
+          # collision. `--clobber` makes a re-run idempotent.
+          mapfile -t bins < <(find artifacts -type f)
+          [ ${#bins[@]} -gt 0 ] || { echo "no binaries under artifacts/ to attach"; exit 0; }
+          gh release upload "${GITHUB_REF_NAME}" "${bins[@]}" --clobber
 
   npm-publish:
     name: Publish to npm
