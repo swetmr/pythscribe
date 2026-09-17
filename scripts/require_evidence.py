@@ -342,8 +342,14 @@ def check_manifest_shape(m: dict) -> list[str]:
     return p
 
 
-def verify_manifest_binding(manifest: dict, role: str, *, env: dict[str, str], api: ActionsAPI) -> list[str]:
-    """RED lines (empty == GREEN). `role` is the trusted step literal; it is validated, never inferred."""
+def verify_manifest_binding(manifest: dict, role: str, *, env: dict[str, str], api: ActionsAPI, producer: bool = False) -> list[str]:
+    """RED lines (empty == GREEN). `role` is the trusted step literal; it is validated, never inferred.
+
+    `producer` (release-run only): the caller IS the `manifest` job, running this self-check WHILE it is
+    still in-progress. The `manifest` job cannot require its OWN conclusion to be `success` yet, so it is
+    excluded from the prerequisite-jobs check (the run's build prereqs -- prepare + the 5 Build legs --
+    are still verified, as is run identity). Same-run CONSUMERS (acceptance / npm-publish / npm-identity)
+    call WITHOUT producer, so they still require `manifest` to have succeeded."""
     if role not in ROLES:
         return [f"unknown role {role!r} (expected one of {ROLES})"]
     p = check_manifest_shape(manifest)
@@ -370,7 +376,10 @@ def verify_manifest_binding(manifest: dict, role: str, *, env: dict[str, str], a
             return p  # identity failed: do not consult the API for a foreign run
         jobs = api.list_jobs(run_id)
         latest = latest_executions(jobs, max_attempt=cur_attempt)
-        for name in sorted(required_prereq_jobs(manifest)):
+        req = required_prereq_jobs(manifest)
+        if producer:
+            req = req - {MANIFEST_JOB}  # the manifest job runs this while in-progress; it cannot require itself
+        for name in sorted(req):
             j = latest.get(name)
             if j is None:
                 p.append(f"required prerequisite job `{name}` has no execution in run {run_id} (attempt <= {cur_attempt})")
@@ -650,6 +659,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--need", nargs="*", default=[], choices=RECORDS, help="evidence records required (promotion role)")
     ap.add_argument("--evidence-dir", default="evidence")
     ap.add_argument("--tag", default=None, help="promotion: the dispatched tag ref; manifest.tag must equal it")
+    ap.add_argument("--producer", action="store_true",
+                    help="release-run: the caller IS the manifest job (self-check while in-progress); excludes the "
+                         "`manifest` job from the prerequisite-jobs check. Same-run consumers omit this.")
     return ap
 
 
@@ -662,7 +674,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"require_evidence: RED -- cannot read manifest {ns.manifest}: {e}", file=sys.stderr)
         return 1
     api = api_from_env(env)
-    problems = verify_manifest_binding(manifest, ns.role, env=env, api=api)
+    if ns.producer and ns.role != "release-run":
+        print("require_evidence: RED -- --producer is a release-run option (the manifest-job self-check)", file=sys.stderr)
+        return 1
+    problems = verify_manifest_binding(manifest, ns.role, env=env, api=api, producer=ns.producer)
     if ns.tag is not None and manifest.get("tag") != ns.tag:
         problems.append(f"manifest.tag {manifest.get('tag')!r} != dispatched tag {ns.tag!r}")
     if ns.role == "promotion" and not problems:

@@ -245,6 +245,12 @@ jobs:
         run: pipx run cibuildwheel==4.2.1 --output-dir wheelhouse
         env:
           CIBW_BUILD: cp312-*
+          # We ship ONE glibc/manylinux_2_28 wheel per arch (the bundled Rust binary is `-gnu`). `cp312-*`
+          # also matches cp312-musllinux, so without this skip cibuildwheel ALSO builds a musllinux leg;
+          # the repair hook stamps it manylinux_2_28 (PYTHSCRIBE_WHEEL_PLATFORM) and cibuildwheel's own
+          # test then `pip install`s a manylinux wheel inside the musl container -> "not a supported wheel
+          # on this platform". We do not target musl -> skip it. (macOS/Windows legs are unaffected.)
+          CIBW_SKIP: "*-musllinux*"
           CIBW_ARCHS: ${{ matrix.archs }}
           CIBW_BUILD_FRONTEND: build
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
@@ -372,7 +378,10 @@ jobs:
           TAG_ARG=""
           case "${GITHUB_REF}" in refs/tags/*) TAG_ARG="--tag ${GITHUB_REF_NAME}" ;; esac
           python scripts/assemble_manifest.py --dist dist --binaries artifacts --out release_manifest.json $TAG_ARG
-          python scripts/require_evidence.py --role release-run --manifest release_manifest.json
+          # --producer: this IS the manifest job, self-checking while in-progress -- it verifies run identity
+          # + the build prerequisites but MUST NOT require its own `manifest` conclusion to be success yet
+          # (that self-reference always failed). Same-run consumers below call WITHOUT --producer.
+          python scripts/require_evidence.py --role release-run --producer --manifest release_manifest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload the release manifest
@@ -417,7 +426,11 @@ jobs:
             topology: container
             platform: linux/arm64
           - target: x86_64-apple-darwin
-            os: macos-13
+            # macos-15-intel, NOT macos-13: the macos-13 runner image was retired (~Dec 2025), so that
+            # label no longer resolves. This leg RUNS the x86_64 wheel natively, so it needs a real Intel
+            # host -- macos-latest/14/15 are arm64. macos-15-intel is GitHub's native-Intel label (available
+            # through Aug 2027). (The wheel/build jobs stay on macos-latest: they only cross-package.)
+            os: macos-15-intel
             tag: macosx_11_0_x86_64
             topology: native
             platform: ''

@@ -135,6 +135,28 @@ def test_e0_in_progress_parent_run_release_run_passes_promotion_refuses():
     assert any("!= completed" in x for x in probs), probs
 
 
+def test_e0_manifest_producer_self_check_excludes_itself_not_the_builds():
+    """The `manifest` job runs `require_evidence --producer` WHILE it is in-progress. It must PASS the
+    build prerequisites without requiring its OWN `manifest` conclusion (the self-reference that made the
+    manifest job always fail -- it never got past assembling), yet the exclusion must be surgical: a
+    FAILED build leg is still RED under --producer, and a CONSUMER (no --producer) that sees `manifest`
+    still in-progress is still RED."""
+    m = make_manifest()
+    inprog = {"manifest": None}  # the manifest job's own execution, mid-run (conclusion not yet set)
+    # producer + manifest in-progress + builds ok -> PASS (unblocks the manifest job)
+    api = StubAPI(jobs={1001: prereq_jobs(conclusion=inprog)}, forbid_run=True)
+    assert re_.verify_manifest_binding(m, "release-run", env=env_run(), api=api, producer=True) == []
+    # CONTROL 1 -- producer excludes ONLY `manifest`: a failed BUILD leg still goes RED
+    bad = {"manifest": None, "Build x86_64-unknown-linux-gnu": "failure"}
+    api = StubAPI(jobs={1001: prereq_jobs(conclusion=bad)}, forbid_run=True)
+    probs = re_.verify_manifest_binding(m, "release-run", env=env_run(), api=api, producer=True)
+    assert any("Build x86_64-unknown-linux-gnu" in x and "not success" in x for x in probs), probs
+    # CONTROL 2 -- a CONSUMER (no --producer) that sees manifest in-progress is still RED
+    api = StubAPI(jobs={1001: prereq_jobs(conclusion=inprog)}, forbid_run=True)
+    probs = re_.verify_manifest_binding(m, "release-run", env=env_run(), api=api, producer=False)
+    assert any("`manifest`" in x and "not success" in x for x in probs), probs
+
+
 def test_e0_mutant_release_run_that_checks_whole_run_conclusion_is_red(monkeypatch):
     """The mutant: same-run consumer consults the run's conclusion -> deadlocks/refuses on the in-progress fixture."""
     m = make_manifest()

@@ -154,7 +154,9 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
-            os: macos-13
+            # macos-15-intel, NOT the retired macos-13: this leg installs + RUNS the x86_64 wheel from
+            # TestPyPI, so it needs a native Intel host (macos-latest is arm64). See release.yml.
+            os: macos-15-intel
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-pc-windows-msvc
