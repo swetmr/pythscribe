@@ -16,10 +16,12 @@ RUN (the acceptance job; needs the wheel installed in --python's environment, or
   * every fenced block under "## Installation" / "## Quick Start" preceded by `<!-- spot -->` is executed in a
     fresh workspace OUTSIDE the checkout, node-free PATH: `pip install pythscribe[...]` lines are bound to the
     SHIPPED wheel (`"<wheel>[...]"` -- the wheel path from --wheel or the installed distribution's direct_url.json;
-    no wheel => RED, a SPOT must bind to shipped bytes), `pyths ...` runs the installed console script, `python
-    ...` the target interpreter; `# → line` comments assert stdout; a python block needs a `# <name>.py` header
-    and is run as that file. Blocks marked `<!-- spot: node -->` need Node and run ONLY with --node (M7's
-    web-parity job); the node-free run reports them as deferred, never as passed.
+    no wheel => RED, a SPOT must bind to shipped bytes), `uv pip install pythscribe[...]` lines are bound the SAME
+    way and run with the REAL `uv` (`--python <target>`) when one is on the host's PATH, else deferred (never
+    passed via pip), `pyths ...` runs the installed console script, `python ...` the target interpreter; `# → line`
+    comments assert stdout; a python block needs a `# <name>.py` header and is run as that file. Blocks marked
+    `<!-- spot: node -->` need Node and run ONLY with --node (M7's web-parity job); the node-free run reports
+    them as deferred, never as passed.
 Exit 0 GREEN / 1 RED (every failing claim printed).
 """
 from __future__ import annotations
@@ -328,16 +330,29 @@ def run_spots(blocks: list[Block], *, python: Path, wheel: Path | None, node: bo
             for part in [c.strip() for c in cmd.split("&&")]:
                 words = part.split()
                 w0 = words[0]
-                if w0 == "pip" and words[1:2] == ["install"]:
+                is_pip = w0 == "pip" and words[1:2] == ["install"]
+                is_uv = w0 == "uv" and words[1:3] == ["pip", "install"]  # the README's `uv pip install` drop-in line
+                if is_pip or is_uv:
                     if wheel is None:
                         rep.problems.append(f"{where}: `{part}` cannot be bound to the shipped wheel (no --wheel and no direct_url.json for the installed pythscribe)")
                         continue
-                    bound, extras = _bind_pip(words[2:], wheel)
+                    # ONE binding + extras refusal for both installers (the E-K control holds on the uv arm too)
+                    bound, extras = _bind_pip(words[3:] if is_uv else words[2:], wheel)
                     undeclared = sorted(extras - declared)
                     if undeclared:
                         rep.problems.append(f"{where}: `{part}` names extra(s) {undeclared} the shipped wheel does not declare ({sorted(declared)}); pip would only warn -- refused")
                         continue
-                    run([str(python), "-m", "pip", "install", *bound, *pip_args], where, expected)
+                    if is_uv:
+                        # Run the REAL uv (a Python-ecosystem tool, resolved from the caller's PATH -- the
+                        # node-free PATH only excludes Node) into the SAME target interpreter. Never silently
+                        # substitute pip: a host without uv DEFERS the line (like node blocks), never passes it.
+                        uv = shutil.which("uv")
+                        if not uv:
+                            rep.deferred.append(f"{where}: `{part}` -- uv is not installed on this host; deferred, not counted as passed")
+                            continue
+                        run([uv, "pip", "install", "--python", str(python), *bound, *pip_args], where, expected)
+                    else:
+                        run([str(python), "-m", "pip", "install", *bound, *pip_args], where, expected)
                 elif w0 == "pyths":
                     exe = shutil.which("pyths", path=str(scripts))
                     if not exe:
@@ -352,7 +367,7 @@ def run_spots(blocks: list[Block], *, python: Path, wheel: Path | None, node: bo
                 elif w0 in ("npm", "npx", "node") and node:
                     run([shutil.which(w0) or w0, *words[1:]], where, expected)
                 else:
-                    rep.problems.append(f"{where}: `{part}` is not a runnable spot command (pip install / pyths / python; npm/node only with --node)")
+                    rep.problems.append(f"{where}: `{part}` is not a runnable spot command (pip install / uv pip install / pyths / python; npm/node only with --node)")
     shutil.rmtree(ws, ignore_errors=True)
     return rep
 

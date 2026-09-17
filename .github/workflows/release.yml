@@ -330,7 +330,7 @@ jobs:
           except BuildError as e:
               assert 'no prebuilt compiler for this platform / source install' in str(e), e"
           if /tmp/src-venv/bin/pyths --version; then echo "::error::the launcher must fail without a compiler"; exit 1; fi
-          /tmp/src-venv/bin/pyths doctor | grep -F "Compiler: not bundled (source install"
+          /tmp/src-venv/bin/pyths doctor | grep -F "Compiler: not bundled -- source install / no wheel for this platform; fix:"
       - name: Upload the distribution set
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

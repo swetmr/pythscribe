@@ -22,6 +22,13 @@ E2E MUTANTS (every control below is paired): a MUTATED copy of the vendored comp
 through a test-authored witness app that points `pythscribe.streamlit._COMPONENT_DIR` at the copy
 (a test-side override; no production hook) -- so each RED is observed against the real transport,
 not a model of it.
+
+KERNEL OWNERSHIP: the witness app compiles its OWN test-authored kernels (`_WITNESS_KERNELS`,
+built per test with `pythscribe.build.build_module`), so the suite is decoupled from the demo's
+`kernels.py`, which is a product artifact that evolves (2026-09-16: it became a single 10M-iteration
+kernel and dropped `response_alt`, which silently broke every witness flow). The tests that drive the
+REAL demo app (`examples/streamlit-callback/`) compare against the demo's own plain-Python twin
+`response_py` -- imported from the demo file, never mirrored by hand, so the oracle cannot drift.
 """
 from __future__ import annotations
 
@@ -33,22 +40,32 @@ from pathlib import Path
 import pytest
 
 from _streamlit_harness import REPO, StreamlitApp
-from conftest import gate_import
+from conftest import gate_import, import_module_from
 
 CALLBACK_DIR = REPO / "examples" / "streamlit-callback"
 COMPONENT_DIR = REPO / "pythscribe" / "streamlit" / "wasm_component"
 
 
 def oracle(x: float) -> float:
-    """The CPython reference for `kernels.response` -- exact float arithmetic, mirroring
-    `examples/streamlit-callback/kernels.py::response`. Computed per-x (never a hand-typed
-    constant); fed the SAME x the kernel consumed (decoded from `data-x-bits`, S-5)."""
+    """The CPython reference for the WITNESS app's `response` -- exact float arithmetic, mirroring
+    `_WITNESS_KERNELS::response` (test-owned; both live in this file). Computed per-x (never a
+    hand-typed constant); fed the SAME x the kernel consumed (decoded from `data-x-bits`, S-5)."""
     return (x * x) * 0.1 - x + 3.0
 
 
 def oracle_alt(x: float) -> float:
-    """CPython reference for `kernels.response_alt` (differs from `response` at every x)."""
+    """CPython reference for the witness `response_alt` (differs from `response` at every x)."""
     return (x * x) * 0.1 - x + 3.0 + 1.0
+
+
+@pytest.fixture(scope="module")
+def demo_oracle():
+    """The CPython reference for the REAL demo's `@wasm` kernel: the demo's OWN plain-Python twin
+    `response_py` ("SAME math as `response`"), imported from `examples/streamlit-callback/kernels.py`
+    itself (unique module name; never a hand-typed mirror, so a demo edit cannot leave a stale oracle
+    behind). ~1 s per call in CPython (10M iterations) -- used only by the real-demo drag sequence."""
+    m = import_module_from(CALLBACK_DIR / "kernels.py", "kernels_streamlit_callback_for_tests")
+    return m.response_py
 
 
 def bits_of(x: float) -> str:
@@ -170,6 +187,17 @@ def _select_kernel(page, name: str):
     page.get_by_role("option", name=name, exact=True).click()
 
 
+def _nudge_native_slider(page):
+    """Move the NATIVE `st.slider` one step right. Streamlit >= 1.64 renders the slider with
+    react-aria: the `role=slider` element is a VISUALLY-HIDDEN `<input type=range>` (1x1 px,
+    clipped) under a styled track, so a pointer `click()` on it never lands (Playwright retries the
+    hit-target check forever). Keyboard focus reaches it regardless of the DOM generation (the old
+    BaseWeb `div[role=slider]` thumb is focusable too), and ArrowRight is the slider's own step."""
+    slider = page.get_by_role("slider").first  # only the native slider is in the main document
+    slider.focus()
+    page.keyboard.press("ArrowRight")
+
+
 def _pick_mode(page, name: str):
     """Click a `mode` st.radio option of the witness app."""
     page.locator('[data-testid="stRadio"]').get_by_text(name, exact=True).click()
@@ -199,12 +227,30 @@ def _assert_drag_sequence(frame, page, xs=(1.0, 3.5, 7.2, 9.9, 0.3), ref=oracle)
 
 # ---- the witness app + component mutants -----------------------------------------------------
 
+_WITNESS_KERNELS = '''\
+"""Test-owned kernels for the witness app (built per test by `build_module`; the CPython oracles
+`oracle` / `oracle_alt` in test_streamlit_callback_e2e.py mirror these bodies exactly)."""
+from pythscribe import wasm
+
+
+@wasm
+def response(x: float) -> float:
+    return (x * x) * 0.1 - x + 3.0
+
+
+@wasm
+def response_alt(x: float) -> float:
+    # differs from `response` at every x (B3-r: a kernel swap must never leave A's value under B)
+    return (x * x) * 0.1 - x + 3.0 + 1.0
+'''
+
 _WITNESS_APP = '''\
 """Test-authored WITNESS app (v0.2.5 codex fix round) = the M0 demo + a `mode` radio that switches
 the SAME keyed iframe between the callback and preprocessing kinds (SF-4) + an env-selected corrupt
 "broken" kernel whose load is parked on the release barrier (B2) + an env-selected component dir
-(the E2E mutants serve a MUTATED copy of the vendored component). Kernels + artifacts + the rerun
-counter are imported from the real example dir."""
+(the E2E mutants serve a MUTATED copy of the vendored component). The kernels + artifacts are
+TEST-OWNED (`witness_kernels.py`, built beside this app); only the rerun counter is imported from
+the real example dir."""
 import os
 import sys
 from pathlib import Path
@@ -212,8 +258,9 @@ from pathlib import Path
 import streamlit as st
 
 sys.path.insert(0, os.environ["PYTHSCRIBE_TEST_ORIG_DIR"])
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import counter  # noqa: E402
-from kernels import response, response_alt  # noqa: E402
+from witness_kernels import response, response_alt  # noqa: E402
 
 import pythscribe.streamlit as S  # noqa: E402
 from pythscribe.streamlit import (  # noqa: E402
@@ -315,9 +362,18 @@ def _mutant_component(tmp_path: Path, mutation: tuple[str, str] | None) -> Path:
 
 def _witness_app(tmp_path: Path, *, mutation=None, hold: bool = False, corrupt: bool = False):
     """(app_dir, env) for a StreamlitApp running the witness app."""
+    from pythscribe.build import build_module
+
     app_dir = tmp_path / "witness"
     app_dir.mkdir()
     (app_dir / "app.py").write_text(_WITNESS_APP, encoding="utf-8")
+    kernels_py = app_dir / "witness_kernels.py"
+    kernels_py.write_text(_WITNESS_KERNELS, encoding="utf-8")
+    # the explicit build step (the documented path): lays `__pythscribe__/` beside the module so the
+    # app's `client_callback` / `dispatch` bind the artifacts at import; a missing compiler raises
+    # here (loud), never a silent Python fallback inside the app.
+    built = {a.function for a in build_module(kernels_py, quiet=True)}
+    assert built == {"response", "response_alt"}, built
     env = {"PYTHSCRIBE_TEST_ORIG_DIR": str(CALLBACK_DIR)}
     if mutation is not None or corrupt:
         env["PYTHSCRIBE_TEST_COMPONENT_DIR"] = str(_mutant_component(tmp_path, mutation))
@@ -332,7 +388,7 @@ def _witness_app(tmp_path: Path, *, mutation=None, hold: bool = False, corrupt: 
 
 # ---- M0 GO: the in-iframe slider recomputes in-tab with ZERO server rerun -------------------
 
-def test_m0_go_zero_rerun_and_value_equals_cpython(browser):
+def test_m0_go_zero_rerun_and_value_equals_cpython(browser, demo_oracle):
     with StreamlitApp(CALLBACK_DIR) as app:
         ctx = browser.new_context()
         page = ctx.new_page()
@@ -352,7 +408,8 @@ def test_m0_go_zero_rerun_and_value_equals_cpython(browser):
         frames_before = rr["n"]
 
         # N synthetic drags -> each recomputes IN-TAB on the ACTUAL slider value; == CPython bit-exact
-        _assert_drag_sequence(frame, page)
+        # (the demo's OWN plain-Python twin of its @wasm kernel is the reference, see `demo_oracle`)
+        _assert_drag_sequence(frame, page, ref=demo_oracle)
 
         page.wait_for_timeout(400)  # settle: any (nonexistent) rerun would have landed
         count_after = _read_count(page)
@@ -362,6 +419,28 @@ def test_m0_go_zero_rerun_and_value_equals_cpython(browser):
     # THE MARKER TRIPLE across the whole drag sequence:
     assert count_after - count_before == 0, f"server reruns fired on a drag: {count_before}->{count_after}"
     assert frames_after - frames_before == 0, f"rerun_script frames fired on a drag: delta {frames_after - frames_before}"
+    assert errors == [], f"page errors during drag: {errors}"
+
+
+def test_witness_positive_drag_sequence_recomputes(browser, tmp_path):
+    """The WITNESS-app baseline for the B1 control (codex review, anti-vacuity): the UNMUTATED
+    witness app (mutation=None, the witness kernels + their own CPython oracle `oracle`) passes the
+    full `_assert_drag_sequence`, so `test_b1_mutant_no_recompute_on_input_goes_red` is exactly ONE
+    mutation (MUT_B1_NO_RECOMPUTE_ON_INPUT) away from a PASSING positive on the SAME app. Without
+    this, a witness app that failed to recompute for any unrelated reason would still turn the B1
+    mutant "red for the wrong reason" inside its `pytest.raises`."""
+    app_dir, env = _witness_app(tmp_path)
+    with StreamlitApp(app_dir, env=env) as app:
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(app.url, wait_until="load")
+        frame = _wait_cb_ready(page)
+        assert frame.get_attribute("#cb-result", "data-path") == "browser-wasm"
+        assert frame.get_attribute("#cb-result", "data-wasm-export") == "response"
+        _assert_drag_sequence(frame, page)  # ref=oracle: the witness kernel's own CPython reference
+        ctx.close()
     assert errors == [], f"page errors during drag: {errors}"
 
 
@@ -398,9 +477,7 @@ def test_m0_native_control_trips_counter(browser):
         count_before = _read_count(page)
         frames_before = rr["n"]
         # drive the NATIVE st.slider -> server recompute -> a full script rerun
-        slider = page.get_by_role("slider").first  # only the native slider is in the main document
-        slider.click()
-        page.keyboard.press("ArrowRight")
+        _nudge_native_slider(page)
         # wait for the rerun to land (the counter to move)
         deadline = 0
         while deadline < 15_000:
@@ -456,10 +533,14 @@ def _overlapping_rerender_then_release(browser, app_dir, env):
     return insts, errors
 
 
-def test_m0_instantiate_once_under_hold(browser):
+def test_m0_instantiate_once_under_hold(browser, tmp_path):
     """A promise cache instantiates ONCE under a PROVEN-overlapping same-sha re-render
-    (`data-instantiations == 1`). Paired: test_sf6_mutant_resolved_cache_double_instantiates."""
-    insts, errors = _overlapping_rerender_then_release(browser, CALLBACK_DIR, {"PYTHSCRIBE_TEST_HOLD": "1"})
+    (`data-instantiations == 1`). Paired: test_sf6_mutant_resolved_cache_double_instantiates.
+    Driven on the FAITHFUL witness copy (mutation=None -- the same app the mutant runs, one
+    mutation apart): the re-render trigger is the witness app's `unrelated toggle` checkbox, which
+    the polished demo app no longer carries."""
+    app_dir, env = _witness_app(tmp_path, hold=True)
+    insts, errors = _overlapping_rerender_then_release(browser, app_dir, env)
     assert insts == "1", f"instantiated {insts} times under a same-sha mid-instantiate re-render (expected 1)"
     assert errors == [], f"drag-before-ready or re-render raised: {errors}"
 

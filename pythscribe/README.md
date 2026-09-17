@@ -375,11 +375,15 @@ r.value, r.fuel_used, r.heap_bytes
 
 ## Optimized artifacts (`wasm-opt`)
 
-The build runs binaryen's `wasm-opt -Os` over each kernel when one is discoverable — on `PATH`, or via
-`PYTHS_WASM_OPT` (a bare name is searched on `PATH`; anything else must be a truly absolute path to an
-existing file, exactly the compiler's own rule; a relative or missing override is refused, never resolved
-against the cwd and never silently replaced by a `PATH` fallback). There is no `[optimize]` extra in this
-release. The manifest records `optimizer: {id, path_sha256, applied, error}` — `id` is the ambient identity
+The build runs binaryen's `wasm-opt -Os … --enable-mutable-globals` over each kernel when one is discoverable —
+on `PATH`, or via `PYTHS_WASM_OPT` (a bare name is searched on `PATH`; anything else must be a truly absolute
+path to an existing file, exactly the compiler's own rule; a relative or missing override is refused, never
+resolved against the cwd and never silently replaced by a `PATH` fallback — with one sanctioned exception:
+`PYTHS_WASM_OPT=<absolute dir>/.no-wasm-opt` is the *optimizer OFF* switch, a silent `none` whose build is
+byte-identical to an optimizer-free machine's). The `--enable-mutable-globals` flag is required: compiled
+kernels export mutable globals (the FFI's `__ovf`/`__heap_ptr`/`__err_code`), which older binaryen builds
+(e.g. Ubuntu's `apt` version_105) refuse without it. There is no `[optimize]` extra in this release. The
+manifest records `optimizer: {id, path_sha256, applied, error}` — `id` is the ambient identity
 (`none` or `wasm-opt/<version>`), `applied` says whether the pass actually ran **and its output was adopted**.
 
 * **Integrity vs freshness.** Loading an artifact (`@wasm` at import, `resolve()`/`verify()`) is integrity-only

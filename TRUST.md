@@ -197,7 +197,7 @@ Caveats (the bound; the restricted alphabet; the ungated four) are in `KANI.md`.
 | Pixel + DOM-bytecode | Playwright + pixelmatch | ~28 checks | `tests/e2e/` (CI) |
 | Zone classifier — **Rust refinement** (the residue of x18: that `strings.rs`'s byte scanner refines the now-PROVED Lean char scanner) | property test: sigils in every protected-zone kind survive the full pipeline; byte-for-byte differential vs. the Lean model; **plus bounded model checking of the Rust itself** (see the Kani section above — exhaustive to N bytes, and it refuted an in-bounds precondition the other two layers were blind to) | 300 seeded cases + 418 differential cases + Kani to N=16 | `pyths_expand tests/gates.rs`, `verification/diff_harness.py`, `kani_proofs.rs` (all CI) |
 | Grammar as acceptor | 484/485 real completions accepted, 1579/1579 malformed rejected | committed corpus | `acceptor_demo.py` (CI, hard) |
-| Compiler internals | 2,100 Rust unit/integration tests | all crates, 3 OS | `cargo test --workspace` (CI) |
+| Compiler internals | 2,102 Rust unit/integration tests | all crates, 3 OS | `cargo test --workspace` (CI) |
 | Panic resistance | cargo-fuzz (4 targets) + in-process harness | weekly cron | `fuzz/` |
 
 ## Trusted (audited, not proved — the audit surface, ranked)

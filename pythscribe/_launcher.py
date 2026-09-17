@@ -3,8 +3,9 @@
 `[project.scripts] pyths = "pythscribe._launcher:main"`. It is a thin LAUNCHER, not a second CLI:
 
   * Python-implemented subcommands: `build` (-> `pythscribe.build.main`) and the M7 set
-    `new / install / dev / node / npm / doctor` (reserved here; M7 fills them in -- until then they
-    answer "implemented in M7", never a traceback; `doctor` already reports the Compiler line).
+    `new / install / dev / node / npm` (`_web_command`: every one resolves Node through
+    `pythscribe._web.find_node()` first; without a usable Node the §3.2 report is printed at this
+    boundary and the exit is 1, never a traceback) plus `doctor` (the M7.2b environment report).
     None of these collides with the native enum (`compile / expand / check / run / init / test /
     fmt / lint / bundle / cache`) -- native `init` is forwarded unchanged; the parity scaffold is `new`.
   * EVERYTHING ELSE is forwarded VERBATIM to the bundled native binary resolved by
@@ -137,17 +138,21 @@ def _importable(modname: str) -> bool:
 
 def _probe_compiler() -> dict:
     from . import build as _pyb
-    from ._pin import COMPILER_VERSION
+    from ._pin import ACCEPTED_COMPILER_RANGE, COMPILER_VERSION
     from .build import BuildError
+    from .runtime.abi import SUPPORTED_ABI_MAJOR
 
+    # The doctor names the compat window a runtime will LOAD -- the accepted compiler range (Layer 2)
+    # and the ABI major (Layer 1) -- not just the exact pin, so a mismatch is diagnosable at a glance.
+    compat = f"accepts {ACCEPTED_COMPILER_RANGE}, ABI major {SUPPORTED_ABI_MAJOR}"
     try:
         p = _pyb.find_pyths()
         ver = _pyb.pyths_version(p)
         ok = ver == COMPILER_VERSION
         return {
             "key": "compiler", "label": "Compiler", "present": ok,
-            "detail": (f"pyths {ver} at {p} (pinned {COMPILER_VERSION})" if ok
-                       else f"VERSION MISMATCH -- pyths {ver} at {p} (pinned {COMPILER_VERSION})"),
+            "detail": (f"pyths {ver} at {p} (pinned {COMPILER_VERSION}; {compat})" if ok
+                       else f"VERSION MISMATCH -- pyths {ver} at {p} (pinned {COMPILER_VERSION}; {compat})"),
             "unlocks": "`pyths build` / `pyths compile` to JS + WASM",
             "path": str(p), "version": ver,
         }

@@ -18,7 +18,10 @@ Three separations, each a gate (plan §M3, blocker #9):
     compiler's own auto-pass is switched off by contract -- `build_kernel` runs `pyths compile` with
     `PYTHS_WASM_OPT=<artifact dir>/.no-wasm-opt`, an absolute path that does not exist, which
     `resolve_program` refuses (documented, SPOT-pinned by validation §F9). Then, if an optimizer is
-    resolved here, `wasm-opt -Os <wasm> -o <private tmp dir>/out.wasm` runs beside the artifact; the
+    resolved here, `wasm-opt -Os <wasm> -o <private tmp dir>/out.wasm --enable-mutable-globals` runs
+    beside the artifact (the argv is `wasm_opt_argv`, a VERBATIM mirror of `optimize.rs::wasm_opt_argv`
+    -- the trailing feature flag is REQUIRED: the compiler exports mutable globals, which binaryen builds
+    such as version_105 refuse without it; see `WASM_OPT_FEATURE_FLAGS`); the
     candidate is assembled in that tmp dir (exit 0; size > 0; every preserved custom section --
     the compiler's `pythscribe.generated` ownership marker and, when present, `pyths.abi` -- is
     present and byte-equal to the input's, re-appended INTO THE TMP CANDIDATE if the optimizer
@@ -55,17 +58,31 @@ from pathlib import Path
 
 __all__ = [
     "WASM_OPT_ENV", "NO_WASM_OPT_NAME", "OPTIMIZER_NONE", "PRESERVED_SECTIONS", "NO_VALIDATOR_ERROR",
-    "NO_VALIDATOR_DOCTOR_LINE", "Optimizer", "OptimizerRecord", "resolve_wasm_opt", "optimizer_key",
-    "optimize_artifact_wasm", "custom_sections", "is_bare_name", "is_truly_absolute", "search_path",
-    "compiler_pass_off_env",
+    "NO_VALIDATOR_DOCTOR_LINE", "WASM_OPT_FEATURE_FLAGS", "Optimizer", "OptimizerRecord", "resolve_wasm_opt",
+    "optimizer_key", "optimize_artifact_wasm", "custom_sections", "is_bare_name", "is_truly_absolute",
+    "search_path", "compiler_pass_off_env", "wasm_opt_argv",
 ]
 
 WASM_OPT_ENV = "PYTHS_WASM_OPT"
 PROGRAM = "wasm-opt"
 # The absolute-but-missing override the compiler subprocess is given so ITS pass is off by the
-# `resolve_program` contract (refused; never falls back to PATH).
+# `resolve_program` contract (refused; never falls back to PATH). It is ALSO the sanctioned
+# "optimizer OFF" sentinel for THIS resolver: `PYTHS_WASM_OPT=<abs dir>/.no-wasm-opt` resolves to a
+# SILENT `Optimizer('none')` (no diagnostic), so a build under it is byte-identical -- manifest
+# included -- to a build on a machine with no wasm-opt at all. The pip gate's committed-artifact
+# rebuild relies on exactly this (scripts/pip_suite_gate.sh): committed artifacts stay UNOPTIMIZED
+# even when the gate has provisioned a real wasm-opt for the M3 tests. Any OTHER refused override
+# keeps its `refused` diagnostic (a real misconfiguration must stay loud).
 NO_WASM_OPT_NAME = ".no-wasm-opt"
 OPTIMIZER_NONE = "none"
+# WASM feature flags appended to EVERY wasm-opt invocation -- a VERBATIM mirror of
+# `crates/pyths_codegen_wasm/src/optimize.rs::WASM_OPT_FEATURE_FLAGS` (the F10 drift gate parses that
+# constant out of the Rust source and compares). `--enable-mutable-globals`: the compiler exports
+# MUTABLE globals (`__ovf`/`__heap_ptr`/`__err_code`, read+reset by the JS FFI per call); binaryen
+# builds that do not enable the feature by default (version_105 = Ubuntu jammy's apt build) refuse the
+# module -- `[wasm-validator error in module] unexpected true: Exported global cannot be mutable, on
+# global$0` -- while version_116+/123 enable it by default (the flag is then a byte-identical no-op).
+WASM_OPT_FEATURE_FLAGS = ("--enable-mutable-globals",)
 # Custom sections the pass must carry across the optimizer round-trip byte-for-byte: the compiler's
 # ownership marker (`optimize.rs::GENERATED_SECTION_NAME`) and the M2.1 ABI section.
 PRESERVED_SECTIONS = ("pythscribe.generated", "pyths.abi")
@@ -253,13 +270,26 @@ def _sha256_file(path: Path) -> str | None:
         return None
 
 
+def is_off_sentinel(override: str) -> bool:
+    """Is this override the sanctioned OFF sentinel -- a TRULY ABSOLUTE path whose final component is
+    `NO_WASM_OPT_NAME`? A bare `.no-wasm-opt` is an ordinary PATH-searched name, and a RELATIVE or
+    drive-relative `.no-wasm-opt` is a REFUSED (loud) override -- never the silent sentinel (else a
+    misconfigured relative override would silently ship UNOPTIMIZED output; codex review)."""
+    return is_truly_absolute(override) and os.path.basename(override.rstrip("/\\")) == NO_WASM_OPT_NAME
+
+
 def resolve_wasm_opt() -> Optimizer:
     """The ambient optimizer identity for THIS process/environment (never cached: the environment is
     the input). `id == 'none'` when absent, when the override is refused, or when the binary fails its
-    version probe -- `error` says which."""
+    version probe -- `error` says which. ONE exception carries no diagnostic: the refused OFF sentinel
+    (`PYTHS_WASM_OPT=<abs dir>/.no-wasm-opt`, see `NO_WASM_OPT_NAME`) is `Optimizer('none')` exactly,
+    indistinguishable from "no wasm-opt on this machine" -- the manifest of a build under it is
+    byte-identical to an optimizer-free build."""
     override = os.environ.get(WASM_OPT_ENV)
     path = resolve_program(PROGRAM, WASM_OPT_ENV)
     if path is None:
+        if override and is_off_sentinel(override):
+            return Optimizer(OPTIMIZER_NONE)
         if override:
             return Optimizer(OPTIMIZER_NONE, error=(
                 f"{WASM_OPT_ENV}={override!r} refused: a bare name must be on PATH and a path must be a "
@@ -288,6 +318,13 @@ def compiler_pass_off_env(adir: Path) -> dict[str, str]:
     """The environment `pyths compile` runs under so the compiler's OWN wasm-opt pass is off by the
     `resolve_program` contract: an absolute path that does not exist is refused, never PATH-fallen-back."""
     return {**os.environ, WASM_OPT_ENV: str(Path(adir).resolve() / NO_WASM_OPT_NAME)}
+
+
+def wasm_opt_argv(wasm_opt: Path | str, wasm_path: Path | str, out_path: Path | str) -> list[str]:
+    """The exact wasm-opt command line -- a VERBATIM mirror of `optimize.rs::wasm_opt_argv`: the
+    positional contract `-Os <in> -o <out>` FIRST (positions 1-4 are what wrappers/stubs key on), then
+    `WASM_OPT_FEATURE_FLAGS` trailing (binaryen accepts options anywhere on the line)."""
+    return [str(wasm_opt), "-Os", str(wasm_path), "-o", str(out_path), *WASM_OPT_FEATURE_FLAGS]
 
 
 # ----------------------------------------------------------------------------- module inspection
@@ -436,7 +473,7 @@ def optimize_artifact_wasm(wasm_path: Path, adir: Path, optimizer: Optimizer) ->
         original = wasm_path.read_bytes()
         tmp = Path(tempfile.mkdtemp(prefix=".pyths-opt-", dir=str(adir)))
         out = tmp / "out.wasm"
-        cmd = [str(optimizer.path), "-Os", str(wasm_path), "-o", str(out)]
+        cmd = wasm_opt_argv(optimizer.path, wasm_path, out)  # the ONE argv builder (mirrors optimize.rs)
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=OPTIMIZER_TIMEOUT_S)
         except subprocess.TimeoutExpired:

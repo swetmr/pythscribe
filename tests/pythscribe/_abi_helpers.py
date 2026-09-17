@@ -76,6 +76,26 @@ def stamp_abi_section(data: bytes, **overrides: Any) -> bytes:
     return bytes(data) + abi.encode_custom_section(abi.ABI_SECTION_NAME, json.dumps(payload, separators=(",", ":")).encode())
 
 
+def abi_global_wat(major: int | None = None) -> str:
+    """WAT for the exported immutable i32 `__pyths_abi` global (B7). The ABI gate requires BOTH a
+    `pyths.abi` section AND this global INSIDE the module (check_abi_global_export); a trailing
+    custom section alone is necessary but NOT sufficient. Inject it so a hand-built probe passes the
+    gate and is refused (if at all) by the check it TARGETS -- sandbox / import -- not the ABI gate."""
+    return f'(global (export "{abi.ABI_GLOBAL_EXPORT}") i32 (i32.const {abi.SUPPORTED_ABI_MAJOR if major is None else major}))'
+
+
+def stamped_probe_from_wat(wat: str, **overrides: Any) -> bytes:
+    """wat2wasm a hand-built probe WITH the `__pyths_abi` global injected, then append the pyths.abi
+    section -- the FULL B7 contract. `overrides` patch the section fields (e.g. abi=major+1).
+    The global goes at the END of the module body: WAT requires all `(import ...)` to precede any
+    non-import definition, so injecting after `(module` (before the imports) is a syntax error."""
+    import wasmtime
+
+    w = wat.rstrip()
+    assert w.endswith(")"), "WAT must end with the module's closing paren"
+    return stamp_abi_section(wasmtime.wat2wasm(w[:-1] + " " + abi_global_wat() + ")"), **overrides)
+
+
 def _sleb128(v: int) -> bytes:
     """Minimal signed-LEB128 encoder (small ints; the inverse of abi._read_sleb128)."""
     out = bytearray()

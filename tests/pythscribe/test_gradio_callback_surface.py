@@ -311,11 +311,14 @@ def test_b2_trust_walker_covers_grid_shaped_payloads(tmp_path, tmp_path_factory,
     assert "wasm_path" not in served["sort"]
 
 
-def test_b2_negative_control_mutant_without_trust_check_registers_attacker_dir(tmp_path, tmp_path_factory, monkeypatch):
+def test_b2_negative_control_mutant_without_trust_check_registers_attacker_file(tmp_path, tmp_path_factory, monkeypatch):
     """PAIRED NEGATIVE CONTROL (anti-vacuity, d'): a text MUTANT of `wasmfunction.py` with the trust
-    check DELETED (imported from a temp copy, no production flag) makes the SAME crafted echo
-    register the attacker's directory (`is_static_file(<dir>/id_rsa)` -> True, `wasm` set) -> proving
-    the `_is_trusted_wasm_path` check is load-bearing. The registration is undone afterwards."""
+    check DELETED (imported from a temp copy, no production flag) makes the SAME crafted echo (naming
+    the attacker's EXISTING `<dir>/real.wasm`) register + serve that file (`is_static_file(<dir>/real.wasm)`
+    -> True, `wasm` set) -> proving the `_is_trusted_wasm_path` check is load-bearing. Since #506 the
+    registration is the `.wasm` FILE, not `rp.parent`, so the mutant's blast radius is the NAMED file:
+    the sibling `<dir>/id_rsa` stays unservable even in the mutant (asserted -- the #506 discriminator,
+    independent of the trust check). The registration is undone afterwards."""
     from gradio.utils import is_static_file
 
     _fresh_gain(tmp_path_factory, monkeypatch)  # compiler present (same gate as the SPOT)
@@ -338,7 +341,7 @@ def test_b2_negative_control_mutant_without_trust_check_registers_attacker_dir(t
     try:
         spec.loader.exec_module(mut)
         secret = _make_secret_dir(tmp_path)
-        assert is_static_file(secret / "id_rsa") is False
+        assert is_static_file(secret / "real.wasm") is False and is_static_file(secret / "id_rsa") is False
         paths = _static_paths()
         before = list(paths)
         try:
@@ -347,10 +350,14 @@ def test_b2_negative_control_mutant_without_trust_check_registers_attacker_dir(t
             assert isinstance(kern["wasm"], str) and kern["wasm"].startswith("/gradio_api/file="), (
                 f"the MUTANT (trust check deleted) must attach the untrusted path: {kern}"
             )
-            assert is_static_file(secret / "id_rsa") is True, "the MUTANT must register the attacker dir (else the control is vacuous)"
+            assert kern["wasm"].endswith("/real.wasm"), kern
+            assert is_static_file(secret / "real.wasm") is True, "the MUTANT must register the attacker-named file (else the control is vacuous)"
+            assert (secret / "real.wasm").resolve() in paths and secret.resolve() not in paths, paths
+            # #506 discriminator: file-only registration -- the sibling secret is NOT exposed even by the mutant
+            assert is_static_file(secret / "id_rsa") is False, "registration must be the .wasm FILE, never its directory (#506)"
         finally:
             paths[:] = before  # undo the mutant's registration (module-global gradio state)
-        assert is_static_file(secret / "id_rsa") is False
+        assert is_static_file(secret / "real.wasm") is False and is_static_file(secret / "id_rsa") is False
     finally:
         sys.modules.pop("gradio_wasmfunction_mutant_b2", None)
 

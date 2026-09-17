@@ -44,7 +44,7 @@ REQUIRED_CI_JOBS: frozenset[str] = frozenset({
     "Test (ubuntu-latest, 1.94.0)",                # matrix: os x rust, each leg required (no single-leg pass)
     "Test (windows-latest, 1.94.0)",
     "Test (macos-latest, 1.94.0)",
-    "pythscribe M0+M1 gates",
+    "pythscribe pip gate",
     "Lint",
     "Node + browser",
     "Packaging (fresh install)",                   # push+main-only -- the manual-dispatch skip bypass
@@ -65,7 +65,7 @@ REQUIRED_CI_JOBS: frozenset[str] = frozenset({
 # ci.yml in the test suite), so neither the key set nor the name set can silently drift.
 REQUIRED_CI_JOB_KEYS: frozenset[str] = frozenset({
     "test",            # matrix os x rust -> the three Test (<os>, 1.94.0) legs
-    "pythscribe-m0",   # -> "pythscribe M0+M1 gates"
+    "pip-gate",        # -> "pythscribe pip gate"
     "lint",            # -> "Lint"
     "node-and-e2e",    # -> "Node + browser"
     "packaging",       # -> "Packaging (fresh install)" (push+main-only -- the manual-dispatch skip bypass)

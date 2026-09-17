@@ -91,3 +91,7 @@ tests/differential/match_501_502/.scratch/
 /legs-dl/
 /wheelhouse/
 .ipynb_checkpoints/
+
+# pip-suite gate isolated venv (scripts/pip_suite_gate.sh)
+.pipgate-venv/
+.pipgate-venv-*/

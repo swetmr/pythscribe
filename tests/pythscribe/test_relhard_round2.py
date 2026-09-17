@@ -176,11 +176,16 @@ def test_s11_a_second_unchecked_evidence_step_is_refused():
 # ============================================================================ operational: local CI gate is DEFERRED, not red-by-default
 
 
-def test_operational_local_ci_gate_is_deferred_never_red():
+def test_operational_local_ci_gate_is_deferred_never_red(monkeypatch):
     """codex re-review (fresh operational): pretag_gate treated a missing GITHUB_REPOSITORY as a
     FAILED mandatory CI gate (red-by-default locally, encouraging bypass). It is now DEFERRED --
     neither a false-GREEN nor a false-RED -- while release.yml still enforces it before any publish."""
     import pretag_gate as pg
+    # This asserts the NO-REPO deferral, so the ambient GITHUB_REPOSITORY must be unset -- otherwise
+    # inside GitHub Actions the direct gate_ci(post_tag=True) call runs the REAL exact-SHA check at the
+    # in-progress HEAD and returns RED (never a successful run at its own commit yet). The CLI subprocess
+    # below already scrubs it via `env`; do the same for the in-process calls.
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     assert pg.gate_ci(post_tag=False) == pg.DEFERRED
     env = {k: v for k, v in os.environ.items() if k != "GITHUB_REPOSITORY"}
     assert pg.gate_ci(post_tag=True) == pg.DEFERRED  # no repo -> still deferred, not RED

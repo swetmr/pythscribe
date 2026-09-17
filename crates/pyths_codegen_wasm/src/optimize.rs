@@ -28,6 +28,46 @@ pub enum OptLevel {
     Aggressive,
 }
 
+/// WASM feature flags passed to EVERY `wasm-opt` invocation, in this order.
+///
+/// `--enable-mutable-globals`: the compiler INTENTIONALLY exports MUTABLE
+/// globals (`__heap_ptr` / `__err_code` / `__ovf`, see `emit.rs` — the JS FFI
+/// reads and resets them around each call). Exporting a mutable global is the
+/// post-MVP `mutable-globals` feature; binaryen builds that do not enable it by
+/// default (e.g. version_105 — Ubuntu jammy's apt `binaryen`) REFUSE the
+/// module outright:
+///
+/// ```text
+/// [wasm-validator error in module] unexpected true: Exported global cannot be mutable, on global$0
+/// Fatal: error validating input
+/// ```
+///
+/// Newer builds (version_116+, version_123) enable it by default, so the flag
+/// is a no-op there (byte-identical output) and load-bearing on older ones.
+///
+/// TWO-COPIES CONTRACT: `pythscribe/build/optimizer.py::WASM_OPT_FEATURE_FLAGS`
+/// mirrors this list VERBATIM and `wasm_opt_argv` there mirrors
+/// [`wasm_opt_argv`] here; `tests/pythscribe/test_wheel_m3_optimizer.py`
+/// (F10) parses this constant out of this file and drives BOTH shipped passes
+/// through a logging stub to assert the argv shapes are identical.
+pub const WASM_OPT_FEATURE_FLAGS: &[&str] = &["--enable-mutable-globals"];
+
+/// The exact `wasm-opt` argv (after the program): the positional contract
+/// `<level> <input> -o <output>` FIRST, then [`WASM_OPT_FEATURE_FLAGS`]. The
+/// feature flags trail on purpose — the positional prefix is a stable contract
+/// that wrappers/stubs key on by position (`$2`/`%~2` = input, `$4`/`%~4` =
+/// output), and binaryen accepts options anywhere on the line.
+pub fn wasm_opt_argv(level: OptLevel, input: &str, output: &str) -> Vec<String> {
+    let mut argv = vec![
+        level.flag().to_string(),
+        input.to_string(),
+        "-o".to_string(),
+        output.to_string(),
+    ];
+    argv.extend(WASM_OPT_FEATURE_FLAGS.iter().map(|f| f.to_string()));
+    argv
+}
+
 impl OptLevel {
     fn flag(&self) -> &'static str {
         match self {
@@ -255,8 +295,11 @@ pub fn run_wasm_opt_at(
     // `opt_dir`, whose destructor removes the directory at its recorded path
     // — cleanup cannot be skipped on any exit path (pathname-based, not
     // identity-bound; see the doc comment above for the honest scope).
+    // The ONE argv builder (mirrored verbatim by the Python pass) — the feature
+    // flags it appends are REQUIRED on binaryen builds that reject exported
+    // mutable globals by default; see `WASM_OPT_FEATURE_FLAGS`.
     let result = Command::new(wasm_opt)
-        .args([level.flag(), wasm_path, "-o", &opt_path_str])
+        .args(wasm_opt_argv(level, wasm_path, &opt_path_str))
         .output()
         .map_err(|e| format!("Failed to run wasm-opt: {}", e))?;
 
@@ -298,6 +341,31 @@ mod tests {
         assert_eq!(OptLevel::Size.flag(), "-Os");
         assert_eq!(OptLevel::Speed.flag(), "-O2");
         assert_eq!(OptLevel::Aggressive.flag(), "-O3");
+    }
+
+    #[test]
+    fn wasm_opt_argv_is_positional_contract_then_feature_flags() {
+        // The exact line the Python mirror (`optimizer.py::wasm_opt_argv`)
+        // must reproduce: `<level> <in> -o <out> --enable-mutable-globals`.
+        // Positions 0..4 are the stable contract stubs key on; the feature
+        // flags TRAIL. Dropping the flag (the pre-fix argv) -> RED here, and
+        // RED on binaryen version_105 ("Exported global cannot be mutable").
+        assert_eq!(
+            wasm_opt_argv(OptLevel::Size, "in.wasm", "out.wasm"),
+            vec![
+                "-Os",
+                "in.wasm",
+                "-o",
+                "out.wasm",
+                "--enable-mutable-globals"
+            ]
+        );
+        assert_eq!(WASM_OPT_FEATURE_FLAGS, &["--enable-mutable-globals"]);
+        assert_eq!(
+            wasm_opt_argv(OptLevel::Speed, "a", "b")[0],
+            "-O2",
+            "the level flag stays the first positional"
+        );
     }
 
     #[test]

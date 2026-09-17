@@ -89,15 +89,17 @@ jobs:
           ./target/release/pyths compile examples/cloudflare-bench/large-samples/pythscribe/app_1000.ps -o "${RUNNER_TEMP}/app_1000.js"
         shell: bash
 
-  pythscribe-m0:
-    # v0.2.5 M0 gates: @wasm fallback (U1-U3), the compiled-vs-CPython differential
-    # (D1-D3) and the in-browser Gradio path (E1-E3), each with its paired negative
-    # control. PYTHSCRIBE_REQUIRE_ORACLE=1 turns every prerequisite skip (node /
-    # playwright / component / artifact) into a FAILURE: a run that reports PASS with
-    # the oracle skipped must go RED (review R1/B3, class `vacuous-verification`).
-    # M1 adds the image-preprocessing gates (K1-K8 kernel/shim differential, A1-A4 in-browser
-    # app gates, N1-N3 notebook derivation incl. an end-to-end notebook execution).
-    name: pythscribe M0+M1 gates
+  pip-gate:
+    # The FULL pip-package gate: `pytest tests/pythscribe` (M0-M7 -- @wasm fallback, the
+    # compiled-vs-CPython differential, in-browser Gradio/Streamlit, image preprocessing,
+    # array ABI, optimizer, wheel packaging, licences, evidence, web tooling), each with
+    # its paired negative control. PYTHSCRIBE_REQUIRE_ORACLE=1 turns every prerequisite
+    # skip (node / playwright / component / artifact) into a FAILURE: a run that reports
+    # PASS with the oracle skipped must go RED (review R1/B3, class `vacuous-verification`).
+    # The setup + run are DEFINED ONCE in scripts/pip_suite_gate.sh, which scripts/release.sh
+    # Phase 6 runs locally on the scrubbed tree BEFORE any push -- so this gate and the local
+    # release gate cannot drift (a new pip test surfaces locally, never first at tag time).
+    name: pythscribe pip gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -119,22 +121,6 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build the pinned compiler
-        run: cargo build --release --bin pyths
-
-      # M5 (third-party closure) runs `cargo metadata --offline --filter-platform <triple>` for
-      # EACH of the 5 release targets; the windows/macos-only crates (e.g. anstyle-wincon) are not
-      # in the Linux build's registry cache, so pre-fetch every target's graph while online.
-      # NOTE: binaryen's `wasm-opt` is deliberately NOT installed here -- the apt build rejects the
-      # compiler's exported mutable globals (needs --enable-mutable-globals) AND the committed
-      # artifacts are unoptimized, so a present wasm-opt breaks the byte-identical rebuild gate.
-      # The M3-optimizer tests stay RED until both are addressed (tracked separately).
-      - name: Cross-target crate cache (M5 third-party closure)
-        run: |
-          cargo fetch --target aarch64-apple-darwin --target aarch64-unknown-linux-gnu \
-                      --target x86_64-apple-darwin --target x86_64-pc-windows-msvc \
-                      --target x86_64-unknown-linux-gnu
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -143,46 +129,39 @@ jobs:
         with:
           python-version: '3.14'
 
-      # gradio_wasmfunction is VENDORED into the pythscribe wheel (M1.5 §E) -- installing it as a
-      # SEPARATE editable distribution makes test_p3 (only-the-vendored-one-resolves) RED, so do NOT.
-      # `build` + `setuptools` are needed by the M1 sdist gate (3.14 venvs no longer ship setuptools).
-      - name: Install pythscribe + the browser
+      # THE pip-package gate is defined ONCE in scripts/pip_suite_gate.sh: build compiler +
+      # cross-target crate cache (M5 offline third-party closure) + isolated-venv install of
+      # `.[gradio,test]`+build+setuptools + playwright chromium + committed-artifact byte-identity
+      # + scaffolder payload (M7) + the FULL `pytest tests/pythscribe` with the REQUIRE_ORACLE /
+      # REQUIRE_EMBED / PYTHSCRIBE_PYTHS env. scripts/release.sh Phase 6 runs the SAME script on the
+      # SCRUBBED tree before any push, so this job and the local release gate cannot drift.
+      # (v0.2.5 lesson: the pip suite lived only here, a job that had never run, so it gated nothing.)
+      # binaryen `wasm-opt` is a REQUIRED oracle of the M3 optimizer gates (F2-F6/F10 fail under
+      # REQUIRE_ORACLE without it). It was pulled in v0.2.5 because (a) the apt build rejected the
+      # compiler's exported mutable globals ("Exported global cannot be mutable") and (b) a present
+      # wasm-opt turned the committed-artifact rebuild into an optimized, drifted one. Both are closed:
+      # every wasm-opt call (optimize.rs + optimizer.py, one shared argv) passes
+      # `--enable-mutable-globals`, and the gate's artifact rebuild runs with the optimizer OFF via the
+      # `.no-wasm-opt` sentinel (committed artifacts stay unoptimized + byte-identical).
+      - name: Install binaryen (wasm-opt) — the M3 optimizer oracle
         run: |
-          python -m pip install -e ".[gradio,test]" build setuptools
-          python -m playwright install --with-deps chromium
-          npm ci --prefix pythscribe/gradio/wasm_function/frontend
+          sudo apt-get update
+          sudo apt-get install -y binaryen
+          wasm-opt --version
 
-      - name: Committed artifact == what the pinned toolchain produces (forced rebuild must be byte-identical)
-        run: |
-          python -m pythscribe.build --force examples/gradio-wasm/kernels.py
-          python -m pythscribe.build --force examples/gradio-image-preprocess/kernels.py
-          python -m pythscribe.build --force examples/wasm-use-cases/kernels.py
-          git status --porcelain -- examples/gradio-wasm/__pythscribe__ examples/gradio-image-preprocess/__pythscribe__ examples/wasm-use-cases/__pythscribe__
-          git diff --exit-code -- examples/gradio-wasm/__pythscribe__ examples/gradio-image-preprocess/__pythscribe__ examples/wasm-use-cases/__pythscribe__
-
-      # M7 scaffolder-payload gate (test_m7_3) requires dist/scaffolder-payload/ to exist.
-      - name: Prepare release payloads (M7 scaffolder-payload gate)
-        run: python scripts/prepare_release_payloads.py
-
-      - name: M0+M1 gates against the COMMITTED component bundle (a skipped prerequisite is a FAILURE)
+      - name: pip gate (pytest tests/pythscribe) — one authority, shared with release.sh Phase 6
         env:
-          PYTHSCRIBE_REQUIRE_ORACLE: "1"
-          # wheel-M0 §D4 (embedded identity): `pyths` was built from THIS checkout above, so the
-          # D4 tests are a REAL gate here -- PYTHSCRIBE_REQUIRE_EMBED=1 makes an unset/invalid
-          # binary a FAILURE (elsewhere, with no binary built, D4 is a plain skip). Absolute so a
-          # test running from a tmp CWD still resolves it.
-          PYTHSCRIBE_EMBED_BINARY: ${{ github.workspace }}/target/release/pyths
-          PYTHSCRIBE_REQUIRE_EMBED: "1"
-          # The compile-on-call / build path resolves the compiler via find_pyths() -> PYTHSCRIBE_PYTHS;
-          # without it only the PATH console-script (launcher) is found, which is rejected (recursion
-          # guard) -> BuildError. This is an editable install (no bundled _bin), so it MUST be set.
-          PYTHSCRIBE_PYTHS: ${{ github.workspace }}/target/release/pyths
-        run: python -m pytest tests/pythscribe -v -ra -p no:cacheprovider
+          PIP_GATE_PYTHON: python
+          PIP_GATE_WITH_DEPS: "1"
+          PIP_GATE_VENV: ${{ github.workspace }}/.pipgate-venv
+        run: bash scripts/pip_suite_gate.sh
 
-      - name: Component frontend still builds from source (after the gates, so E2E used the committed bundle)
+      - name: Component frontend still builds from source (after the gate, so E2E used the committed bundle)
         run: |
+          npm ci --prefix pythscribe/gradio/wasm_function/frontend
+          VPY="${{ github.workspace }}/.pipgate-venv/bin/python"
           cd pythscribe/gradio/wasm_function
-          python -m gradio cc build --no-generate-docs --python-path "$(which python)"
+          "$VPY" -m gradio cc build --no-generate-docs --python-path "$VPY"
 
   lint:
     name: Lint

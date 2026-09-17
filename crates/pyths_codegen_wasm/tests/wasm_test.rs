@@ -136,6 +136,56 @@ fn test_single_function_module() {
     validate_wasm(&wasm);
 }
 
+/// The codegen fact `optimize::WASM_OPT_FEATURE_FLAGS` keys on: the emitted
+/// module EXPORTS at least one MUTABLE global (`__ovf` / `__heap_ptr` /
+/// `__err_code`, read+reset by the JS FFI per call). Exporting a mutable global
+/// is the post-MVP `mutable-globals` feature, which binaryen version_105
+/// (Ubuntu jammy's apt build) refuses without `--enable-mutable-globals`
+/// ("Exported global cannot be mutable, on global$0"). If codegen ever stops
+/// exporting mutable globals this test goes RED and the flag can be revisited;
+/// if the flag is dropped while the export stands, the F10 pip gate goes RED
+/// on such a binaryen. Both halves are asserted here so the binding is explicit.
+#[test]
+fn test_exported_mutable_global_requires_the_wasm_opt_feature_flag() {
+    use wasmparser::{ExternalKind, Parser, Payload};
+    let wasm = compile_wasm("def hello(x: float) -> float:\n    return x + 2.0\n");
+    validate_wasm(&wasm);
+    let mut global_mutability: Vec<bool> = Vec::new();
+    let mut exported_global_indices: Vec<u32> = Vec::new();
+    for payload in Parser::new(0).parse_all(&wasm) {
+        match payload.expect("parse") {
+            Payload::GlobalSection(reader) => {
+                for g in reader {
+                    global_mutability.push(g.expect("global").ty.mutable);
+                }
+            }
+            Payload::ExportSection(reader) => {
+                for e in reader {
+                    let e = e.expect("export");
+                    if e.kind == ExternalKind::Global {
+                        exported_global_indices.push(e.index);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let exported_mutable = exported_global_indices
+        .iter()
+        .filter(|&&i| global_mutability[i as usize])
+        .count();
+    assert!(
+        exported_mutable >= 1,
+        "the module must export a mutable global (the FFI contract); globals={:?} exported={:?}",
+        global_mutability,
+        exported_global_indices
+    );
+    assert!(
+        pyths_codegen_wasm::optimize::WASM_OPT_FEATURE_FLAGS.contains(&"--enable-mutable-globals"),
+        "an exported mutable global REQUIRES --enable-mutable-globals on every wasm-opt call"
+    );
+}
+
 #[test]
 fn test_multi_function_module() {
     let src = "\

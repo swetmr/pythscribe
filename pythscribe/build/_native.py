@@ -55,9 +55,13 @@ _TAG_RULES: dict[str, tuple[str, str, tuple[int, ...] | None]] = {
 
 # manylinux_2_28 shared-library allowlist (the subset a Rust `-gnu` executable can legitimately
 # need; auditwheel's policy list is wider -- X11/GL/glib -- but a compiler needs none of those).
+# The dynamic loader itself (`ld-linux-<arch>.so.*`) is always present and is on auditwheel's own
+# policy list; a Rust `-gnu` binary can emit it as a DT_NEEDED (not only PT_INTERP), so allow it --
+# it is never a "missing dependency", and omitting it false-flags an otherwise-clean binary.
 MANYLINUX_2_28_ALLOWED_LIBS: frozenset[str] = frozenset({
     "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1", "libgcc_s.so.1",
     "libstdc++.so.6", "libutil.so.1", "libresolv.so.2", "libnsl.so.1", "libz.so.1",
+    "ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1",  # the dynamic loader (x86_64 / aarch64)
 })
 MACOS_SYSTEM_DYLIB_PREFIXES: tuple[str, ...] = ("/usr/lib/", "/System/")
 

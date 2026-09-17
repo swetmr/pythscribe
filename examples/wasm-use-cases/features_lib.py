@@ -197,7 +197,14 @@ def wasi_io_module_bytes() -> bytes:
 
     payload = {**abi.expected_contract(), "compiler": COMPILER_VERSION, "history": []}
     section = abi.encode_custom_section(abi.ABI_SECTION_NAME, json.dumps(payload, separators=(",", ":")).encode())
-    return wasmtime.wat2wasm(_WASI_IO_MODULE_WAT) + section
+    # B7: the ABI gate requires BOTH the pyths.abi section AND the exported immutable i32
+    # `__pyths_abi` global INSIDE the module (check_abi_global_export) -- inject it so this probe is
+    # refused by the sandbox's import check (what it targets), not by the ABI gate for a missing global.
+    # The global goes at the END: WAT requires all `(import ...)` to precede non-import definitions.
+    abi_global = f'(global (export "{abi.ABI_GLOBAL_EXPORT}") i32 (i32.const {abi.SUPPORTED_ABI_MAJOR}))'
+    w = _WASI_IO_MODULE_WAT.rstrip()
+    wat = w[:-1] + " " + abi_global + ")"
+    return wasmtime.wat2wasm(wat) + section
 
 
 def _run_io_module_with_wasi(wasm_bytes: bytes, workdir: Path) -> tuple[bool, str]:

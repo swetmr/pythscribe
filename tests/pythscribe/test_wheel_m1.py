@@ -3,7 +3,8 @@ ships its PAIRED NEGATIVE CONTROL (the anti-vacuity paired-control convention).
 
   B0  launcher forwarding: --version == pin; compile --stdout / --emit-cert (a compile FLAG) / the
       global --quiet forward; --help = native help + the launcher section; `init` is native; the
-      M7 names are reserved. Control: `cache status` produces native output (a launcher mutant
+      M7 commands (new/install/dev/node/npm) fail cleanly without Node (the §3.2 report, exit 1, no
+      traceback). Control: `cache status` produces native output (a launcher mutant
       that swallows an unknown subcommand instead of forwarding -> RED).
   B1  bundled resolution: launcher on PATH, no external native pyths -> find_pyths() returns the
       bundled _bin path (absolute, native-validated), never the console script.
@@ -222,9 +223,15 @@ def test_b0_help_is_native_plus_launcher_section_and_init_is_native(wheel_venv):
     assert i.returncode == 0 and "Initialize a new PythScribe project" in i.stdout  # NOT shadowed by `new`
     b = _run([pyths, "build", "--help"], env=env)
     assert b.returncode == 0 and b.stdout.startswith("usage: pyths build")
+    # M7 SHIPPED: every frontend command routes through `_web.find_node()` FIRST; with no Node resolvable (this
+    # venv's PATH is scripts + System32, no PYTHS_NODE, no vendored `[web-bundled]` -- the wheel was installed
+    # --no-deps) the launcher prints the state-tailored §3.2 report at its boundary -- exit 1, never a traceback.
+    env.pop("PYTHS_NODE", None)
     for m7 in ("new", "install", "dev", "node", "npm"):
         r = _run([pyths, m7, "anything"], env=env)
-        assert r.returncode == 2 and "implemented in M7" in r.stderr and "Traceback" not in r.stderr, (m7, r.stderr)
+        assert r.returncode == 1 and "need Node.js" in r.stderr and "no Node.js was found on PATH" in r.stderr, (m7, r.returncode, r.stderr)
+        assert "pyths doctor" in r.stderr and "Traceback" not in r.stderr, (m7, r.stderr)
+        assert "implemented in M7" not in r.stderr, (m7, r.stderr)  # the pre-M7 placeholder is gone
 
 
 def test_b0_control_unknown_subcommand_is_forwarded_not_swallowed(wheel_venv):
@@ -272,7 +279,10 @@ def test_b1_control_bin_removed_launcher_on_path_never_returns_the_launcher(tmp_
     assert r.stdout.startswith("ERR"), r.stdout
     assert "bundled binary is missing" in r.stdout and "rejected" in r.stdout, r.stdout
     assert "console script (launcher) itself" in r.stdout, r.stdout  # B's own launcher: rejected by identity, never run
-    assert "answered the probe" in r.stdout, r.stdout  # A's launcher (a PE stub on Windows): rejected by the probe protocol
+    # A's launcher is rejected, never run: on Windows it is a PE stub that passes the magic check and
+    # is rejected by the PROBE protocol ("answered the probe"); on POSIX it is a text shebang console
+    # script, rejected as "a text shebang wrapper" BEFORE the probe. Either proves it is never returned.
+    assert ("answered the probe" in r.stdout) or ("shebang wrapper" in r.stdout), r.stdout
     assert not any(line.startswith("RETURNED") for line in r.stdout.splitlines())
     # the other venv's launcher is on PATH: the probe protocol must have rejected it (Windows: a PE stub)
     other = str(wheel_venv["scripts"]).lower()
@@ -420,7 +430,8 @@ def test_b4_source_install_succeeds_binaryless_with_the_visible_notice(sdist_ven
     v = _run([sdist_venv["pyths"], "--version"], env=env, cwd=str(tmp_path), timeout=15)
     assert v.returncode != 0 and "no prebuilt compiler" in v.stderr and "Traceback" not in v.stderr, (v.returncode, v.stderr)
     d = _run([sdist_venv["pyths"], "doctor"], env=env, cwd=str(tmp_path), timeout=15)
-    assert d.returncode == 0 and d.stdout.startswith("Compiler: not bundled (source install") and "Traceback" not in d.stderr, (d.stdout, d.stderr)
+    # M7.2b doctor line: `<label>: <state> -- <detail>; fix: <fix>` (one authority: `_probe_compiler`)
+    assert d.returncode == 0 and d.stdout.startswith("Compiler: not bundled -- source install / no wheel for this platform; fix:") and "Traceback" not in d.stderr, (d.stdout, d.stderr)
     # a committed artifact still resolves without a compiler (resolve() needs none)
     uc = REPO / "examples" / "wasm-use-cases"
     gate((uc / "__pythscribe__" / "edit_distance" / "manifest.json").is_file(), "use-case artifacts not built")

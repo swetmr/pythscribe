@@ -386,7 +386,7 @@ def _cli_checkout(d: Path, checkout: Path, m: dict) -> Path:
     minimal plugin/wrapper package dirs under `checkout` and `npm pack` each INTO `d` (the tarball-dir the
     CLI fetches from), so the CLI's mandatory content binding is satisfied offline BY CONSTRUCTION --
     registry tarball == `npm pack` of the checkout dir, exactly as release.yml's `--checkout .` yields in
-    CI. Requires npm (skip cleanly if absent -- CI's pythscribe-m0 job has it)."""
+    CI. Requires npm (skip cleanly if absent -- CI's pip-gate job has it)."""
     npm = shutil.which("npm") or shutil.which("npm.cmd")
     if not npm:
         pytest.skip("npm not on PATH -- required for the verify_npm_identity --checkout content binding")
@@ -887,8 +887,13 @@ def test_k_controls_each_false_claim_is_red():
     assert any("web-bundled" in x for x in rs.static_checks(README, DECLARED - {"web-bundled"}))
     # a resurrected [web] extra
     assert any("pythscribe[web]" in x for x in rs.check_extras(README + "\n`pip install pythscribe[web]`\n", DECLARED))
-    # MCP without the (v0.3) label
-    assert any("(v0.3)" in x for x in rs.check_env_table(README.replace("MCP server *(v0.3)*", "MCP server", 1)))
+    # MCP without the (v0.3) label. MCP is NOT in this release's README (removed by design), but
+    # check_env_table still GUARDS against an MCP mention in the Without-Node row lacking the
+    # "(v0.3)" label if it is ever re-added -- so feed a SYNTHETIC violating row rather than mutate
+    # the (MCP-free) README, whose "MCP server *(v0.3)*" string no longer exists.
+    _wn = rs._table_row(README, "Without Node")
+    _mcp_bad = README.replace(_wn, _wn.replace("Offline, no toolchain.", "Offline, no toolchain, MCP server.", 1), 1)
+    assert any("(v0.3)" in x for x in rs.check_env_table(_mcp_bad))
     # a With-Node capability claimed in the Without-Node row
     row = rs._table_row(README, "Without Node")
     assert any("With-Node capability" in x for x in rs.check_env_table(README.replace(row, row.replace("Offline, no toolchain.", "Offline, no toolchain, dev server + HMR."), 1)))
@@ -966,6 +971,56 @@ def test_k_run_mode_executes_the_readme_spots_against_the_shipped_wheel(host_whe
     # a spot that cannot bind to the shipped wheel is RED, never silently skipped
     rep = rs.run_spots([rs.Block(line=3, lang="bash", code="pip install pythscribe\n", section="Installation")], python=py, wheel=None, node=False, pip_args=[])
     assert rep.problems and "cannot be bound to the shipped wheel" in rep.problems[0]
+    # the README's `uv pip install` line: the SAME binding + extras refusal (decided BEFORE uv is resolved, so
+    # these two controls are host-independent) ...
+    block = rs.Block(line=1, lang="bash", code='uv pip install "pythscribe[nope]"\n', section="Installation")
+    rep = rs.run_spots([block], python=py, wheel=whl, node=False, pip_args=["--no-index"])
+    assert rep.problems and "does not declare" in rep.problems[0] and "['nope']" in rep.problems[0], rep
+    rep = rs.run_spots([rs.Block(line=3, lang="bash", code="uv pip install pythscribe\n", section="Installation")], python=py, wheel=None, node=False, pip_args=[])
+    assert rep.problems and "cannot be bound to the shipped wheel" in rep.problems[0]
+    # ... and the ARGV it hands uv is asserted (DETERMINISTIC: uv's presence and the spawn are mocked, so this does
+    # not depend on whether THIS host has uv). Anti-vacuity: the target venv already has pythscribe installed, so
+    # a mutant that passes the bare `pythscribe` token to uv (ignoring the bound wheel) would still exit 0 with
+    # `--no-index` -- only the argv assertion makes that mutant RED: the BOUND WHEEL PATH must be the requirement,
+    # `--python <target>` must pin the interpreter, and no bare `pythscribe` token may reach uv.
+    import subprocess as _sp
+
+    fake_uv = str(whl.parent / ("uv.exe" if os.name == "nt" else "uv"))  # never spawned (subprocess.run is mocked)
+    real_which = rs.shutil.which
+    spawned: list[list[str]] = []
+
+    def _which_with_uv(name, *a, **kw):
+        return fake_uv if name == "uv" else real_which(name, *a, **kw)
+
+    def _which_without_uv(name, *a, **kw):
+        return None if name == "uv" else real_which(name, *a, **kw)
+
+    def _capture(argv, *a, **kw):
+        spawned.append([str(x) for x in argv])
+        return _sp.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    def _uv_spots(code: str, *, present: bool):
+        spawned.clear()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(rs.shutil, "which", _which_with_uv if present else _which_without_uv)
+            mp.setattr(rs.subprocess, "run", _capture)
+            return rs.run_spots([rs.Block(line=1, lang="bash", code=code, section="Installation")], python=py, wheel=whl, node=False, pip_args=["--no-index", "--no-deps"])
+
+    # uv PRESENT: exactly one spawn, of the real uv, with the bound wheel (+ extras) and the pinned target interpreter
+    for code, want_req in (("uv pip install pythscribe\n", str(whl)), ('uv pip install "pythscribe[server]"\n', f"{whl}[server]")):
+        ok = _uv_spots(code, present=True)
+        assert ok.problems == [] and len(ok.passed) == 1 and ok.deferred == [], ok
+        assert len(spawned) == 1, spawned
+        argv = spawned[0]
+        assert argv[:3] == [fake_uv, "pip", "install"], argv
+        assert argv[argv.index("--python") + 1] == str(py), argv
+        assert want_req in argv, (want_req, argv)  # the SHIPPED wheel is the requirement uv consumes
+        assert "pythscribe" not in argv and not any(a.startswith("pythscribe[") for a in argv), argv  # never the bare name
+        assert argv[-2:] == ["--no-index", "--no-deps"], argv  # pip_args reach the uv arm too
+    # uv ABSENT: one DEFER, NOTHING spawned (never silently pip-substituted, never counted as passed)
+    ok = _uv_spots("uv pip install pythscribe\n", present=False)
+    assert ok.problems == [] and ok.passed == [] and len(ok.deferred) == 1 and "uv is not installed" in ok.deferred[0], ok
+    assert spawned == [], spawned
 
 
 # ============================================================================ L: pre-tag gate

@@ -945,7 +945,10 @@ pub fn run(
                 }
             }
 
-            // Run wasm-opt -Os (size-optimized for web) if available. The
+            // Run wasm-opt -Os (size-optimized for web) if available — argv
+            // built by the ONE builder `optimize::wasm_opt_argv`, which appends
+            // `--enable-mutable-globals` (the module exports mutable globals;
+            // older binaryen builds refuse them without the flag). The
             // binary is resolved through the ONE exe resolver
             // (`procutil::resolve_program` — PATH only, never the cwd;
             // `PYTHS_WASM_OPT` overrides), and the optimizer runs inside a

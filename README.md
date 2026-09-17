@@ -196,7 +196,7 @@ Then `npm link` the `runtime/` and `packages/*` folders into your project instea
 - **Fast** — Rust-native compiler; ~124,000 lines/second; sub-millisecond compile times for typical files
 - **Source maps** — `--sourcemap` for debugging in browser DevTools
 - **Optional `.psc` compression** — opt-in compressed superset for AI-emitted code, **8.9% o200k / 9.3% cl100k additional token savings** on idiomatic code, on top of PythScribe's inherent reduction; `.ps` users see zero behavior change. See [`docs/compression.md`](docs/compression.md).
-- **Tested** — **4,000+ automated checks across 12 layers**: 2,100 Rust unit/integration tests, a **1,376-entry** CPython semantic differential corpus (fully green, cross-checked on a second JS engine — 1,375/1,376 identical across V8 and JavaScriptCore), the 24 Livermore kernels × {cpython, js, wasm}, a grammar acceptor gate, tri-track clone DOM parity (React as oracle), browser pixel + DOM-bytecode parity, Node auto-routing E2E, panic-resistance fuzzing, machine-checked Lean proofs bound to the shipping compiler, and a per-compilation subscript-routing certificate. `cargo test --workspace`: **green, 0 failing**. Full per-layer counts are in the [assurance paper](https://doi.org/10.5281/zenodo.21875694).
+- **Tested** — **4,000+ automated checks across 12 layers**: 2,102 Rust unit/integration tests, a **1,376-entry** CPython semantic differential corpus (fully green, cross-checked on a second JS engine — 1,375/1,376 identical across V8 and JavaScriptCore), the 24 Livermore kernels × {cpython, js, wasm}, a grammar acceptor gate, tri-track clone DOM parity (React as oracle), browser pixel + DOM-bytecode parity, Node auto-routing E2E, panic-resistance fuzzing, machine-checked Lean proofs bound to the shipping compiler, and a per-compilation subscript-routing certificate. `cargo test --workspace`: **green, 0 failing**. Full per-layer counts are in the [assurance paper](https://doi.org/10.5281/zenodo.21875694).
 
 > **Technical summary** — see [`technical_summary.md`](./technical_summary.md) for a 10-minute snapshot of where the project stands toward production parity with React + Next.js (gaps documented). Written for engineers, contributors, and anyone evaluating the toolchain.
 
@@ -207,7 +207,7 @@ PythScribe is agent-written, and this README won't pretend otherwise. Every clai
 | Tier | What's in it | How it's enforced |
 |---|---|---|
 | **Proved** (Lean 4, `verification/`) | `.psc`→`.ps` expansion (determinism, zone-safety, alias round-trip); subscript-routing read-safety plus a per-compilation certificate checker proved *sound and complete* against a model of the emitter; slice/index in-bounds safety; truthiness; `==` as an equivalence relation; WASM scratch non-interference; identifier-naming soundness (no Python identifier ever emits a bare JS reserved word); and statement/expression **preservation waves** over selected language fragments (arithmetic, bitwise, string methods, dict methods) | `lake build` + pinned `#print axioms`, in CI |
-| **Tested** (oracle-diverse — what proof doesn't reach) | Runtime semantics vs **CPython**: a 1,376-entry differential corpus, fully green and cross-checked on a second JS engine (V8 + JavaScriptCore — 1,375/1,376 identical); 24 Livermore kernels ×{JS, WASM}; React-oracle DOM-parity tests; pixel/DOM parity; a grammar acceptor gate; 2,100 Rust tests; panic fuzzing | `cargo test --workspace` + the differential/parity CI jobs |
+| **Tested** (oracle-diverse — what proof doesn't reach) | Runtime semantics vs **CPython**: a 1,376-entry differential corpus, fully green and cross-checked on a second JS engine (V8 + JavaScriptCore — 1,375/1,376 identical); 24 Livermore kernels ×{JS, WASM}; React-oracle DOM-parity tests; pixel/DOM parity; a grammar acceptor gate; 2,102 Rust tests; panic fuzzing | `cargo test --workspace` + the differential/parity CI jobs |
 | **Trusted** (audited, not proved) | The `.ps`→JS/WASM codegen *body fragment*; the Rust byte-scanner's refinement of the proved Lean classifier; the type-inference evidence feeding routing certificates; the runtime JS; and the toolchain (rustc, the Lean kernel, Node, CPython-as-oracle) | Audited + differentially bound — the honest floor |
 
 The value here is **oracle diversity and honest scope accounting**, not a claim of end-to-end proof. Proof covers selected fragments; everything else is held by the CPython differential and parity oracles; the rest is trusted and named as such.
@@ -533,7 +533,7 @@ pyths/
 ## Development
 
 ```bash
-# Rust workspace — compiler, parser, type checker, WASM codegen, CLI (2,100 tests)
+# Rust workspace — compiler, parser, type checker, WASM codegen, CLI (2,102 tests)
 cargo test --workspace
 
 # Specific crate
@@ -577,7 +577,7 @@ cargo bench -p pyths_codegen_js
 cargo build --release
 ```
 
-Total: **4,000+ automated checks across 12 layers** (2,100 cargo + 1,376 differential + 24 Livermore ×3 + clone-parity + pixel/DOM parity + acceptor corpus + Lean proofs + certificate corpus). CI runs them on every push (`.github/workflows/ci.yml`), including the Lean `verification` job and the tri-track `clones` job; the panic-resistance fuzz harness lives in `crates/pyths_cli/tests/fuzz_inputs.rs`. A separate weekly fuzz cron (`.github/workflows/fuzz.yml`) runs coverage-guided `cargo-fuzz` targets from `fuzz/`.
+Total: **4,000+ automated checks across 12 layers** (2,102 cargo + 1,376 differential + 24 Livermore ×3 + clone-parity + pixel/DOM parity + acceptor corpus + Lean proofs + certificate corpus). CI runs them on every push (`.github/workflows/ci.yml`), including the Lean `verification` job and the tri-track `clones` job; the panic-resistance fuzz harness lives in `crates/pyths_cli/tests/fuzz_inputs.rs`. A separate weekly fuzz cron (`.github/workflows/fuzz.yml`) runs coverage-guided `cargo-fuzz` targets from `fuzz/`.
 
 The full assurance study behind these layers — oracle-diverse testing, per-compilation routing certificates, machine-checked Lean verification, and explicit trust accounting — is written up in *"Layered Assurance for an Agent-Written Python-to-JavaScript/WebAssembly Compiler"*: **https://doi.org/10.5281/zenodo.21875694**.
 

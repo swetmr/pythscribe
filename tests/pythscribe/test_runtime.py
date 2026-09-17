@@ -543,14 +543,14 @@ def test_r5_module_with_unknown_math_import_is_refused():
     # M2.1: the ABI gate runs FIRST (a non-pyths module is refused before the sandbox even looks at
     # its imports), so these hand-built modules carry a valid `pyths.abi` section to reach the
     # import check they exercise.
-    from _abi_helpers import stamp_abi_section
+    from _abi_helpers import stamped_probe_from_wat
 
     wat = '(module (import "math" "cbrt" (func (param f64) (result f64))) (func (export "f") (result f64) f64.const 8 call 0))'
     with pytest.raises(SandboxViolation, match="math.cbrt"):
-        ServerKernel.from_wasm(stamp_abi_section(wasmtime.wat2wasm(wat)), name="cbrt")
+        ServerKernel.from_wasm(stamped_probe_from_wat(wat), name="cbrt")
     wat2 = '(module (import "math" "sqrt" (func (param i32) (result i32))) (func (export "f") (result i32) i32.const 4 call 0))'
     with pytest.raises(SandboxViolation, match="signature"):
-        ServerKernel.from_wasm(stamp_abi_section(wasmtime.wat2wasm(wat2)), name="badsig")
+        ServerKernel.from_wasm(stamped_probe_from_wat(wat2), name="badsig")
     # and WITHOUT the section the ABI gate (not the sandbox) is what refuses it -- loudly
     from pythscribe.runtime import AbiMismatchError
 

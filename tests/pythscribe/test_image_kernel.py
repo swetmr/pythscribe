@@ -341,11 +341,17 @@ def test_k7_layout_binding_glue_matches_shim(down):
     assert '__list_to_wasm(px, "i64")' in glue and '__list_to_wasm(out, "i64")' in glue
     shim = SHIM.read_text(encoding="utf-8")
     assert "HEADER_BYTES = 8" in shim and '"list[int]": 8' in shim and '"list[float]": 8' in shim and '"list[bool]": 4' in shim
-    # the shim's declared layout version names the compiler pin it was written against; a pin
-    # bump without re-checking the layout goes RED here (opus r1/S2)
-    from pythscribe._pin import COMPILER_VERSION
-
-    assert f'LAYOUT_VERSION = "pyths-{COMPILER_VERSION}-list-v1"' in shim
+    # LAYOUT_VERSION is the LIST layout's compat IDENTITY -- it names the pin at which the list
+    # layout LAST CHANGED (a compat key), NOT the current compiler version: arrays changed in 0.2.5
+    # (-> "...-array-v2") but the list layout is unchanged since 0.2.4, so it stays "pyths-0.2.4-list-v1".
+    # Auto-bumping it with the compiler pin would falsely declare an incompatible layout (a 0.2.5 runtime
+    # would reject a byte-identical 0.2.4 artifact). The ONE authority is the compiler's abi.rs
+    # LIST_LAYOUT_VERSION; the shim MUST mirror it exactly (the runtime refuses a mismatch at load), so
+    # bind to that here -- a real layout change goes RED, a mere pin bump does not (opus r1/S2).
+    _abi_rs = (REPO / "crates" / "pyths_codegen_wasm" / "src" / "abi.rs").read_text(encoding="utf-8")
+    _list_layout = re.search(r'LIST_LAYOUT_VERSION: &str = "([^"]+)"', _abi_rs).group(1)
+    assert f'LAYOUT_VERSION = "{_list_layout}"' in shim, \
+        f"shim LAYOUT_VERSION must mirror the compiler's abi.rs LIST_LAYOUT_VERSION ({_list_layout!r})"
     assert "dv.setInt32(p, n, true)" in shim and "dv.setInt32(p + 4, n, true)" in shim  # the header the glue writes
     assert "new BigInt64Array(ex.memory.buffer, p + HEADER_BYTES, n)" in shim  # i64 elements, platform (LE) order
     # #484 (SYMMETRIC marshalling): the glue now DOES copy mutable list params
