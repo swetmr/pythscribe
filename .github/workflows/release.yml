@@ -729,6 +729,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install PyYAML (require_ci_success.py binding_problems parses ci.yml)
+        run: python -m pip install --quiet pyyaml
       - name: Guard -- an exact vX.Y.Z tag ref == pyproject == pin (B1)
         run: |
           set -eu
