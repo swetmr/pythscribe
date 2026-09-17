@@ -26,10 +26,12 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Callable
@@ -83,7 +85,16 @@ def pack_name(pkg: str, version: str) -> str:
 # ----------------------------------------------------------------------------- fetchers
 
 
-def registry_fetcher(registry: str | None) -> Fetcher:
+# The just-published version can 404 (`ETARGET`/`notarget`) here for a short window even after
+# npm-publish's propagation wait: this verifier is a SEPARATE job on a cold runner and resolves the
+# registry independently, so it can query before the packument/version propagates to this path. Retry
+# ONLY that propagation-lag signature (a real missing/foreign package still fails fast on its own
+# merits). This is the whole reason identity is a retryable job of its own -- so a lag is absorbed, not
+# reported as a byte failure. Matches scripts/testpypi_validate.py's Simple-API retry. (2026-09-18)
+_NPM_PROPAGATION_LAG = re.compile(r"(?i)ETARGET|notarget|no matching version|E404|404 Not Found")
+
+
+def registry_fetcher(registry: str | None, *, attempts: int = 12, backoff_s: float = 10.0) -> Fetcher:
     def fetch(pkg: str, version: str, dest: Path) -> Path:
         dest.mkdir(parents=True, exist_ok=True)
         npm = shutil.which("npm") or shutil.which("npm.cmd")
@@ -93,6 +104,15 @@ def registry_fetcher(registry: str | None) -> Fetcher:
         if registry:
             args += ["--registry", registry]
         r = subprocess.run(args, capture_output=True, text=True, check=False, shell=(os.name == "nt"))
+        for i in range(1, attempts):
+            if r.returncode == 0:
+                break
+            blob = (r.stderr or "") + (r.stdout or "")
+            if not _NPM_PROPAGATION_LAG.search(blob):
+                break  # a genuine failure (auth, network, real absence) -- fail fast, do not spin
+            print(f"npm pack {pkg}@{version}: not yet on the registry (propagation lag); retry {i}/{attempts - 1}", file=sys.stderr)
+            time.sleep(backoff_s)
+            r = subprocess.run(args, capture_output=True, text=True, check=False, shell=(os.name == "nt"))
         if r.returncode != 0:
             raise IdentityError(f"npm pack {pkg}@{version} failed: {(r.stderr or r.stdout).strip()[-800:]}")
         out = dest / pack_name(pkg, version)

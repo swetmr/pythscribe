@@ -209,18 +209,55 @@ class GitHubActionsAPI:
                 return arts
             page += 1
 
-    def read_artifact_member(self, artifact_id: int, member: str) -> bytes:
-        """Download the run's immutable artifact zip and return one member's bytes (B4 (d))."""
+    def read_artifact_member(self, artifact_id: int, member: str, *, attempts: int = 5, backoff_s: float = 3.0) -> bytes:
+        """Download the run's immutable artifact zip and return one member's bytes (B4 (d)).
+
+        The `/zip` endpoint 302-redirects to a short-lived storage (Azure blob) SAS URL that authenticates
+        FROM THE URL itself. Auto-following with urlopen carries the GitHub `Authorization: Bearer` header
+        to that host, which the storage backend rejects -> HTTP 401 "Server failed to authenticate the
+        request" (the v0.2.6 first-PyPI promotion caught this; the path had never run). So do NOT
+        auto-follow: resolve the redirect via the GitHub API (authed), then fetch the signed location with
+        NO auth header, retrying transient storage 401/5xx (SAS timing / blob blips). (2026-09-18)
+        """
         import io
+        import time
         import zipfile
+
+        class _NoFollow(urllib.request.HTTPRedirectHandler):
+            # surface the 3xx as an HTTPError so we fetch the signed URL ourselves, WITHOUT the Bearer
+            def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+                return None
+
         url = f"{self.api_url}/repos/{self.repo}/actions/artifacts/{artifact_id}/zip"
         req = urllib.request.Request(url, headers={
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             **({"Authorization": f"Bearer {self.token}"} if self.token else {}),
         })
-        with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310 -- fixed https API host (follows the signed redirect)
-            blob = r.read()
+        signed: str | None = None
+        try:
+            with urllib.request.build_opener(_NoFollow).open(req, timeout=120) as r:  # noqa: S310
+                blob = r.read()  # rare: a backend that returns the zip directly (no redirect)
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308) and e.headers.get("Location"):
+                signed = e.headers["Location"]
+            else:
+                raise
+        if signed is not None:
+            last: urllib.error.HTTPError | None = None
+            for i in range(attempts):
+                try:
+                    with urllib.request.urlopen(signed, timeout=120) as r2:  # NO auth header to storage  # noqa: S310
+                        blob = r2.read()
+                    break
+                except urllib.error.HTTPError as e:
+                    last = e
+                    if e.code not in (401, 408, 429, 500, 502, 503, 504) or i == attempts - 1:
+                        raise
+                    time.sleep(backoff_s)
+            else:  # pragma: no cover -- loop always breaks or raises
+                if last is not None:
+                    raise last
         with zipfile.ZipFile(io.BytesIO(blob)) as z:
             return z.read(member)
 
