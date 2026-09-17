@@ -137,18 +137,14 @@ jobs:
       # SCRUBBED tree before any push, so this job and the local release gate cannot drift.
       # (v0.2.5 lesson: the pip suite lived only here, a job that had never run, so it gated nothing.)
       # binaryen `wasm-opt` is a REQUIRED oracle of the M3 optimizer gates (F2-F6/F10 fail under
-      # REQUIRE_ORACLE without it). It was pulled in v0.2.5 because (a) the apt build rejected the
-      # compiler's exported mutable globals ("Exported global cannot be mutable") and (b) a present
-      # wasm-opt turned the committed-artifact rebuild into an optimized, drifted one. Both are closed:
-      # every wasm-opt call (optimize.rs + optimizer.py, one shared argv) passes
-      # `--enable-mutable-globals`, and the gate's artifact rebuild runs with the optimizer OFF via the
-      # `.no-wasm-opt` sentinel (committed artifacts stay unoptimized + byte-identical).
-      - name: Install binaryen (wasm-opt) — the M3 optimizer oracle
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y binaryen
-          wasm-opt --version
-
+      # REQUIRE_ORACLE without it). It is NOT installed here via apt: pip_suite_gate.sh provisions the
+      # PINNED tarball (version_123) into $VENV/binaryen itself, so every environment (local + CI) runs
+      # the SAME binaryen version and the wasm-opt lives in a per-venv dir the absent-optimizer tests can
+      # strip from PATH. An apt install (a) is a DIFFERENT, drifting version (CI's was 108 vs the pinned
+      # 123) and (b) lands in /usr/bin, unstrippable — which broke the version-sensitive M2/M3 tests.
+      # (The two original reasons apt was ever tried are both closed independently: every wasm-opt call
+      # passes `--enable-mutable-globals` via one shared argv, and the committed-artifact rebuild runs
+      # with the optimizer OFF via the `.no-wasm-opt` sentinel, so artifacts stay unoptimized + identical.)
       - name: pip gate (pytest tests/pythscribe) — one authority, shared with release.sh Phase 6
         env:
           PIP_GATE_PYTHON: python
@@ -1185,7 +1181,10 @@ jobs:
           # A: the published scaffolder, run from the locally-packed tarball (== M6.2's bytes)
           ( cd packages/create-pyths-app && npm pack --pack-destination "$ROOT" >/dev/null )
           TGZ="$(ls "$ROOT"/create-pyths-app-*.tgz)"
-          ( cd "$ROOT" && npx -y "$TGZ" app >/dev/null )
+          # `npx -y <tarball> app` execs the tarball itself: npx can't infer the bin NAME from a file
+          # spec (npm-package-arg parses a tarball path as an un-named `file` spec). Be explicit --
+          # install the package FROM the tarball and run its named bin `create-pyths-app` with arg `app`.
+          ( cd "$ROOT" && npx -y --package="$TGZ" create-pyths-app app >/dev/null )
           mv "$ROOT/app" "$ROOT/A"
           # B: pyths new (base wheel, system Node)
           ( cd "$ROOT" && pyths new app >/dev/null ) ; mv "$ROOT/app" "$ROOT/B"

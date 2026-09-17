@@ -303,8 +303,13 @@ def test_h1_control_inventory_binding_and_the_independent_closure(wheel, tmp_pat
             j = json.loads(b); del j["targets"][t]; return json.dumps(j).encode()
         problems = _red(_mutate(wheel, tmp_path / f"b_{triple}", _replace(L + "third_party/inventory.json", drop_one)))
         assert any(f"no crates for target {triple}" in p for p in problems), (vl.wheel_tag(wheel), triple, problems)
-    # a foreign platform tag is not a release target
-    foreign = _mutate(wheel, tmp_path / "c", lambda n, b: b, name=wheel.name.replace("-any.whl", "-linux_armv7l.whl").replace("-win_amd64.whl", "-linux_armv7l.whl"))
+    # a foreign platform tag is not a release target. Rewrite the platform tag (the last dash-segment
+    # before .whl) to a genuinely-foreign one REGARDLESS of what this wheel's own tag is -- a literal
+    # `-any.whl`/`-win_amd64.whl` replace no-ops on the manylinux wheel the pip-suite gate builds
+    # (pythscribe-*-manylinux_2_28_x86_64.whl), leaving a valid release tag so the control never fires.
+    import re as _re
+    foreign = _mutate(wheel, tmp_path / "c", lambda n, b: b,
+                      name=_re.sub(r"-[^-]+\.whl$", "-linux_armv7l.whl", wheel.name))
     assert any("not a release target" in p for p in _red(foreign))
     # SELF-CONSISTENT tampering: clap_builder removed from inventory.json + the .md (its notice is shared) ->
     # GREEN without the independent source (documented) and RED with --check-closure

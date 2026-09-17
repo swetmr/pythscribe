@@ -156,9 +156,20 @@ def _slider_value(frame) -> str:
 
 
 def _read_count(page):
-    el = page.query_selector('[data-testid="server-rerun-count"]')
+    # WAIT for the marker, never an instantaneous query_selector: the counter is a SIDEBAR element
+    # (st.sidebar.html) that arrives on a separate Streamlit websocket delta from the main-area custom
+    # component _wait_cb_ready() synchronises on, so the instant cb-result is ready the sidebar delta may
+    # not have rendered yet -- a race the (faster/slower) CI runner loses, RED-ing with "marker missing"
+    # though the marker renders unconditionally on the first script run. text_content reads the value
+    # regardless of momentary visibility.
+    from playwright.sync_api import TimeoutError as _PWTimeout
+
+    try:
+        el = page.wait_for_selector('[data-testid="server-rerun-count"]', state="attached", timeout=30_000)
+    except _PWTimeout:
+        el = None
     assert el is not None, "server-rerun-count marker missing"
-    return int(el.inner_text())
+    return int((el.text_content() or "").strip())
 
 
 def _rerun_frame_counter(page):

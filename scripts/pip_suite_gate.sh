@@ -43,21 +43,22 @@ BINARYEN_VERSION="${PIP_GATE_BINARYEN_VERSION:-version_123}"
 banner() { echo; echo "-------------------- pip-gate: $* --------------------"; }
 
 # A binaryen provisioned by a prior full run lives beside the venv; put it on PATH in BOTH modes
-# (FAST reuses it exactly like the venv). A system wasm-opt earlier on PATH is NOT shadowed: this
-# is appended, so the ambient one wins when present.
+# (FAST reuses it exactly like the venv), PREPENDED so the pinned build wins over any ambient wasm-opt.
 # NOTE: convert to a unix-style path first -- a Windows `C:/...` PATH entry contains a colon that
 # Git Bash's PATH parser treats as the `:` separator, silently corrupting the entry (cygpath is a
 # no-op / absent on Linux CI, where paths have no drive-letter colon).
 _pathify() { if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
-[ -d "$VENV/binaryen/bin" ] && export PATH="$PATH:$(_pathify "$VENV/binaryen/bin")"
+# PREPEND (not append): the PINNED wasm-opt must WIN over any ambient one so every environment runs
+# the SAME binaryen version -- the M2/M3 optimizer tests are version-sensitive (id + behavior), and an
+# apt `/usr/bin/wasm-opt` (a) is a DIFFERENT version and (b) sits in a system dir the absent-optimizer
+# tests cannot strip from PATH (they only remove $VENV/binaryen), so it breaks BOTH present and absent
+# expectations. Keeping wasm-opt exclusively under $VENV/binaryen keeps it version-pinned AND strippable.
+[ -d "$VENV/binaryen/bin" ] && export PATH="$(_pathify "$VENV/binaryen/bin"):$PATH"
 
 provision_binaryen() {
-  # 1) Linux with a non-interactive sudo: the distro package (the flag `--enable-mutable-globals`
-  #    makes even the older apt build accept the compiler's exported mutable globals).
-  if [ "$(uname -s)" = "Linux" ] && command -v apt-get >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    sudo -n apt-get install -y binaryen && return 0
-  fi
-  # 2) Otherwise the pinned GitHub release tarball for this host, into $VENV/binaryen.
+  # ALWAYS the pinned GitHub release tarball into $VENV/binaryen -- NEVER apt (`/usr/bin`): apt's
+  # version drifts (CI's is 108 vs the pinned 123) AND /usr/bin is unstrippable by the absent-optimizer
+  # tests. One pinned, strippable, per-venv wasm-opt everywhere (local + CI).
   local os arch tag
   case "$(uname -s)" in
     Linux)  os=linux ;;
@@ -78,7 +79,7 @@ provision_binaryen() {
   mkdir -p "$VENV/binaryen"
   tar -xzf "$VENV/binaryen.tar.gz" -C "$VENV/binaryen" --strip-components=1
   rm -f "$VENV/binaryen.tar.gz"
-  export PATH="$PATH:$(_pathify "$VENV/binaryen/bin")"
+  export PATH="$(_pathify "$VENV/binaryen/bin"):$PATH"
 }
 
 banner "compiler (cargo build --release --bin pyths)"
@@ -114,9 +115,13 @@ else
     "$VPY" -m playwright install chromium
   fi
 
-  banner "binaryen wasm-opt (M3 optimizer oracle)"
-  if command -v wasm-opt >/dev/null 2>&1; then
-    echo "[binaryen] using $(command -v wasm-opt): $(wasm-opt --version)"
+  banner "binaryen wasm-opt (M3 optimizer oracle) — pinned $BINARYEN_VERSION, never ambient/apt"
+  # Always resolve to the PINNED build under $VENV/binaryen (prepended to PATH above). Reuse it if a
+  # prior full run already fetched it into this venv; otherwise fetch. NEVER fall through to an ambient
+  # system wasm-opt (e.g. an apt `/usr/bin/wasm-opt`): it is the wrong version AND unstrippable, which
+  # is precisely what breaks the version-sensitive M2/M3 tests on CI. Pinning here is the whole point.
+  if [ -x "$VENV/binaryen/bin/wasm-opt" ] || [ -x "$VENV/binaryen/bin/wasm-opt.exe" ]; then
+    echo "[binaryen] reusing pinned $VENV/binaryen/bin/wasm-opt ($("$VENV/binaryen/bin/wasm-opt" --version 2>/dev/null || echo '?'))"
   else
     provision_binaryen
   fi

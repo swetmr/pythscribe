@@ -286,7 +286,13 @@ def _bind_pip(tokens: list[str], wheel: Path) -> tuple[list[str], set[str]]:
 
 def run_spots(blocks: list[Block], *, python: Path, wheel: Path | None, node: bool, pip_args: list[str]) -> Report:
     rep = Report()
-    scripts = Path(python).resolve().parent
+    # The console-scripts dir is the venv's OWN bin/, i.e. the directory holding the `--python`
+    # executable AS GIVEN. Do NOT .resolve() it: on Linux `python -m venv` SYMLINKS the interpreter to
+    # the base install, so .resolve() follows the link to the base bin/ (e.g. the hostedtoolcache) where
+    # the venv's `pyths` console script does not exist -- the M6 acceptance SPOT then RED-flags a `pyths`
+    # line that is actually installed. (Windows venvs copy python.exe, hiding this.) .absolute() makes a
+    # relative --python absolute without following the executable's own symlink.
+    scripts = Path(python).absolute().parent
     declared = declared_extras_wheel(wheel) if wheel is not None else set()
     ws = Path(tempfile.mkdtemp(prefix="readme-spots-"))
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHSCRIBE_PYTHS", "PYTHSCRIBE_NO_JIT", "PYTHSCRIBE_MODE")}

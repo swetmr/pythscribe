@@ -149,8 +149,17 @@ def test_d2_host_libm_witness_is_within_one_ulp(demo_artifact, demo_kernels, tmp
     (d / "__pure__.glue.js").write_text("const imports = {};\n", encoding="utf-8")
     pure = SimpleNamespace(dir=d, function="__pure__")
     assert not artifact_imports_host_math(pure)
+    # Feed a bit pattern GUARANTEED to differ from CPython (py nudged by exactly one ULP) rather than
+    # the real witness bits: on the Linux CI runner V8 and glibc's pow agree bit-for-bit, so r["bits"]
+    # == float_bits(py) there and assert_bits_equal_up_to_host_libm() returns early (line "if bits ==
+    # float_bits(py): return") WITHOUT reaching the "NO host imports" guard -- the control then never
+    # trips and `pytest.raises` fails "DID NOT RAISE". A deliberately-divergent input makes the control
+    # exercise the host-import guard on every platform (r9/N9-2 intent, made cross-platform).
+    import struct as _struct
+    ulp_off_bits = _struct.pack("<q", _struct.unpack("<q", _struct.pack("<d", py))[0] + 1).hex()
+    assert ulp_off_bits != float_bits(py)  # the divergence the control depends on, made unconditional
     with pytest.raises(AssertionError, match="NO host imports"):
-        assert_bits_equal_up_to_host_libm(pure, r["bits"], py, (xs, t))
+        assert_bits_equal_up_to_host_libm(pure, ulp_off_bits, py, (xs, t))
     # and a decoy that only MENTIONS the import object in a comment is not an import (r9/N9-6)
     (d / "__pure__.glue.js").write_text("// imports = { math: { pow: Math.pow } } was removed\nconst imports = {};\n", encoding="utf-8")
     assert not artifact_imports_host_math(pure)

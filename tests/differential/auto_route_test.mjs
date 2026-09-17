@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { test } from "node:test";
+import { test, describe, before } from "node:test";
 import assert from "node:assert/strict";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -101,12 +101,27 @@ test("Glue module loads WASM and wraps with type marshalling", () => {
         `glue lacks i64 type marshalling: ${glue}`);
 });
 
-// Set up the test stubs once, before any test imports. Both end-to-end
-// tests share these stubs because Node caches dynamic imports by URL.
-const reactStubPath = path.join(__dirname, ".scratch_react_stub.mjs");
-const runtimeReactStubPath = path.join(__dirname, ".scratch_runtime_react_stub.mjs");
-await fs.mkdir(path.dirname(reactStubPath), { recursive: true });
-writeFileSync(reactStubPath, `
+// The two end-to-end tests need the compiled module rewired to file:// URLs
+// and dynamically imported — async setup. It lives in a `before()` hook INSIDE
+// a describe block, NOT at the top level. A top-level `await` here is a trap:
+// node:test drains the synchronously-registered tests (1-6) and ENDS the file
+// test while module evaluation is still suspended on the await, so (a) the
+// late `await import(...)` surfaces as "a resource generated asynchronous
+// activity after the test ended" (a spurious ERR_MODULE_NOT_FOUND), and worse
+// (b) these two tests, registered only AFTER the await, are never even seen by
+// the runner. Keeping all `test()`/`describe()` registration synchronous and
+// the async work in `before()` binds the setup to the runner's lifecycle.
+describe("end-to-end (JS → WASM call path)", () => {
+    let fixtureMod;
+    let reactStub;
+
+    before(async () => {
+        // Set up the test stubs once. Both end-to-end tests share these
+        // stubs because Node caches dynamic imports by URL.
+        const reactStubPath = path.join(__dirname, ".scratch_react_stub.mjs");
+        const runtimeReactStubPath = path.join(__dirname, ".scratch_runtime_react_stub.mjs");
+        await fs.mkdir(path.dirname(reactStubPath), { recursive: true });
+        writeFileSync(reactStubPath, `
 let __captured = [];
 export function createElement(tag, props, ...children) {
     __captured.push({ tag, children });
@@ -116,69 +131,76 @@ export function __getCaptured() { return __captured; }
 export function __resetCaptured() { __captured = []; }
 export const Fragment = null;
 `);
-writeFileSync(runtimeReactStubPath,
-    `export function component(fn) { return fn; }\n`);
+        writeFileSync(runtimeReactStubPath,
+            `export function component(fn) { return fn; }\n`);
 
-const reactUrl = pathToFileURL(reactStubPath).href;
-const runtimeReactUrl = pathToFileURL(runtimeReactStubPath).href;
-// A4: format_result's plain (no-format-spec) f-string interpolation now
-// routes through pyStr (see crates/pyths_codegen_js/src/emit.rs's
-// FStringPart::Expr case), which requires importing pyStr from bare
-// "pyths-runtime" — a specifier this fixture didn't need pre-A4. Rewire
-// it the same way tests/differential/run.mjs does, so this test isn't
-// coupled to whether the fixture happens to need runtime helpers.
-const runtimeUrl = pathToFileURL(path.resolve(REPO_ROOT, "runtime", "src", "index.js")).href;
+        const reactUrl = pathToFileURL(reactStubPath).href;
+        const runtimeReactUrl = pathToFileURL(runtimeReactStubPath).href;
+        // A4: format_result's plain (no-format-spec) f-string interpolation now
+        // routes through pyStr (see crates/pyths_codegen_js/src/emit.rs's
+        // FStringPart::Expr case), which requires importing pyStr from bare
+        // "pyths-runtime" — a specifier this fixture didn't need pre-A4. Rewire
+        // it the same way tests/differential/run.mjs does, so this test isn't
+        // coupled to whether the fixture happens to need runtime helpers.
+        const runtimeUrl = pathToFileURL(path.resolve(REPO_ROOT, "runtime", "src", "index.js")).href;
 
-// Rewire the fixture's bare specifiers to absolute file:// URLs so
-// Node's loader can resolve them without a package.json or import map.
-// This exercises the same compiled .js the browser sees — only the
-// import targets change.
-const orig = readFileSync(FIXTURE_JS, "utf8");
-const rewired = orig
-    .replace(/from\s+["']react["']/g,                `from "${reactUrl}"`)
-    .replace(/from\s+["']pyths-runtime\/react["']/g, `from "${runtimeReactUrl}"`)
-    .replace(/from\s+["']pyths-runtime["']/g,        `from "${runtimeUrl}"`);
-const mjsPath = path.join(__dirname, ".scratch_auto_route.run.mjs");
-writeFileSync(mjsPath, rewired);
+        // Rewire the fixture's bare specifiers to absolute file:// URLs so
+        // Node's loader can resolve them without a package.json or import map.
+        // This exercises the same compiled .js the browser sees — only the
+        // import targets change.
+        const orig = readFileSync(FIXTURE_JS, "utf8");
+        const rewired = orig
+            .replace(/from\s+["']react["']/g,                `from "${reactUrl}"`)
+            .replace(/from\s+["']pyths-runtime\/react["']/g, `from "${runtimeReactUrl}"`)
+            .replace(/from\s+["']pyths-runtime["']/g,        `from "${runtimeUrl}"`);
+        const mjsPath = path.join(__dirname, ".scratch_auto_route.run.mjs");
+        writeFileSync(mjsPath, rewired);
 
-// #358: the glue now embeds the exact JS twins of the WASM functions, which
-// import arbitrary-precision arithmetic helpers (pyAdd/pyMod/pyMul) from bare
-// "pyths-runtime". The rewired main module imports the glue by its on-disk
-// relative path, so rewire the glue's specifier in place too — otherwise
-// Node cannot resolve the twin's runtime import.
-writeFileSync(FIXTURE_GLUE, readFileSync(FIXTURE_GLUE, "utf8")
-    .replace(/from\s+["']pyths-runtime["']/g, `from "${runtimeUrl}"`));
+        // #358: the glue now embeds the exact JS twins of the WASM functions,
+        // which import arbitrary-precision arithmetic helpers (pyAdd/pyMod/pyMul)
+        // from bare "pyths-runtime" AND `component` from the "pyths-runtime/react"
+        // subpath. The rewired main module imports the glue by its on-disk
+        // relative path, so rewire BOTH specifiers in the glue in place too —
+        // otherwise Node cannot resolve the twin's runtime imports. Rewrite the
+        // /react SUBPATH before the bare root (the bare-root regex requires a
+        // closing quote right after `pyths-runtime`, so order is not strictly
+        // required, but mirror the main-module rewrite above for clarity).
+        writeFileSync(FIXTURE_GLUE, readFileSync(FIXTURE_GLUE, "utf8")
+            .replace(/from\s+["']pyths-runtime\/react["']/g, `from "${runtimeReactUrl}"`)
+            .replace(/from\s+["']pyths-runtime["']/g,        `from "${runtimeUrl}"`));
 
-const fixtureMod = await import(pathToFileURL(mjsPath).href);
-const reactStub = await import(reactUrl);
+        fixtureMod = await import(pathToFileURL(mjsPath).href);
+        reactStub = await import(reactUrl);
+    });
 
-test("end-to-end: importing the JS module calls WASM and returns correct results", () => {
-    // fibonacci(20): with the loop semantics in the fixture
-    // (a starts at 0, b at 1; runs n iterations), a = fib(n) for the
-    // standard 0,1,1,2,3,5,... sequence — fib(20) = 6765.
-    assert.equal(fixtureMod.fibonacci(20), 6765, "fibonacci(20) via WASM");
+    test("importing the JS module calls WASM and returns correct results", () => {
+        // fibonacci(20): with the loop semantics in the fixture
+        // (a starts at 0, b at 1; runs n iterations), a = fib(n) for the
+        // standard 0,1,1,2,3,5,... sequence — fib(20) = 6765.
+        assert.equal(fixtureMod.fibonacci(20), 6765, "fibonacci(20) via WASM");
 
-    // prime_count(100): there are 25 primes less than 100.
-    assert.equal(fixtureMod.prime_count(100), 25, "prime_count(100) via WASM");
+        // prime_count(100): there are 25 primes less than 100.
+        assert.equal(fixtureMod.prime_count(100), 25, "prime_count(100) via WASM");
 
-    // Round-trip more values to confirm the WASM module isn't returning
-    // a cached result.
-    assert.equal(fixtureMod.fibonacci(10), 55, "fibonacci(10)");
-    assert.equal(fixtureMod.fibonacci(0), 0,  "fibonacci(0)");
-    assert.equal(fixtureMod.prime_count(20), 8, "prime_count(20)"); // 2,3,5,7,11,13,17,19
-});
+        // Round-trip more values to confirm the WASM module isn't returning
+        // a cached result.
+        assert.equal(fixtureMod.fibonacci(10), 55, "fibonacci(10)");
+        assert.equal(fixtureMod.fibonacci(0), 0,  "fibonacci(0)");
+        assert.equal(fixtureMod.prime_count(20), 8, "prime_count(20)"); // 2,3,5,7,11,13,17,19
+    });
 
-test("end-to-end: Greeting component calls into WASM at render time", () => {
-    // Greeting() invokes fibonacci(20) and prime_count(100) in its
-    // body and feeds the results into format_result (a JS function),
-    // proving the JS→WASM call path works inside React-style render
-    // code, not just on standalone exports.
-    reactStub.__resetCaptured();
-    const tree = fixtureMod.Greeting();
-    const flat = JSON.stringify(reactStub.__getCaptured());
-    assert.ok(flat.includes("fib(20) = 6765"),
-        "Greeting should embed WASM-computed fib(20)=6765: " + flat);
-    assert.ok(flat.includes("primes < 100 = 25"),
-        "Greeting should embed WASM-computed primes<100=25: " + flat);
-    assert.equal(tree.tag, "div", "outer createElement is div");
+    test("Greeting component calls into WASM at render time", () => {
+        // Greeting() invokes fibonacci(20) and prime_count(100) in its
+        // body and feeds the results into format_result (a JS function),
+        // proving the JS→WASM call path works inside React-style render
+        // code, not just on standalone exports.
+        reactStub.__resetCaptured();
+        const tree = fixtureMod.Greeting();
+        const flat = JSON.stringify(reactStub.__getCaptured());
+        assert.ok(flat.includes("fib(20) = 6765"),
+            "Greeting should embed WASM-computed fib(20)=6765: " + flat);
+        assert.ok(flat.includes("primes < 100 = 25"),
+            "Greeting should embed WASM-computed primes<100=25: " + flat);
+        assert.equal(tree.tag, "div", "outer createElement is div");
+    });
 });
