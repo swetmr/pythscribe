@@ -122,6 +122,17 @@ jobs:
       - name: Build the pinned compiler
         run: cargo build --release --bin pyths
 
+      # M5 (third-party closure) runs `cargo metadata --offline --filter-platform <triple>` for
+      # EACH of the 5 release targets; the windows/macos-only crates (e.g. anstyle-wincon) are not
+      # in the Linux build's registry cache, so pre-fetch every target's graph while online. M3
+      # (wasm-opt gates) needs binaryen's `wasm-opt` discoverable on PATH.
+      - name: Cross-target crate cache + binaryen wasm-opt
+        run: |
+          cargo fetch --target aarch64-apple-darwin --target aarch64-unknown-linux-gnu \
+                      --target x86_64-apple-darwin --target x86_64-pc-windows-msvc \
+                      --target x86_64-unknown-linux-gnu
+          sudo apt-get update && sudo apt-get install -y binaryen
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -130,10 +141,12 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install pythscribe + the Gradio component + the browser
+      # gradio_wasmfunction is VENDORED into the pythscribe wheel (M1.5 §E) -- installing it as a
+      # SEPARATE editable distribution makes test_p3 (only-the-vendored-one-resolves) RED, so do NOT.
+      # `build` + `setuptools` are needed by the M1 sdist gate (3.14 venvs no longer ship setuptools).
+      - name: Install pythscribe + the browser
         run: |
-          python -m pip install -e ".[gradio,test]" build
-          python -m pip install -e pythscribe/gradio/wasm_function
+          python -m pip install -e ".[gradio,test]" build setuptools
           python -m playwright install --with-deps chromium
           npm ci --prefix pythscribe/gradio/wasm_function/frontend
 
@@ -145,14 +158,23 @@ jobs:
           git status --porcelain -- examples/gradio-wasm/__pythscribe__ examples/gradio-image-preprocess/__pythscribe__ examples/wasm-use-cases/__pythscribe__
           git diff --exit-code -- examples/gradio-wasm/__pythscribe__ examples/gradio-image-preprocess/__pythscribe__ examples/wasm-use-cases/__pythscribe__
 
+      # M7 scaffolder-payload gate (test_m7_3) requires dist/scaffolder-payload/ to exist.
+      - name: Prepare release payloads (M7 scaffolder-payload gate)
+        run: python scripts/prepare_release_payloads.py
+
       - name: M0+M1 gates against the COMMITTED component bundle (a skipped prerequisite is a FAILURE)
         env:
           PYTHSCRIBE_REQUIRE_ORACLE: "1"
           # wheel-M0 §D4 (embedded identity): `pyths` was built from THIS checkout above, so the
           # D4 tests are a REAL gate here -- PYTHSCRIBE_REQUIRE_EMBED=1 makes an unset/invalid
-          # binary a FAILURE (elsewhere, with no binary built, D4 is a plain skip).
-          PYTHSCRIBE_EMBED_BINARY: target/release/pyths
+          # binary a FAILURE (elsewhere, with no binary built, D4 is a plain skip). Absolute so a
+          # test running from a tmp CWD still resolves it.
+          PYTHSCRIBE_EMBED_BINARY: ${{ github.workspace }}/target/release/pyths
           PYTHSCRIBE_REQUIRE_EMBED: "1"
+          # The compile-on-call / build path resolves the compiler via find_pyths() -> PYTHSCRIBE_PYTHS;
+          # without it only the PATH console-script (launcher) is found, which is rejected (recursion
+          # guard) -> BuildError. This is an editable install (no bundled _bin), so it MUST be set.
+          PYTHSCRIBE_PYTHS: ${{ github.workspace }}/target/release/pyths
         run: python -m pytest tests/pythscribe -v -ra -p no:cacheprovider
 
       - name: Component frontend still builds from source (after the gates, so E2E used the committed bundle)
