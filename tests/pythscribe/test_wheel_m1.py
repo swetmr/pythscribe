@@ -707,6 +707,49 @@ def test_i4_passthrough_on_the_real_local_wheel(dist, dev_binary, tmp_path):
     assert any("!= sha256(B_t)" in p for p in probs), probs
 
 
+# ----------------------------------------------------------------------------- WF: the release-only tool-corroboration parsers
+# `auditwheel show` / `otool -l` run only in release.yml's cibuildwheel REPAIR step (auditwheel/otool
+# on PATH), never in ci.yml or the pip gate -- so a parser regression there ships green and blows up
+# only at tag time (it did, twice, in the v0.2.5 cut). These pin BOTH parsers against the exact real
+# tool output, each with the paired control that made the release RED.
+def test_wf_auditwheel_policy_regex_matches_wrapped_output():
+    """`auditwheel show` TEXTWRAPS its report, so the tag phrase arrives with a newline mid-sentence
+    ('... is consistent with\\nthe following platform tag: \"manylinux_2_28_x86_64\".'). The policy
+    regex must match across the wrap -- a literal-space pattern silently misses it and the caller then
+    reports the bogus 'did not report a platform tag (exit 0)', which is exactly what failed the
+    manylinux wheel jobs."""
+    wrapped = (
+        'pythscribe-0.2.5-py3-none-manylinux_2_28_x86_64.whl is consistent with\n'
+        'the following platform tag: "manylinux_2_28_x86_64".\n\n'
+        'The wheel references external versioned symbols in these\n'
+        'system-provided shared libraries: libc.so.6 with versions\n'
+    )
+    m = pt._AUDITWHEEL_POLICY.search(wrapped)
+    assert m and m.group(1) == "manylinux_2_28_x86_64" and (int(m.group(2)), int(m.group(3))) == (2, 28), wrapped
+    # single-line form (unwrapped) still matches -- the fix must not narrow the accepted shape
+    assert pt._AUDITWHEEL_POLICY.search('consistent with the following platform tag: manylinux_2_28_aarch64')
+
+
+def test_wf_otool_deployment_target_excludes_source_and_dylib_versions():
+    """`otool -l` carries several `version N.N.N` lines; only the deployment target (LC_BUILD_VERSION
+    `minos`, or the legacy LC_VERSION_MIN_MACOSX `version`) is the floor. A keyword-only scan also
+    grabs LC_SOURCE_VERSION (e.g. `version 1267.0.0`) and dylib current/compat versions, whose max
+    false-trips the floor -- the exact macOS wheel-job failure. Context (the enclosing `cmd LC_*`)
+    disambiguates."""
+    out = (
+        "      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 11.0\n      sdk 14.0\n"
+        "      cmd LC_SOURCE_VERSION\n  cmdsize 16\n  version 1267.0.0\n"
+        "      cmd LC_LOAD_DYLIB\n   current version 1345.100.2\ncompatibility version 1.0.0\n"
+    )
+    assert pt.otool_deployment_targets(out) == [(11, 0, 0)]  # ONLY the minos; source/dylib excluded
+    # legacy LC_VERSION_MIN_MACOSX arm, with a source-version decoy that must NOT be picked up
+    legacy = "      cmd LC_VERSION_MIN_MACOSX\n  version 10.15\n      cmd LC_SOURCE_VERSION\n  version 900.1.2\n"
+    assert pt.otool_deployment_targets(legacy) == [(10, 15, 0)]
+    # paired control: the pre-fix behaviour (any `minos|version` line) WOULD have returned the 1267/900
+    # source versions -- confirm the raw line is present so the test is discriminating, not vacuous
+    assert "version 1267.0.0" in out and "version 900.1.2" in legacy
+
+
 # ----------------------------------------------------------------------------- E4 verify_wheel_set / H2 verify_wheel_clean
 
 

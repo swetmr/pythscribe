@@ -45,8 +45,35 @@ from pythscribe.build._native import (  # noqa: E402
 
 BINARY_NAMES = ("pythscribe/_bin/pyths", "pythscribe/_bin/pyths.exe")
 _WHEEL = re.compile(r"^(?P<name>[^-]+)-(?P<ver>[^-]+)-(?P<py>[^-]+)-(?P<abi>[^-]+)-(?P<plat>[^-]+)\.whl$")
-_AUDITWHEEL_POLICY = re.compile(r'consistent with the following platform tag:\s*"?(manylinux_(\d+)_(\d+)_([a-z0-9_]+))"?')
-_OTOOL_MINOS = re.compile(r"^\s*(?:minos|version)\s+(\d+)\.(\d+)(?:\.(\d+))?\s*$", re.M)
+# `\s+` between EVERY word, not literal spaces: `auditwheel show` textwraps its report to a fixed
+# width, so the phrase arrives as "... is consistent with\nthe following platform tag: \"manylinux_...\""
+# with a NEWLINE mid-phrase. A literal-space pattern silently fails to match a wrapped line and the
+# caller then reports the bogus "did not report a platform tag (exit 0)" -- \s+ matches spaces and the wrap.
+_AUDITWHEEL_POLICY = re.compile(r'consistent\s+with\s+the\s+following\s+platform\s+tag:\s*"?(manylinux_(\d+)_(\d+)_([a-z0-9_]+))"?')
+_OTOOL_CMD = re.compile(r"^\s*cmd\s+(LC_\w+)\s*$")
+_OTOOL_VER = re.compile(r"^\s*(minos|version)\s+(\d+)\.(\d+)(?:\.(\d+))?\s*$")
+
+
+def otool_deployment_targets(otool_l: str) -> list[tuple[int, int, int]]:
+    """The macOS DEPLOYMENT-TARGET versions in `otool -l` output: `minos` inside an LC_BUILD_VERSION
+    load command, `version` inside an LC_VERSION_MIN_MACOSX one. EXCLUDES every other `version N.N.N`
+    line -- LC_SOURCE_VERSION (e.g. `version 1267.0.0`, the SOURCE version, not a deployment floor) and
+    dylib current/compat versions -- which a keyword-only scan would wrongly pick up as the max and
+    false-trip the floor. Context (the enclosing `cmd LC_*`) is what disambiguates them."""
+    out: list[tuple[int, int, int]] = []
+    cmd: str | None = None
+    for line in otool_l.splitlines():
+        c = _OTOOL_CMD.match(line)
+        if c:
+            cmd = c.group(1)
+            continue
+        v = _OTOOL_VER.match(line)
+        if not v:
+            continue
+        key, a, b, d = v.group(1), v.group(2), v.group(3), v.group(4)
+        if (cmd == "LC_BUILD_VERSION" and key == "minos") or (cmd == "LC_VERSION_MIN_MACOSX" and key == "version"):
+            out.append((int(a), int(b), int(d or 0)))
+    return out
 
 
 def sha256_bytes(b: bytes) -> str:
@@ -106,7 +133,7 @@ def _tool_corroboration(tag: str, wheel: Path, binary: bytes, *, require_auditwh
             b = Path(td) / "pyths"
             b.write_bytes(binary)
             p = subprocess.run([ot, "-l", str(b)], capture_output=True, text=True, check=False)
-        vers = [(int(a), int(bb), int(c or 0)) for a, bb, c in _OTOOL_MINOS.findall(p.stdout)]
+        vers = otool_deployment_targets(p.stdout)
         if p.returncode != 0 or not vers:
             problems.append(f"`otool -l` reported no minos/version (exit {p.returncode})")
         else:
