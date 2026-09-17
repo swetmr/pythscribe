@@ -90,6 +90,7 @@ jobs:
             dist/runtime-payload/
             dist/scaffolder-payload/
           if-no-files-found: error
+          overwrite: true
 
   build:
     name: Build ${{ matrix.target }}
@@ -145,8 +146,17 @@ jobs:
         run: |
           cargo build --release --target ${{ matrix.target }}
           codesign -s - --force target/${{ matrix.target }}/release/${{ matrix.artifact }}
-      - name: Build release (Windows)
+      - name: Build release (Windows, REPRODUCIBLE)
         if: runner.os == 'Windows'
+        # `/Brepro` = the MSVC linker's reproducible-build flag. WITHOUT it the linker stamps a PE
+        # TimeDateStamp that changes every build, so `pyths.exe` is NOT byte-reproducible (verified: two
+        # relinks of identical source -> different sha256). That breaks the "npm is a byte-identical mirror
+        # of pip" claim on Windows (the wheel's binary != the npm cli binary) AND makes npm-identity (R-NI)
+        # fail across runs (the registry holds run-1's binary; a later run's manifest has a different one).
+        # ELF (Linux) + Mach-O (macOS) are already deterministic here, so only Windows needs this. Verified
+        # locally: with /Brepro two full relinks produce an identical binary.
+        env:
+          RUSTFLAGS: "-Clink-arg=/Brepro"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
@@ -282,6 +292,7 @@ jobs:
           name: wheel-${{ matrix.tag }}
           path: wheelhouse/*.whl
           if-no-files-found: error
+          overwrite: true
 
   # The complete distribution set: 5 wheels + the sdist (source-install policy, requirements §6).
   wheel-set:
@@ -343,6 +354,7 @@ jobs:
           name: pythscribe-dist
           path: dist/*
           if-no-files-found: error
+          overwrite: true
 
   # M6.1 (spec 13-09-26, requirements §5.1): the POST-BUILD release manifest -- `needs` the build outputs ONLY,
   # NEVER node-free-acceptance (acceptance binds to the manifest; the reverse edge was the rev-3 deadlock).
@@ -390,6 +402,7 @@ jobs:
           name: release-manifest
           path: release_manifest.json
           if-no-files-found: error
+          overwrite: true
       - name: Create the GitHub Release (tag refs) + attach evidence/release_manifest.json
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -634,6 +647,7 @@ jobs:
           name: acceptance-leg-${{ matrix.target }}
           path: legs/${{ matrix.target }}/
           if-no-files-found: error
+          overwrite: true
 
   # A6: assemble R-BA from the 5 legs (per-target verdicts + installed hashes), bound to this run's manifest.
   node-free-evidence:
@@ -678,6 +692,7 @@ jobs:
           name: evidence-R-BA-${{ github.run_attempt }}
           path: evidence/R-BA.json
           if-no-files-found: error
+          overwrite: true
       - name: Attach R-BA to the GitHub Release (tag builds)
         # always() so the advisory R-BA is attached even when assemble_rba exits 1 on a fail verdict
         # (v0.2.5: acceptance is advisory -- a failed leg must still publish its R-BA to the Release).
@@ -810,27 +825,14 @@ jobs:
       # Net that catches any install-resolution break (ETARGET, missing dep, bad
       # exec bit) from the REAL registry — the check that would have caught the
       # 0.2.2 ETARGET in CI instead of by hand. Fails the job loudly if broken.
-      - name: Smoke-test the published install
-        run: |
-          set -eux
-          VER="$(node -p "require('./npm/pythscribe/package.json').version")"
-          # Wait for the WHOLE install closure to propagate — not just the wrapper.
-          # On an idempotent backfill the wrapper is already visible while a freshly
-          # published dep is not (the 0.2.2 false-red), so poll the deps too.
-          for i in $(seq 1 12); do
-            if npm view "pythscribe@$VER" version >/dev/null 2>&1 \
-               && npm view "pyths-runtime@$VER" version >/dev/null 2>&1 \
-               && npm view "vite-plugin-pyths@$VER" version >/dev/null 2>&1 \
-               && npm view "next-plugin-pyths@$VER" version >/dev/null 2>&1; then break; fi
-            echo "waiting for registry propagation of the full closure ($i)…"; sleep 10
-          done
-          D="$(mktemp -d)"; cd "$D"; npm init -y >/dev/null
-          npm pkg set type=module                       # emitted .js is ESM — don't rely on Node's ambiguous-file detection
-          npm install "pythscribe@$VER"                 # fails here on ETARGET / missing dep
-          ./node_modules/.bin/pyths --version           # fails here if the binary exec bit is wrong
-          printf 'print("smoke " + str(2**60))\n' > s.ps
-          ./node_modules/.bin/pyths compile s.ps -o s.js
-          node s.js | grep -F 'smoke 1152921504606846976'   # assert real output, not just a zero exit
+      # NOTE: npm-publish is deliberately PUBLISH-ONLY -- no post-publish smoke here. A functional check
+      # AFTER the irreversible publish that can flake (npm registry propagation lag on the transitive
+      # `^V` RANGE metadata -- the packument propagates separately from the individual version, so a
+      # `npm view <pkg>@V` wait passed while `npm install`'s range resolution still ETARGET'd) would red
+      # npm-publish AS IF the publish failed (it didn't) AND SKIP npm-identity -> no R-NI -> PyPI blocked.
+      # The functional "npm install + compile + run" check lives PRE-TAG in the push-CI `Packaging (fresh
+      # install)` job (test-packaging.mjs, same bytes from the packed tarballs); npm-identity below proves
+      # the PUBLISHED bytes == the manifest. (v0.2.6: see the release-hardening note in v0.2.6_plan.md.)
 
   # M6.2 (spec 13-09-26, requirements §5.3 identity gate; validation §E1): EVERY package published at V is
   # downloaded back from the registry and compared -- runtime/scaffolder payload files == manifest == the wheels'
@@ -890,6 +892,7 @@ jobs:
           name: evidence-R-NI-${{ github.run_attempt }}
           path: evidence/R-NI.json
           if-no-files-found: error
+          overwrite: true
       - name: Attach R-NI to the GitHub Release (tag builds)
         if: startsWith(github.ref, 'refs/tags/')
         env:

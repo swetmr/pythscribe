@@ -1,8 +1,8 @@
 {
   "compiler": {
-    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "commit": "d87df08a68f694cf213d87cbe963316e667e2e3d",
     "name": "pyths",
-    "version": "0.2.5"
+    "version": "0.2.6"
   },
   "entry": "response.js",
   "files": {
@@ -15,11 +15,11 @@
     "response.glue.js": "8f5bc2bd7089a0db224f5a04a3cc3db3a55f7a1e75509c45780af469cf50e5d8",
     "response.js": "43c9086a4bb3ad902d7d736bebf2f1bcf3e37f247f931f9f7dca1c80a98d324c",
     "response.ps": "a8558dcc8819e30c6ebd7f60610885ddfd00425b3ba91bf6b337693593b8ae92",
-    "response.wasm": "81e0450d798a57fe9477d755d41955d6f27c69642fe568c88bde6fa69317f5c5"
+    "response.wasm": "f6b740536ae1a6e5d2e5281fb5fc1c1a12151356ef5fccbd73e47f6439f2a12c"
   },
   "function": "response",
   "glue": "response.glue.js",
-  "manifest_sha256": "b6c6f7403807f5f6a6869adcd6a95deccf20d640016dfb641952a9b3038d8011",
+  "manifest_sha256": "599417087d0749dce698d7139067dd513e1148ef9c9ef7e7704b80a5495c1a92",
   "optimizer": {
     "applied": false,
     "error": null,

@@ -119,6 +119,9 @@ def local_package_content(pkg_dir: Path, work: Path) -> dict[str, str]:
     npm = shutil.which("npm") or shutil.which("npm.cmd")
     if not npm:
         raise IdentityError("npm not found on PATH (needed to pack the checkout for the content binding)")
+    # `--pack-destination` MUST be ABSOLUTE: npm runs with cwd=pkg_dir, so a relative dest resolves under
+    # the package dir (e.g. packages/vite-plugin-pyths/evidence/.../*.tgz), which does not exist -> ENOENT.
+    work = work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     before = set(work.glob("*.tgz"))
     r = subprocess.run([npm, "pack", "--pack-destination", str(work)], cwd=str(pkg_dir),

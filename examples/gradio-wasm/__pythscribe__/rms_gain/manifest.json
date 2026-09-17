@@ -1,8 +1,8 @@
 {
   "compiler": {
-    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "commit": "d87df08a68f694cf213d87cbe963316e667e2e3d",
     "name": "pyths",
-    "version": "0.2.5"
+    "version": "0.2.6"
   },
   "entry": "rms_gain.js",
   "files": {
@@ -15,11 +15,11 @@
     "rms_gain.glue.js": "52bfeabbb756e2226d050ff5b9227068d22d707ea927016dc9b112305573d4a7",
     "rms_gain.js": "3eef73edd51ab1e23f0321fe8f6c48eba156cac2f9fda5f8e2fdbff8dbd5f749",
     "rms_gain.ps": "0efa9cb97e59afce0c82f4fd8a5b5c21abbb98ca74cff89757c851de4462d325",
-    "rms_gain.wasm": "472d336d9afecd6b578d79e505409a68bcf9550cc7418a14e23edb750cf3348a"
+    "rms_gain.wasm": "bf9c2c863b219b1fc7c439a5bc8ee3473c0dca6cf469b596dc8bb227c0db3210"
   },
   "function": "rms_gain",
   "glue": "rms_gain.glue.js",
-  "manifest_sha256": "ec7042d9ac7592e2b7850166969ec7577ee3d3be7e7de36084cd3ab8586179e5",
+  "manifest_sha256": "df49e114338df4ce44a95b581ac16f99119cd614246a32304a58a1b95adecc77",
   "optimizer": {
     "applied": false,
     "error": null,

@@ -1,15 +1,15 @@
 {
   "compiler": {
-    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "commit": "d87df08a68f694cf213d87cbe963316e667e2e3d",
     "name": "pyths",
-    "version": "0.2.5"
+    "version": "0.2.6"
   },
   "entry": "count_above.js",
   "files": {
     "count_above.glue.js": "5fce26886d59ec49de10158ab9fa63c790095c67cd1c7d6a0570558f239aa0c2",
     "count_above.js": "dda09d54c757b40de2a777d571197dfb2db45b4bb189a6985a405a64a3b51b10",
     "count_above.ps": "ef10dc1c260ff5e2e70d8b2647ba5950ad4b1a3cfd7cb8f8ae97b64309575aec",
-    "count_above.wasm": "1d97bf625587d863abdcc7b225e229d420799c51dff669e492795453f34f14a7",
+    "count_above.wasm": "edc41fa98428ed61f6739d85c8ed624e8861ce9346cf8b64203442ba5fb31548",
     "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
     "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
     "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
@@ -19,7 +19,7 @@
   },
   "function": "count_above",
   "glue": "count_above.glue.js",
-  "manifest_sha256": "0815a4431124f79f9df83c69efb766c3f42597c3ff6e9a1109aefd869c72eb54",
+  "manifest_sha256": "f5dfe2ffb854985adc55daaa795ea2571d6cd4096f75c18b92a719ae3dd73413",
   "optimizer": {
     "applied": false,
     "error": null,

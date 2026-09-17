@@ -33,6 +33,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -70,9 +71,26 @@ def check_download(dl_dir: Path, manifest: dict, target: str, index_url: str) ->
             "manifest_wheel_sha256": info["wheel_sha256"], "problems": problems, "verdict": "pass" if not problems else "fail"}
 
 
-def pip_download(python: Path, version: str, index_url: str, dest: Path) -> subprocess.CompletedProcess:
-    return _run([python, "-m", "pip", "download", f"pythscribe=={version}", "--no-deps", "--only-binary=:all:",
-                 "--index-url", index_url, "--dest", dest], timeout=900)
+def pip_download(python: Path, version: str, index_url: str, dest: Path,
+                 attempts: int = 18, backoff_s: float = 10.0) -> subprocess.CompletedProcess:
+    # The workflow's pre-wait polls only the registry JSON API; pip resolves off the SEPARATE Simple/index
+    # API, which propagates independently -- so on a first-ever publish the exact `==version` can 404 here for
+    # a short window even after the JSON API reports it. Retry the download (never the hash bind) so the
+    # propagation lag is absorbed instead of failing the (irreversible-upstream) validate leg. codex 2026-09-17.
+    args = [python, "-m", "pip", "download", f"pythscribe=={version}", "--no-deps", "--only-binary=:all:",
+            "--index-url", index_url, "--dest", dest]
+    r = _run(args, timeout=900)
+    for i in range(1, attempts):
+        if r.returncode == 0:
+            return r
+        blob = (r.stderr or "") + (r.stdout or "")
+        # only retry the propagation-lag signature; a real resolver/network error still fails fast on its own merits
+        if not re.search(r"(?i)no matching distribution|could not find a version|404|not found", blob):
+            return r
+        print(f"[download] pythscribe=={version} not yet on the index ({index_url}); retry {i}/{attempts - 1}")
+        time.sleep(backoff_s)
+        r = _run(args, timeout=900)
+    return r
 
 
 # ----------------------------------------------------------------------------- 2. venv

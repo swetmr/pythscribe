@@ -5,7 +5,7 @@ into `pythscribe/_bin/pyths[.exe]` (per release target). Each is used under the 
 `licence` column; the corresponding texts follow. The `pythscribe` Python package is MIT; the compiler
 binary itself is FSL-1.1-ALv2 (`LICENSE.md`); see `pythscribe/LICENSES-MAP.md`.
 
-Generated from `Cargo.lock` sha256 (LF) `a3cfc04840a4e5305bb179d635cf661689e01a915980ef54d503a9d60ef77a2a` with cargo-about cargo-about 0.9.2.
+Generated from `Cargo.lock` sha256 (LF) `01b33f88e8614ea0346f9bca9b42a911b2ce6a64452fa1e7ddd48430886da8b0` with cargo-about cargo-about 0.9.2.
 
 ## Crates
 
@@ -536,7 +536,7 @@ SOFTWARE.
 
 ### 016_MIT.txt -- MIT License (MIT)
 
-Used by: pyths_runtime@0.2.5
+Used by: pyths_runtime@0.2.6
 
 ```text
 MIT License

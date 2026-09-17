@@ -1,8 +1,8 @@
 {
   "compiler": {
-    "commit": "7aac7cf16919e7f9c49e4971102e84b67ad84dd2",
+    "commit": "d87df08a68f694cf213d87cbe963316e667e2e3d",
     "name": "pyths",
-    "version": "0.2.5"
+    "version": "0.2.6"
   },
   "entry": "sobel.js",
   "files": {
@@ -15,11 +15,11 @@
     "sobel.glue.js": "e277c89196cdab14c66917efc498e8fe89a5769b81bd43e352424bcd181542e9",
     "sobel.js": "e265223c40ea0ae85817b5941563e97ecd180a6a104dcc5a03d7a0115358b3ca",
     "sobel.ps": "6c2f8e0d2a71a13b8a47246d498dc3cbb15bce6bb6a313619c6a7cf9b013c85c",
-    "sobel.wasm": "7e9942854d2ee6e4c93cac7d948e993fda0e9e7cd1bc6973c4207a0f3dbabe18"
+    "sobel.wasm": "eab8d97b546c9a0d4dea9f0ca7e8aba490444f354935243248f59e8bd1331eac"
   },
   "function": "sobel",
   "glue": "sobel.glue.js",
-  "manifest_sha256": "ced275a7a302dde22cebea6f537788007c5897d3a91250b16bcbde40b68890bc",
+  "manifest_sha256": "45c5619050c545ab7176d5add29786d31ed7028d559da7969b9de5c4b5fbc379",
   "optimizer": {
     "applied": false,
     "error": null,

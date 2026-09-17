@@ -5,8 +5,8 @@ COMPILER_VERSION, and every manifest records the pin it was built with. Bump the
 constants (one-line commit) when the compiler moves.
 """
 
-COMPILER_VERSION = "0.2.5"
-COMPILER_COMMIT = "7aac7cf16919e7f9c49e4971102e84b67ad84dd2"
+COMPILER_VERSION = "0.2.6"
+COMPILER_COMMIT = "d87df08a68f694cf213d87cbe963316e667e2e3d"
 
 # M2.1 (spec 13-09-26 §5.6, Layer 2): the range of compiler versions whose PREBUILT artifacts
 # this runtime LOADS (`artifacts.resolve()` classifies an out-of-range `manifest.compiler.version`
