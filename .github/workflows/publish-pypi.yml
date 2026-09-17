@@ -107,6 +107,11 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
           packages-dir: dist/
+          # PEP 740 attestations OFF: the action otherwise writes a `.publish.attestation` sidecar per dist
+          # and uploads it, so dist/ carries 2x the files and assemble_rtp's "uploaded set == manifest set"
+          # check RED-flags the sidecars as extras. Our provenance is the manifest byte-binding + R-*
+          # evidence, not PEP 740. (2026-09-18)
+          attestations: false
           # B3: a re-dispatch tolerates files already there, but R-TP now PROVES the registry serves
           # exactly the manifest bytes (every wheel AND the sdist) -- so a pre-existing DIFFERENT file
           # skip-existing leaves in place is caught (it was not, before: R-TP hashed only local dist/,
@@ -296,4 +301,5 @@ jobs:
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist/
+          attestations: false   # PEP 740 sidecars break assemble_rtp's exact-set check (see TestPyPI step)
           skip-existing: false
