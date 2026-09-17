@@ -481,7 +481,12 @@ jobs:
         shell: bash
         run: |
           set -eux
-          pip download "$(pwd)/dist/${ACC_WHEEL}[server,gradio]" --dest wheelhouse
+          # On the Windows leg (git-bash), $(pwd) is a git-bash path (/d/a/...) that Windows `pip` misreads
+          # as a drive-relative path (D:\d\a\...) -> FileNotFound. Convert to a native path there; macOS
+          # (also a native leg) keeps the POSIX path unchanged.
+          WHL_DIR="$(pwd)/dist"
+          case "${RUNNER_OS:-}" in Windows) WHL_DIR="$(cygpath -w "$WHL_DIR")" ;; esac
+          pip download "${WHL_DIR}/${ACC_WHEEL}[server,gradio]" --dest wheelhouse
           python scripts/wheel_acceptance.py bind --wheel "dist/$ACC_WHEEL" --manifest release_manifest.json --target "$ACC_TARGET" --wheelhouse wheelhouse --out bind.json
       - name: Set up QEMU (aarch64 app container)
         if: matrix.platform == 'linux/arm64'

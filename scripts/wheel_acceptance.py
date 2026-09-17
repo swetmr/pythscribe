@@ -98,9 +98,34 @@ def find_node_files(roots: Iterable[Path], *, skip: Iterable[Path] = ()) -> list
             for fn in filenames:
                 if is_node_name(fn):
                     p = d / fn
-                    if p.is_file():
+                    if p.is_file() and not _is_noninterpreter(p):
                         found.append(p)
     return sorted(set(found))
+
+
+# CodeQL source/doc extensions -- NodeJS.qll / NodeJSLib.model.yml / NodeJS.qhelp lowercase to `nodejs...`
+# and drift onto the CI runner image (the M4 macOS A0 false positive).
+_NODE_CODEQL_SUFFIXES = (".qll", ".ql", ".qhelp", ".model.yml")
+
+
+def _is_noninterpreter(p: Path) -> bool:
+    """A node-NAMED file that is provably NOT an interpreter, so A0 must not flag it. Recognised by a
+    CodeQL source suffix (NodeJS.qll / NodeJSLib.model.yml) OR a Homebrew formula-alias symlink (nodejs ->
+    Formula/node.rb) -- AND, decisively, confirmed NON-EXECUTABLE. Executability is the discriminator: any
+    +x file stays in scope (a real interpreter, or an adversarially-renamed node binary named `nodejs.qll`
+    / symlinked `node -> runtime.rb`, is still found + PROBED -- never a false negative; codex 2026-09-17).
+    The exact names node/node.exe/nodejs are handled by is_node_name and are never routed here."""
+    try:
+        if os.access(p, os.X_OK):     # executable -> a candidate interpreter, NEVER excluded
+            return False
+        n = p.name.lower()
+        if n.endswith(_NODE_CODEQL_SUFFIXES):                          # non-+x CodeQL text artifact
+            return True
+        if p.is_symlink() and p.resolve().suffix.lower() == ".rb":     # non-+x Homebrew formula alias
+            return True
+        return False
+    except OSError:
+        return False
 
 
 def which_on_path(names: Iterable[str] = PATH_NAMES, path_env: str | None = None) -> dict[str, str]:

@@ -47,7 +47,10 @@ case "$PHASE" in
       pip download --quiet "${W_IN}[server,gradio]" --dest /stage/wheelhouse
     python3 "$GITHUB_WORKSPACE/scripts/wheel_acceptance.py" bind --wheel "$STAGE/dist/$ACC_WHEEL" --manifest "$STAGE/release_manifest.json" \
       --target "$ACC_TARGET" --wheelhouse "$STAGE/wheelhouse" --out "$OUT/bind.json"
-    chmod -R a+rX "$STAGE"; chmod 777 "$OUT"
+    # `pip download` ran as ROOT inside the container (-v mount), so $STAGE/wheelhouse is root-owned and a
+    # host-side (runner-user) chmod fails "Operation not permitted". sudo (passwordless on the runner) can
+    # chmod files it does not own. $OUT is runner-created, so a plain chmod is fine there.
+    sudo chmod -R a+rX "$STAGE"; chmod 777 "$OUT"
     echo "::endgroup::" ;;
 
   start)

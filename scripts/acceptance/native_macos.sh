@@ -47,6 +47,22 @@ runner_externals() {
   find /Users/runner -maxdepth 4 -type d -name externals 2>/dev/null | head -1
 }
 
+runner_node_roots() {
+  # EVERY runner-OWNED dir that legitimately holds a node interpreter -- the resolved externals PLUS the
+  # drift the current runner image adds (extra versioned `externals` under the runner home; the shared
+  # /opt/runner-cache). These are the runner's OWN node, denied to `app` by the scrub's chmod; A0 allows
+  # them (only a node the APP can reach is a real leak). Enumerated (not a single path) because the runner
+  # image scatters node across several of these and the set drifts between images.
+  { [ -f "$ACC/externals.path" ] && cat "$ACC/externals.path"
+    find /Users/runner/actions-runner -maxdepth 3 -type d -name externals 2>/dev/null
+    [ -d /opt/runner-cache/externals ] && echo /opt/runner-cache/externals
+    # the acquire step's `cp -a` of externals -> $ACC/externals.bak PRESERVES app-readable perms, so the
+    # backup's node is reachable by absolute path; treat it as a runner node root so scrub locks it and A0
+    # allow-lists+PROBES it (a reachable one still RED) instead of it being skipped/hidden (codex 2026-09-17).
+    [ -d "$ACC/externals.bak" ] && echo "$ACC/externals.bak"
+  } | sort -u
+}
+
 as_app() { sudo -n -u app -H env HOME="$APP_HOME" TMPDIR="$APP_HOME/tmp" PATH="$APP_HOME/venv/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$@"; }
 as_ctl() { sudo -n -u ctl -H env HOME="$CTL_HOME" TMPDIR="$CTL_HOME/tmp" PATH="/usr/bin:/bin:/usr/sbin:/sbin" PLAYWRIGHT_BROWSERS_PATH="$CTL_HOME/ms-playwright" "$@"; }
 
@@ -86,8 +102,10 @@ case "$PHASE" in
     sudo rm -rf "${RUNNER_TOOL_CACHE:-/Users/runner/hostedtoolcache}/node" /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx \
       /usr/local/lib/node_modules /usr/local/Cellar/node* /opt/homebrew/bin/node /opt/homebrew/bin/npm /opt/homebrew/bin/npx \
       /opt/homebrew/opt/node* /opt/homebrew/Cellar/node* /opt/homebrew/lib/node_modules /Users/runner/.nvm /Users/runner/.npm 2>/dev/null || true
-    EXT="$(cat "$ACC/externals.path")"
-    sudo chmod -R go-rwx "$EXT"           # owner (runner) keeps its interpreter; app/ctl cannot read or exec it
+    # owner (runner) keeps its interpreter(s); app/ctl cannot read or exec them. Cover EVERY runner node
+    # root, not just the resolved externals -- the current runner image also ships node under other
+    # externals dirs + /opt/runner-cache, and A0 requires each allowed-root node to be app-denied.
+    for r in $(runner_node_roots); do [ -d "$r" ] && sudo chmod -R go-rwx "$r"; done
     printf 'block drop out quick user app to ! 127.0.0.0/8\n' | sudo pfctl -q -ef - || sudo pfctl -q -e || true
     endlog ;;
 
@@ -97,7 +115,7 @@ case "$PHASE" in
     if command -v npm  >/dev/null 2>&1; then echo "::error::npm leaked onto PATH: $(command -v npm)"; exit 1; fi
     if command -v npx  >/dev/null 2>&1; then echo "::error::npx leaked onto PATH: $(command -v npx)"; exit 1; fi
     EXT="$(cat "$ACC/externals.path")"
-    sudo -E "$PY" "$STAGE/scripts/native_node_boundary.py" check --step A0 --allow-under "$CTL_HOME" "$EXT" --out "$OUT/a0.json"
+    sudo -E "$PY" "$STAGE/scripts/native_node_boundary.py" check --step A0 --allow-under "$CTL_HOME" $(runner_node_roots) --out "$OUT/a0.json"
     endlog ;;
 
   app)
@@ -116,7 +134,7 @@ case "$PHASE" in
   a4b)
     log "A4b: fail-closed boundary check (every node file probed as app) + shared-temp check"
     EXT="$(cat "$ACC/externals.path")"
-    sudo -E "$PY" "$STAGE/scripts/native_node_boundary.py" check --step A4b --allow-under "$CTL_HOME" "$EXT" --app-tmp "$APP_HOME/tmp" --out "$OUT/a4b.json"
+    sudo -E "$PY" "$STAGE/scripts/native_node_boundary.py" check --step A4b --allow-under "$CTL_HOME" $(runner_node_roots) --app-tmp "$APP_HOME/tmp" --out "$OUT/a4b.json"
     endlog ;;
 
   a5-app)
@@ -141,7 +159,7 @@ case "$PHASE" in
   a5b)
     log "A5b: boundary re-check after A5 (permission drift) + the sampler log"
     EXT="$(cat "$ACC/externals.path")"
-    sudo -E "$PY" "$STAGE/scripts/native_node_boundary.py" check --step A5b --allow-under "$CTL_HOME" "$EXT" --app-tmp "$APP_HOME/tmp" --out "$OUT/a5b.json"
+    sudo -E "$PY" "$STAGE/scripts/native_node_boundary.py" check --step A5b --allow-under "$CTL_HOME" $(runner_node_roots) --app-tmp "$APP_HOME/tmp" --out "$OUT/a5b.json"
     sudo touch "$SAMPLER_LOG"
     sudo "$PY" - "$OUT/a5b.json" "$SAMPLER_LOG" <<'EOF'
 import json, sys
@@ -165,8 +183,11 @@ EOF
   restore)
     log "restore the runner runtime (externals/ from the backup; perms reset) BEFORE the first post-window uses: step"
     EXT="$(cat "$ACC/externals.path")"
-    sudo rsync -a "$ACC/externals.bak/" "$EXT/"
-    sudo chmod -R go+rX "$EXT"
+    sudo rsync -a "$ACC/externals.bak/" "$EXT/"                 # restore the backed-up (resolved) externals content
+    # Reset perms on EVERY root the scrub locked down, not just the resolved externals -- otherwise a
+    # post-window `uses:` (JS) action whose node lives in a drifted externals dir runs against a
+    # still-go-rwx interpreter. Symmetric with the scrub loop above.
+    for r in $(runner_node_roots); do [ -d "$r" ] && sudo chmod -R go+rX "$r"; done
     sudo pfctl -q -d 2>/dev/null || true
     "$EXT"/node*/bin/node --version | head -1   # LOUD: the runner's interpreter must run again
     endlog ;;

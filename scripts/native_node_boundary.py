@@ -182,6 +182,11 @@ def probe_for_verdict(path: Path) -> tuple[bool, str]:
 
 def check(allow_under: list[Path], app_tmp: Path | None, roots: list[Path] | None, step: str) -> dict:
     roots = roots or ([Path("/")] if os.name != "nt" else [Path(f"{d}:\\") for d in "CDEF" if Path(f"{d}:\\").exists()])
+    # Skip ONLY pseudo-filesystems (never a place an interpreter lives). Do NOT skip broad real trees:
+    # the Homebrew formula-alias false positive is handled narrowly in find_node_files (symlink->*.rb), and
+    # the harness's externals BACKUP under /private/tmp/acc is NOT skipped -- it is scrubbed app-unreadable
+    # and allow-listed + probed like the other externals, so a reachable node there still goes RED
+    # (skipping it wholesale would be a false negative -- codex 2026-09-17).
     found = find_node_files(roots, skip=[Path("/proc"), Path("/sys"), Path("/dev"), Path("/private/var/folders")])
     probes: list[dict] = []
 
