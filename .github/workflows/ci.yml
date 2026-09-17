@@ -124,14 +124,16 @@ jobs:
 
       # M5 (third-party closure) runs `cargo metadata --offline --filter-platform <triple>` for
       # EACH of the 5 release targets; the windows/macos-only crates (e.g. anstyle-wincon) are not
-      # in the Linux build's registry cache, so pre-fetch every target's graph while online. M3
-      # (wasm-opt gates) needs binaryen's `wasm-opt` discoverable on PATH.
-      - name: Cross-target crate cache + binaryen wasm-opt
+      # in the Linux build's registry cache, so pre-fetch every target's graph while online.
+      # NOTE: binaryen's `wasm-opt` is deliberately NOT installed here -- the apt build rejects the
+      # compiler's exported mutable globals (needs --enable-mutable-globals) AND the committed
+      # artifacts are unoptimized, so a present wasm-opt breaks the byte-identical rebuild gate.
+      # The M3-optimizer tests stay RED until both are addressed (tracked separately).
+      - name: Cross-target crate cache (M5 third-party closure)
         run: |
           cargo fetch --target aarch64-apple-darwin --target aarch64-unknown-linux-gnu \
                       --target x86_64-apple-darwin --target x86_64-pc-windows-msvc \
                       --target x86_64-unknown-linux-gnu
-          sudo apt-get update && sudo apt-get install -y binaryen
 
       - uses: actions/setup-node@v4
         with:
