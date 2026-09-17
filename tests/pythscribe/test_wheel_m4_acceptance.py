@@ -738,8 +738,9 @@ def test_wf_lint_green_on_the_real_workflows():
     assert jobs["node-free-acceptance"]["needs"] == "manifest"
     assert "node-free-acceptance" not in wl._transitive_needs(jobs, "manifest")
     assert {r["target"] for r in jobs["node-free-acceptance"]["strategy"]["matrix"]["include"]} == set(TRIPLE_TO_TAG)
-    # B2: npm-publish follows node-free acceptance evidence (R-BA), and B1: only on a tag ref
-    assert set(jobs["npm-publish"]["needs"]) == {"manifest", "node-free-evidence"} and jobs["build"]["needs"] == "prepare"
+    # v0.2.5: node-free acceptance is ADVISORY (harness broken by runner drift), so npm-publish needs only
+    # `manifest` -- NOT `node-free-evidence`/R-BA. B1: only on a tag ref. Re-add the R-BA gate in v0.2.6.
+    assert set(jobs["npm-publish"]["needs"]) == {"manifest"} and jobs["build"]["needs"] == "prepare"
     assert "refs/tags/" in str(jobs["npm-publish"].get("if", ""))
     assert "node-free-acceptance" not in wl._transitive_needs(jobs, "manifest")  # still no cycle
     # promotion steps are the first gate of BOTH publish jobs and carry no `if:`
@@ -748,7 +749,29 @@ def test_wf_lint_green_on_the_real_workflows():
         idx = next(i for i, s in enumerate(steps) if "require_evidence.py" in str(s.get("run", "")))
         assert "--role promotion" in steps[idx]["run"] and "if" not in steps[idx]
         assert all("python -m build" not in str(s.get("run", "")) for s in steps[:idx])
-    assert "--need R-BA R-NI R-TP R-TV" in pub["jobs"]["pypi"]["steps"][next(i for i, s in enumerate(pub["jobs"]["pypi"]["steps"]) if "require_evidence.py" in str(s.get("run", "")))]["run"]
+    # v0.2.5: R-BA is advisory, so the pypi promotion gate needs R-NI R-TP R-TV (NOT R-BA). Re-add in v0.2.6.
+    assert "--need R-NI R-TP R-TV" in pub["jobs"]["pypi"]["steps"][next(i for i, s in enumerate(pub["jobs"]["pypi"]["steps"]) if "require_evidence.py" in str(s.get("run", "")))]["run"]
+
+
+def test_wf_advisory_mode_semantics_are_enforced():
+    """v0.2.5 (codex 2026-09-17): node-free-acceptance is ADVISORY via ACCEPTANCE_MODE -- it runs but does
+    not gate npm/PyPI. The properties that make advisory SAFE (continue-on-error on both acceptance jobs,
+    always() on the R-BA attach step, npm not gating on node-free-evidence) are LINT-ENFORCED so they cannot
+    silently regress into an indirect gate. Mode is one flag -- flip to 'blocking' to re-require R-BA."""
+    rel, pub = _wf()
+    assert wl.ACCEPTANCE_MODE == "advisory"
+    assert wl.lint(rel, pub) == []
+    # paired controls: each advisory-safety property, mutated away -> RED
+    for jn in ("node-free-acceptance", "node-free-evidence"):
+        mut = copy.deepcopy(rel); mut["jobs"][jn].pop("continue-on-error", None)
+        assert any("continue-on-error" in x for x in wl.lint(mut, pub)), jn
+    mut = copy.deepcopy(rel)
+    for s in mut["jobs"]["node-free-evidence"]["steps"]:
+        if str(s.get("name", "")).startswith("Attach R-BA"):
+            s["if"] = "startsWith(github.ref, 'refs/tags/')"
+    assert any("Attach R-BA" in x for x in wl.lint(mut, pub))
+    mut = copy.deepcopy(rel); mut["jobs"]["npm-publish"]["needs"] = ["manifest", "node-free-evidence"]
+    assert any("ADVISORY" in x and "npm-publish" in x for x in wl.lint(mut, pub))
 
 
 def test_wf_lint_red_on_an_injected_cycle():

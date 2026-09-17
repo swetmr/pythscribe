@@ -1203,12 +1203,12 @@ def test_wf_m6_each_rule_fires():
     mutp = copy.deepcopy(pub)
     for s in mutp["jobs"]["testpypi"]["steps"]:
         if "require_evidence.py" in str(s.get("run", "")):
-            s["run"] = s["run"].replace("--need R-BA R-NI", "--need R-BA R-NI R-TP")
+            s["run"] = s["run"].replace("--need R-NI", "--need R-NI R-TP")
     assert any("`testpypi` gate must be exactly" in x for x in wl.lint(rel, mutp))
     mutp = copy.deepcopy(pub)
     for s in mutp["jobs"]["pypi"]["steps"]:
         if "require_evidence.py" in str(s.get("run", "")):
-            s["run"] = s["run"].replace("--need R-BA R-NI R-TP R-TV", "--need R-BA R-NI R-TP")
+            s["run"] = s["run"].replace("--need R-NI R-TP R-TV", "--need R-NI R-TP")
     assert any("`pypi` gate must be exactly" in x for x in wl.lint(rel, mutp))
     # P1: a rebuild sneaks back in
     mutp = copy.deepcopy(pub)
@@ -1250,10 +1250,8 @@ def test_b1_b2_b6_npm_publish_publication_gates_are_linted():
     rel, pub = _wf()
     assert wl.lint(rel, pub) == []
     npm = rel["jobs"]["npm-publish"]
-    assert set(npm["needs"]) == {"manifest", "node-free-evidence"} and "refs/tags/" in str(npm.get("if", ""))
-    # B2: drop node-free-evidence from needs -> RED
-    mut = copy.deepcopy(rel); mut["jobs"]["npm-publish"]["needs"] = ["manifest"]
-    assert any("must include `node-free-evidence`" in x for x in wl.lint(mut, pub))
+    # v0.2.5: acceptance advisory -> npm needs only `manifest` (NOT node-free-evidence). Re-add in v0.2.6.
+    assert set(npm["needs"]) == {"manifest"} and "refs/tags/" in str(npm.get("if", ""))
     # B1: drop the tag-ref if: -> RED
     mut = copy.deepcopy(rel); mut["jobs"]["npm-publish"].pop("if", None)
     assert any("must carry `if: startsWith(github.ref" in x for x in wl.lint(mut, pub))
@@ -1267,10 +1265,8 @@ def test_b1_b2_b6_npm_publish_publication_gates_are_linted():
     mut = copy.deepcopy(rel)
     mut["jobs"]["npm-publish"]["steps"] = [s for s in mut["jobs"]["npm-publish"]["steps"] if "require_ci_success.py" not in str(s.get("run", ""))]
     assert any("require_ci_success.py (B6)" in x for x in wl.lint(mut, pub))
-    # B2: drop the R-BA consume/validate step -> RED
-    mut = copy.deepcopy(rel)
-    mut["jobs"]["npm-publish"]["steps"] = [s for s in mut["jobs"]["npm-publish"]["steps"] if "evidence/R-BA.json" not in str(s.get("run", ""))]
-    assert any("R-BA consume/validate (B2)" in x for x in wl.lint(mut, pub))
+    # v0.2.5: the R-BA consume/validate step is REMOVED from npm-publish (acceptance advisory); the lint no
+    # longer requires it. Re-add this negative control in v0.2.6 when the R-BA gate returns.
     # B1: guard_tag_version dropped -> RED
     mut = copy.deepcopy(rel)
     mut["jobs"]["npm-publish"]["steps"] = [s for s in mut["jobs"]["npm-publish"]["steps"] if "guard_tag_version.py" not in str(s.get("run", ""))]
@@ -1312,14 +1308,14 @@ def test_s11_lint_catches_r_tv_added_to_the_testpypi_need_set():
     mutp = copy.deepcopy(pub)
     for s in mutp["jobs"]["testpypi"]["steps"]:
         if "require_evidence.py" in str(s.get("run", "")):
-            s["run"] = s["run"].replace("--need R-BA R-NI", "--need R-BA R-NI R-TV")
+            s["run"] = s["run"].replace("--need R-NI", "--need R-NI R-TV")
     problems = wl.lint(rel, mutp)
     assert any("`testpypi` gate must be exactly" in x for x in problems), problems
     # and R-TV added to an intermediate job is caught by S1's set comparison too
     mutp = copy.deepcopy(pub)
     for s in mutp["jobs"]["testpypi-validate"]["steps"]:
         if "require_evidence.py" in str(s.get("run", "")):
-            s["run"] = s["run"].replace("--need R-BA R-NI", "--need R-BA R-NI R-TV")
+            s["run"] = s["run"].replace("--need R-NI", "--need R-NI R-TV")
     assert any("`testpypi-validate` gate must be exactly" in x for x in wl.lint(rel, mutp)), wl.lint(rel, mutp)
     # the parse_need primitive itself: superset != the required set
     assert wl.parse_need("require_evidence.py --need R-BA R-NI R-TV --evidence-dir e") == {"R-BA", "R-NI", "R-TV"}

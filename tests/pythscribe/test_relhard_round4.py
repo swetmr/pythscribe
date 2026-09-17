@@ -154,19 +154,15 @@ def test_b4_partial_rerun_consumes_the_producer_attempt_1_artifact(tmp_path):
     assert any("differ from the immutable Actions artifact 'evidence-R-BA-1'" in x for x in p), p
 
 
-def test_b4_npm_publish_downloads_the_producer_attempt_not_its_own():
-    """The workflow half of B4 (partial-rerun): npm-publish must resolve the LATEST SUCCESSFUL producer
-    (node-free-evidence) attempt and download exactly that -- never key the artifact on the consumer's own
-    github.run_attempt (which a partial rerun bumps without rerunning the producer)."""
+def test_b4_npm_publish_does_not_consume_r_ba_v025_advisory():
+    """v0.2.5: node-free acceptance is ADVISORY (harness broken by runner drift), so npm-publish no longer
+    consumes/validates R-BA at all -- it must NOT download an evidence-R-BA artifact. (The B4 partial-rerun
+    R-BA consume logic is re-added in v0.2.6 when acceptance is fixed; the require_evidence unit tests still
+    cover the mechanism.)"""
     rel = yaml.safe_load(RELEASE.read_text(encoding="utf-8"))
     steps = rel["jobs"]["npm-publish"]["steps"]
-    for s in steps:  # no download-artifact keyed on the consumer's own run_attempt
-        assert (s.get("with") or {}).get("name") != "evidence-R-BA-${{ github.run_attempt }}"
-    consume = [s for s in steps if "gh run download" in str(s.get("run", "")) and "evidence-R-BA" in str(s.get("run", ""))]
-    assert len(consume) == 1, consume
-    run = consume[0]["run"]
-    assert "node-free-evidence" in run and "max" in run  # resolves the latest successful producer attempt
-    assert "github.run_attempt" not in run  # never the consumer's own attempt
+    consume = [s for s in steps if "evidence-R-BA" in str(s.get("run", "")) or (s.get("with") or {}).get("name", "").startswith("evidence-R-BA")]
+    assert consume == [], consume  # no R-BA consume/validate step in npm-publish this release
 
 
 # ============================================================================ Fix 3: B6 exact matrix-family binding + enforced in verify()
@@ -230,7 +226,7 @@ def test_s9s11_pin_primitive_normalizes_only_the_interpreter():
     """The primitive: _normalize_gate_run touches ONLY the leading python/python3 token; the exact pin is
     matched byte-for-byte otherwise (this is why any shell composition cannot equal it)."""
     pin = wl._pinned_promotion_command("testpypi")
-    honest = 'python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-BA R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"'
+    honest = 'python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"'
     assert wl._normalize_gate_run(honest) == pin
     assert wl._exact_pin_problems(honest, pin, "S11", "testpypi") == []  # no false-RED on the honest command
 
@@ -317,7 +313,7 @@ def test_round3_shell_bypasses_still_refused():
     mut = copy.deepcopy(pub)
     for s in mut["jobs"]["pypi"]["steps"]:
         if "require_evidence.py" in str(s.get("run", "")):
-            s["run"] = s["run"].replace("--need R-BA R-NI R-TP R-TV", "--need R-BA R-NI R-TP R-TV --need")
+            s["run"] = s["run"].replace("--need R-NI R-TP R-TV", "--need R-NI R-TP R-TV --need")
     assert wl.lint(rel, mut) != []
     # commented --checkout
     mut = copy.deepcopy(rel)

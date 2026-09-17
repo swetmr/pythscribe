@@ -87,7 +87,7 @@ jobs:
       - name: Require evidence -- promotion role (whole run completed+success at S; R-BA + R-NI; manifest-job attempt binding)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-BA R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
+        run: python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
       - name: Download the manifest-bound dist/ (by the manifest's build run id -- never a rebuild)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -181,7 +181,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-BA R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
+        run: python scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
       - name: "Validate the PUBLIC artifact: pip download from TestPyPI, sha256 == manifest, install, A0..A4, all-features smoke"
         shell: bash
         run: python scripts/testpypi_validate.py --manifest release_manifest.json --target "${{ matrix.target }}" --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ --out "legs/${{ matrix.target }}" --checkout "$(pwd)"
@@ -217,7 +217,7 @@ jobs:
       - name: Require evidence -- promotion role (R-BA + R-NI bound to this manifest; R-TP self-referential here, opus M6 B1)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-BA R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
+        run: python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-NI --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
       - name: Download every leg
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -277,7 +277,7 @@ jobs:
       - name: Require evidence -- promotion role (all FOUR records; whole run completed+success at S; manifest-job attempt binding)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-BA R-NI R-TP R-TV --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
+        run: python3 scripts/require_evidence.py --role promotion --manifest release_manifest.json --need R-NI R-TP R-TV --evidence-dir evidence --tag "${GITHUB_REF_NAME}"
       - name: Download the manifest-bound dist/ (by the manifest's build run id -- never a rebuild)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

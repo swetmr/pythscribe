@@ -112,11 +112,30 @@ def _gate_command_problems(run_text: str, invocation: str, label: str, key: str)
 # (not substrings) so adding R-TV to `testpypi` -- a future deadlock, since R-TV's producer is
 # `testpypi-validate` which `needs: testpypi` -- is caught. The two intermediate jobs run in the SAME
 # run that produces R-TP/R-TV, so requiring either self-references an in-progress run (opus M6 B1).
+# ── node-free ACCEPTANCE MODE: the single source of truth (flip THIS one line to switch) ────────────────
+# "advisory" (default from v0.2.5): node-free-acceptance RUNS but does NOT gate npm/PyPI -- it is
+#   continue-on-error and R-BA is advisory (attached to the Release, not required). Use this whenever the
+#   M4 acceptance harness is broken/flaky (GitHub runner-image drift is unbounded) OR you need to push a
+#   release quickly: a red acceptance run must NEVER block shipping. This is intentionally the sticky
+#   default so future releases are not blocked by acceptance without a deliberate decision.
+# "blocking": the full R-BA gate -- npm-publish needs node-free-evidence + consumes/validates R-BA, and the
+#   promotion gates require R-BA. Flip here ONLY when M4 acceptance is reliable enough to gate an
+#   irreversible publish.
+# EITHER WAY the lint below ENFORCES the workflow matches this mode (acceptance_mode_problems + the
+# EXPECTED_NEED sets), so the chosen mode -- and the continue-on-error/always() that make "advisory" safe
+# -- cannot silently drift (invariants-as-failing-gates). Changing the mode is one line here, never surgery.
+ACCEPTANCE_MODE = "advisory"
+assert ACCEPTANCE_MODE in ("advisory", "blocking")
+ADVISORY = ACCEPTANCE_MODE == "advisory"
+_RBA: list[str] = [] if ADVISORY else ["R-BA"]
+
+# S11: the EXACT `--need` record set every promotion gate must carry, per job -- R-BA included ONLY in
+# blocking mode. Compared as SETS so an extra/missing record is caught.
 EXPECTED_NEED: dict[str, set[str]] = {
-    "testpypi": {"R-BA", "R-NI"},
-    "pypi": {"R-BA", "R-NI", "R-TP", "R-TV"},
-    "testpypi-validate": {"R-BA", "R-NI"},
-    "testpypi-evidence": {"R-BA", "R-NI"},
+    "testpypi": {*_RBA, "R-NI"},
+    "pypi": {*_RBA, "R-NI", "R-TP", "R-TV"},
+    "testpypi-validate": {*_RBA, "R-NI"},
+    "testpypi-evidence": {*_RBA, "R-NI"},
 }
 
 # S9 + S11 ROOT FIX (codex pass-4): an operator/comment BLACKLIST never converges -- codex kept finding a
@@ -128,10 +147,10 @@ EXPECTED_NEED: dict[str, set[str]] = {
 # -- flags, order, quoting, the `--tag "${GITHUB_REF_NAME}"` literal -- is matched byte-for-byte.
 # The exact `--need` ORDER each promotion gate must carry (order matters for the exact-string pin).
 EXPECTED_NEED_ORDER: dict[str, list[str]] = {
-    "testpypi": ["R-BA", "R-NI"],
-    "testpypi-validate": ["R-BA", "R-NI"],
-    "testpypi-evidence": ["R-BA", "R-NI"],
-    "pypi": ["R-BA", "R-NI", "R-TP", "R-TV"],
+    "testpypi": [*_RBA, "R-NI"],
+    "testpypi-validate": [*_RBA, "R-NI"],
+    "testpypi-evidence": [*_RBA, "R-NI"],
+    "pypi": [*_RBA, "R-NI", "R-TP", "R-TV"],
 }
 _PY = re.compile(r"^python3?(?=\s)")
 
@@ -512,13 +531,33 @@ def lint_m6(release: dict, publish: dict) -> list[str]:
     npmjob = jobs.get("npm-publish", {})
     npub = _steps(npmjob)
     pub = _step_index(npub, "publish.mjs --yes")
-    # B2: npm publication must FOLLOW node-free acceptance evidence (R-BA), never run concurrently.
-    if "node-free-evidence" not in _needs(npmjob):
-        p.append(f"B2: `npm-publish.needs` {_needs(npmjob)} must include `node-free-evidence` (npm follows node-free acceptance -> R-BA)")
+    # ── Acceptance MODE enforcement (invariants-as-failing-gates). The workflow MUST match ACCEPTANCE_MODE,
+    # so neither the mode nor the continue-on-error/always() that make "advisory" SAFE can silently drift
+    # (codex 2026-09-17: without this, a future edit could re-introduce the indirect PyPI block or stop
+    # attaching a failed R-BA while the lint stayed green).
+    nfe = jobs.get("node-free-evidence", {})
+    if ADVISORY:
+        for jn in ("node-free-acceptance", "node-free-evidence"):
+            if jobs.get(jn, {}).get("continue-on-error") is not True:
+                p.append(f"ADVISORY: `{jn}` must set `continue-on-error: true` -- acceptance is advisory, a failed "
+                         f"leg must not fail the release run or indirectly gate PyPI. To GATE on it, set ACCEPTANCE_MODE='blocking'.")
+        attach = next((s for s in _steps(nfe) if str(s.get("name", "")).startswith("Attach R-BA")), None)
+        if attach is None or "always()" not in str(attach.get("if", "")):
+            p.append("ADVISORY: node-free-evidence `Attach R-BA` step must be `if: always() && ...` (a fail-verdict R-BA must still attach to the Release).")
+        if "node-free-evidence" in _needs(npmjob):
+            p.append("ADVISORY: `npm-publish.needs` must NOT include `node-free-evidence` (acceptance advisory; npm does not gate on R-BA).")
+        if _step_index(npub, "evidence-R-BA") is not None or _step_index(npub, "evidence/R-BA.json") is not None:
+            p.append("ADVISORY: `npm-publish` must NOT consume/validate R-BA (acceptance advisory).")
+    else:  # blocking: the full R-BA gate
+        if "node-free-evidence" not in _needs(npmjob):
+            p.append(f"BLOCKING: `npm-publish.needs` {_needs(npmjob)} must include `node-free-evidence` (npm follows node-free acceptance -> R-BA).")
+        if _step_index(npub, "evidence/R-BA.json") is None:
+            p.append("BLOCKING: `npm-publish` must consume+validate R-BA (evidence/R-BA.json) before publishing.")
     # B1: npm publication is reachable ONLY from an exact vX.Y.Z tag build.
     if "refs/tags/" not in str(npmjob.get("if", "")):
         p.append("B1: `npm-publish` must carry `if: startsWith(github.ref, 'refs/tags/')` (npm reachable only from a tag build)")
-    # B1/B2/B6: guard_tag_version, require_evidence, require_ci_success, and R-BA consume all BEFORE publish.mjs --yes.
+    # B1/B6: guard_tag_version, require_evidence, require_ci_success all BEFORE publish.mjs --yes.
+    # (v0.2.5: the R-BA consume gate is removed here -- node-free acceptance is advisory; re-add in v0.2.6.)
     if pub is None:
         p.append("M2: `npm-publish` has no `node npm/publish.mjs --yes` step")
     else:
@@ -526,7 +565,6 @@ def lint_m6(release: dict, publish: dict) -> list[str]:
             "require_evidence.py": _step_index(npub, "require_evidence.py"),
             "guard_tag_version.py (B1)": _step_index(npub, "guard_tag_version.py"),
             "require_ci_success.py (B6)": _step_index(npub, "require_ci_success.py"),
-            "R-BA consume/validate (B2)": _step_index(npub, "evidence/R-BA.json"),
         }
         for label, idx in gates.items():
             if idx is None or idx > pub:

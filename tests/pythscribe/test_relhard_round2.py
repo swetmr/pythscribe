@@ -157,7 +157,7 @@ def test_s11_repeated_need_flag_is_refused():
     mut = copy.deepcopy(pub)
     for s in mut["jobs"]["pypi"]["steps"]:
         if "require_evidence.py" in str(s.get("run", "")):
-            s["run"] = s["run"].replace("--need R-BA R-NI R-TP R-TV", "--need R-BA R-NI R-TP R-TV --need")
+            s["run"] = s["run"].replace("--need R-NI R-TP R-TV", "--need R-NI R-TP R-TV --need")
     probs = wl.lint(rel, mut)
     assert any("gate repeats `--need`" in x for x in probs), probs
 
