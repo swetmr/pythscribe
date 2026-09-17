@@ -1026,12 +1026,31 @@ def test_k_run_mode_executes_the_readme_spots_against_the_shipped_wheel(host_whe
 # ============================================================================ L: pre-tag gate
 
 
+def _committed_space_tag() -> str:
+    """The @v<X.Y.Z> tag the committed Space requirements is pinned to. DERIVED (never a literal) so a
+    version bump can never staleness-break these gate self-tests -- the recurring class this closes. The
+    release-time invariant (pin == the tag being cut) is enforced by pretag_gate's mirror-pin gate with the
+    REAL tag; here we only exercise the mirror_pin_problems LOGIC (match -> [], mismatch -> RED)."""
+    m = re.search(r"@(v\d+\.\d+\.\d+)", pg.SPACE_REQUIREMENTS.read_text(encoding="utf-8"))
+    assert m, "committed Space requirements has no @v<X.Y.Z> pin"
+    return m.group(1)
+
+
+_WRONG_TAG = "v0.9.9"  # a deliberately-different tag for the mismatch path (never a real release)
+
+
 def test_l3_mirror_pin_rule_and_the_committed_space_requirements():
     text = pg.SPACE_REQUIREMENTS.read_text(encoding="utf-8")
-    assert pg.mirror_pin_problems(text, "v0.2.5") == []
-    assert any("not the tag being cut `@v0.2.6`" in x for x in pg.mirror_pin_problems(text, "v0.2.6"))
-    assert any("`@v0.2.5`" in x and "v0.9.9" in x for x in pg.mirror_pin_problems(text.replace("@v0.2.5", "@v0.9.9"), "v0.2.5"))
-    assert any("no `gradio_wasmfunction @" in x for x in pg.mirror_pin_problems(text.split("gradio_wasmfunction")[0], "v0.2.5"))
+    cut = _committed_space_tag()
+    assert cut != _WRONG_TAG
+    # match: checking against the tag the file IS pinned to -> no problems
+    assert pg.mirror_pin_problems(text, cut) == []
+    # mismatch: any other tag -> RED naming the wrong cut tag
+    assert any(f"not the tag being cut `@{_WRONG_TAG}`" in x for x in pg.mirror_pin_problems(text, _WRONG_TAG))
+    # a mutated pin (wrong found value) checked against the real cut tag -> RED naming both
+    assert any(f"`@{cut}`" in x and _WRONG_TAG in x for x in pg.mirror_pin_problems(text.replace(f"@{cut}", f"@{_WRONG_TAG}"), cut))
+    # a missing gradio_wasmfunction pin -> RED
+    assert any("no `gradio_wasmfunction @" in x for x in pg.mirror_pin_problems(text.split("gradio_wasmfunction")[0], cut))
 
 
 def test_l2_license_files_present_and_the_gate_scripts_run():
@@ -1045,11 +1064,13 @@ def test_l2_license_files_present_and_the_gate_scripts_run():
         # line, may be RED here (the release tree is unified by set_version.py); the stamp check must be GREEN
         assert not any("stamp idempotence RED" in x for x in p), p
         assert all("guard_tag_version" in x for x in p), p
-    # B6: a `--only` subset that passes is PARTIAL/DIAGNOSTIC, NOT an unqualified release-authorizing GREEN
-    r = subprocess.run([sys.executable, str(SCRIPTS / "pretag_gate.py"), "v0.2.5", "--only", "readme", "workflows", "mirror-pin"], capture_output=True, text=True)
+    # B6: a `--only` subset that passes is PARTIAL/DIAGNOSTIC, NOT an unqualified release-authorizing GREEN.
+    # cut tag DERIVED from the committed pin (never a literal) so a version bump cannot staleness-break this.
+    cut = _committed_space_tag()
+    r = subprocess.run([sys.executable, str(SCRIPTS / "pretag_gate.py"), cut, "--only", "readme", "workflows", "mirror-pin"], capture_output=True, text=True)
     assert r.returncode == 0 and "PARTIAL/DIAGNOSTIC" in r.stdout and "NOT a" in r.stdout and "CHECKLIST (manual" in r.stdout, (r.stdout, r.stderr)
     assert "pretag_gate: GREEN (release-authorizing)" not in r.stdout  # a subset must never claim the authorizing GREEN
-    r = subprocess.run([sys.executable, str(SCRIPTS / "pretag_gate.py"), "v0.2.6", "--only", "mirror-pin"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(SCRIPTS / "pretag_gate.py"), _WRONG_TAG, "--only", "mirror-pin"], capture_output=True, text=True)
     assert r.returncode == 1 and "[mirror-pin] RED" in r.stdout and "not the tag being cut" in r.stderr
     r = subprocess.run([sys.executable, str(SCRIPTS / "pretag_gate.py"), "0.2.5"], capture_output=True, text=True)
     assert r.returncode == 2

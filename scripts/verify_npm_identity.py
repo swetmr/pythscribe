@@ -120,7 +120,7 @@ def local_package_content(pkg_dir: Path, work: Path) -> dict[str, str]:
     if not npm:
         raise IdentityError("npm not found on PATH (needed to pack the checkout for the content binding)")
     # `--pack-destination` MUST be ABSOLUTE: npm runs with cwd=pkg_dir, so a relative dest resolves under
-    # the package dir (e.g. packages/vite-plugin-pyths/evidence/.../*.tgz), which does not exist -> ENOENT.
+    # the plugin/wrapper package dir (e.g. <pkg_dir>/evidence/.../*.tgz), which does not exist -> ENOENT.
     work = work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     before = set(work.glob("*.tgz"))
