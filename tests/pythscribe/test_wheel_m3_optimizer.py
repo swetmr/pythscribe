@@ -335,12 +335,12 @@ def test_f2b_no_validator_never_publishes_and_states_the_tab_path_limitation(tmp
     assert info.wasm.read_bytes() == ref  # the ORIGINAL is the artifact, byte-identical
     assert manifest["files"][manifest["wasm"]] == _sha(ref)
     _assert_clean(info.dir)
-    # surfaces (1) doctor line (M7 reuses the constant) and (2) the README `[server]` line + section
+    # The no-validator limitation is surfaced by the ENFORCED code constants: the build error (asserted
+    # above: names the validator requirement + "applies to browser-tab artifacts too") and the doctor line.
+    # The PyPI readme (pythscribe/README.md) is now a minimal landing page and delegates this detail to the
+    # repo (user 2026-09-18), so the doc binding is the code surfaces, not that file's prose.
     assert TAB_PATH_SENTENCE in NO_VALIDATOR_DOCTOR_LINE and "install `pythscribe[server]`" in NO_VALIDATOR_DOCTOR_LINE
-    readme = (REPO / "pythscribe" / "README.md").read_text(encoding="utf-8")
-    server_line = next(l for l in readme.splitlines() if l.startswith("pip install pythscribe[server]"))
-    assert "validator" in server_line
-    assert "applies to browser-tab artifacts too" in readme and "Known limitation" in readme
+    assert "validator" in NO_VALIDATOR_DOCTOR_LINE  # the doctor line names the validator requirement
     assert _bits(_run_hello(src)[0]) == _bits(3.0)  # and the unoptimized artifact is a valid one
 
 
