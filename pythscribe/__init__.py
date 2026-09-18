@@ -19,7 +19,7 @@ from ._pin import COMPILER_COMMIT, COMPILER_VERSION
 from .artifacts import ArtifactError, ArtifactInfo, ArtifactNotFoundError, ArtifactWarning
 from .decorators import MODES, ModeError, StaticDecorationError, WasmBinding, binding_of, wasm
 
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 
 __all__ = [
     "wasm",

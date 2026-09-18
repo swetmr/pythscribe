@@ -1,15 +1,15 @@
 {
   "compiler": {
-    "commit": "d87df08a68f694cf213d87cbe963316e667e2e3d",
+    "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.6"
+    "version": "0.2.7"
   },
   "entry": "monthly_payment.js",
   "files": {
     "monthly_payment.glue.js": "18c15155bdab24008d7cb464865e252c96835f9232938528a26579d523ab0de7",
     "monthly_payment.js": "24f0bb967436a784cb30d8eefd363db73724b7827b3d6f73108be9c4864ebbab",
     "monthly_payment.ps": "ae4685270bcf7bd076be2b895f7b32fa6c5e06d2ef96e9c3ac3305bc183f5bf1",
-    "monthly_payment.wasm": "d3473b20c6111f691d2a7fc738eb54996b19d5f692d52d060572aaa7a6f237eb",
+    "monthly_payment.wasm": "2df992908f743c82336479121feccd42e2532bfb9f4d076369659edc25cd935a",
     "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
     "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
     "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
@@ -19,7 +19,7 @@
   },
   "function": "monthly_payment",
   "glue": "monthly_payment.glue.js",
-  "manifest_sha256": "611314bac71c4b50ae6effbf9ab37e38fbda7dcb17f2405bf99f320bf2742dbf",
+  "manifest_sha256": "6331945ca2401889ae36fd9a2ed68e582ac9c357528dc3e39ab7cb2a6898f826",
   "optimizer": {
     "applied": false,
     "error": null,

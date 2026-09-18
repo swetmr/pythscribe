@@ -1,8 +1,8 @@
 {
   "compiler": {
-    "commit": "d87df08a68f694cf213d87cbe963316e667e2e3d",
+    "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.6"
+    "version": "0.2.7"
   },
   "entry": "spin.js",
   "files": {
@@ -15,11 +15,11 @@
     "spin.glue.js": "fe7e1d29b77feb4414753d052728c084a600232ad261d465d0526d647fc67d13",
     "spin.js": "ccb8a53cd0c01bd107bf17714e34e4f4b36c8058ca8ab92d62112cb369874ee2",
     "spin.ps": "6b16dbfaa8e5155b65e3c6e5565962b3d189c661b3aee3c6a401f59c5e344247",
-    "spin.wasm": "00dbc3d7922a9d9f1ccea42615f5c4e14442e4a6660ec5ecd13b5832ef74373d"
+    "spin.wasm": "a736f24f9047b17109f9e8c21639788e467e4ad4d94ff0838c45f259c70b440f"
   },
   "function": "spin",
   "glue": "spin.glue.js",
-  "manifest_sha256": "880e9e9e6e8a68025162173a0260e758d2bd51165f8f4123404e976b1cdb1400",
+  "manifest_sha256": "c462fb663343a827cba092ff72d4a0fcfb0694bb7c439aa857e3d4ef8c557386",
   "optimizer": {
     "applied": false,
     "error": null,

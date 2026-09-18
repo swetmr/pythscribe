@@ -445,6 +445,19 @@ def lint(release: dict, publish: dict) -> list[str]:
     # ---- PERM (codex pass-4): effective `actions: read` for every evidence/CI-consuming job in BOTH workflows
     p += actions_read_problems(release, "release.yml")
     p += actions_read_problems(publish, "publish-pypi.yml")
+    # ---- REPRO: the cibuildwheel step MUST set SOURCE_DATE_EPOCH in CIBW_ENVIRONMENT so every rebuild is
+    # byte-identical. A re-cut's new wheel bytes mismatching the immutable registry copy -- then a delete --
+    # is what BURNED a TestPyPI filename on v0.2.6 (the delete permanently reserves the name). This is the
+    # paired guard: removing the epoch turns it RED. Verified locally (build-twice identical with it, distinct
+    # without). Memory: the wheel-reproducibility class.
+    cibw_envs = [str((s.get("env") or {}).get("CIBW_ENVIRONMENT", ""))
+                 for j in (release.get("jobs") or {}).values() for s in _steps(j)
+                 if isinstance(s.get("env"), dict) and "CIBW_ENVIRONMENT" in s["env"]]
+    if not cibw_envs:
+        p.append("REPRO: release.yml has no CIBW_ENVIRONMENT (the cibuildwheel step could not be found)")
+    elif not all("SOURCE_DATE_EPOCH=" in e for e in cibw_envs):
+        p.append("REPRO: a cibuildwheel CIBW_ENVIRONMENT lacks `SOURCE_DATE_EPOCH=` -- wheels would not be "
+                 "byte-reproducible across re-cuts (the class that burned a TestPyPI filename on v0.2.6)")
     # ---- W1/W2: the native shell-only window
     steps = _steps(jobs[ACCEPTANCE])
     scrub_idx = [i for i, s in enumerate(steps) if str(s.get("id", "")).startswith("scrub")]

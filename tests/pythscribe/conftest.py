@@ -29,6 +29,18 @@ def gate(ok: bool, reason: str) -> None:
     pytest.skip(reason)
 
 
+def soft_perf(ok: bool, msg: str) -> None:
+    """Speedup / latency / scaling numbers vary with the host CPU and load; the shipped wheels are
+    byte-identical (reproducible build), so the CODE is identical and these numbers are NOT a correctness
+    signal -- they must NEVER gate the release suite (user 2026-09-18; the recurring fanout/latency
+    flakes). Record + WARN instead of asserting: a gross margin still surfaces in the warning, timing
+    noise never turns the gate red. Keep the CORRECTNESS facts (results agree, sandbox contained,
+    isomorphic, determinism, byte/size reductions) as hard asserts -- only the timing goes soft."""
+    import warnings
+    if not ok:
+        warnings.warn(f"perf(non-blocking): {msg}", stacklevel=2)
+
+
 def gate_import(modname: str):
     try:
         return importlib.import_module(modname)

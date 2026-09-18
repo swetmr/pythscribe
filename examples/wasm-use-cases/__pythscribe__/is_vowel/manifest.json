@@ -1,19 +1,19 @@
 {
   "compiler": {
-    "commit": "d87df08a68f694cf213d87cbe963316e667e2e3d",
+    "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.6"
+    "version": "0.2.7"
   },
   "entry": "is_vowel.js",
   "files": {
     "is_vowel.glue.js": "51ccd26cf12b4baf7ab4ec0e3e8ba473f7460fb8115e0637a171b74410c96102",
     "is_vowel.js": "abb5a9ee7de52a0bfa8ac9877221a9dcd9ff46aa592691ef2811f7ed02fdf773",
     "is_vowel.ps": "3bee9c5bb9472ec52b93d4fb38cbddec31f00a5b849d39b3ce39c2c296e4cb4c",
-    "is_vowel.wasm": "f6f6a7010f00bd92651fdbc80373dbc6c81a8ba93db55d588b50ef8b5c9830d5"
+    "is_vowel.wasm": "c028b693157ac39d7ce55e9b4b4ca8d45f61b3e6d528ff5b9c3814b8c4cba85e"
   },
   "function": "is_vowel",
   "glue": "is_vowel.glue.js",
-  "manifest_sha256": "77c3f1f36c4868e2ef5ffdb05663fc59c10381d3b886def0fb1aa6d4a4c438c2",
+  "manifest_sha256": "58859e1a39a9f67b3c54024efa2d913a0122b759afdeaec476443a8bea458450",
   "optimizer": {
     "applied": false,
     "error": null,

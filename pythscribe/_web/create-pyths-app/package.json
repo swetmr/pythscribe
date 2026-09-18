@@ -1,6 +1,6 @@
 {
   "name": "create-pyths-app",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Create a new PythScribe app — React + Next.js + PythScribe",
   "bin": {
     "create-pyths-app": "./index.js"

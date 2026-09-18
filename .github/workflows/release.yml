@@ -265,7 +265,12 @@ jobs:
           CIBW_BUILD_FRONTEND: build
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
-          CIBW_ENVIRONMENT: PYTHSCRIBE_WHEEL_PLATFORM=${{ matrix.tag }} PYTHSCRIBE_RELEASE_BINARY_SHA256=${{ env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }}
+          # SOURCE_DATE_EPOCH: a FIXED constant (not the commit time) so the wheel zip is byte-reproducible
+          # across ANY rebuild -- setuptools>=77 stamps every zip entry with it. The bundled pyths binary is
+          # already byte-identical (/Brepro), so identical wheel CONTENT -> identical wheel BYTES regardless
+          # of commit. This closes the class where a re-cut produced new wheel bytes, mismatched the immutable
+          # registry copy, and (after a delete) burned the filename on TestPyPI. 1704067200 = 2024-01-01 UTC.
+          CIBW_ENVIRONMENT: PYTHSCRIBE_WHEEL_PLATFORM=${{ matrix.tag }} PYTHSCRIBE_RELEASE_BINARY_SHA256=${{ env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }} SOURCE_DATE_EPOCH=1704067200
           CIBW_ENVIRONMENT_PASS_LINUX: PYTHSCRIBE_WHEEL_PLATFORM PYTHSCRIBE_RELEASE_BINARY_SHA256
           # The repair hook MUST emit the wheel into {dest_dir} (a check-only command produces none and
           # cibuildwheel fails the leg); the passthrough emits it only after the floor + identity checks.

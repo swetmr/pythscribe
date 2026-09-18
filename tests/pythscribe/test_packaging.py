@@ -168,7 +168,8 @@ def test_p3_vendored_component_is_the_one_that_resolves_here():
     # and no SECOND distribution provides the same import name (the M0 two-step is gone)
     import importlib.metadata as md
 
-    dists = [d.metadata["Name"] for d in md.distributions() if d.metadata["Name"].lower().replace("-", "_") == "gradio_wasmfunction"]
+    # a malformed dist in the env can have a None `Name` (editable/namespace installs) -> coalesce, don't crash
+    dists = [d.metadata["Name"] for d in md.distributions() if (d.metadata["Name"] or "").lower().replace("-", "_") == "gradio_wasmfunction"]
     assert dists == [], f"separate gradio_wasmfunction distribution(s) still installed: {dists} (pip uninstall gradio_wasmfunction; pip install -e .)"
 
 

@@ -1,15 +1,15 @@
 {
   "compiler": {
-    "commit": "d87df08a68f694cf213d87cbe963316e667e2e3d",
+    "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.6"
+    "version": "0.2.7"
   },
   "entry": "mask_digit_runs.js",
   "files": {
     "mask_digit_runs.glue.js": "72af03a0351119df036305fff3195c6948aa1deb534e31b38a5e9ade01f005d5",
     "mask_digit_runs.js": "b43f8cfc9d26caa2c1a775920764a5b4471a3d8c0dff8b33e28917a8b4c6357a",
     "mask_digit_runs.ps": "645b0b6deea6326655d52d14ede6eba19dab81f8d8f606d22eab11924ff8ae8b",
-    "mask_digit_runs.wasm": "28e22dec182ac16dda027a77386f68ba481e11c7a350c05c4ef3a3f83db4849f",
+    "mask_digit_runs.wasm": "5ff9bbba807152306fca22cb4ffefd87014406b06fa370be7e416c59facb6b35",
     "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
     "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
     "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
@@ -19,7 +19,7 @@
   },
   "function": "mask_digit_runs",
   "glue": "mask_digit_runs.glue.js",
-  "manifest_sha256": "5e5abc546c43f83b8d4c215ab641d941f408b35268088fafb8ba0952e1d9890b",
+  "manifest_sha256": "73463ae45d0b3c890e2221e3b7c1d24b92081f5b943df275a86d96b7fed9b55d",
   "optimizer": {
     "applied": false,
     "error": null,

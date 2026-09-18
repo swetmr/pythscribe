@@ -1,15 +1,15 @@
 {
   "compiler": {
-    "commit": "d87df08a68f694cf213d87cbe963316e667e2e3d",
+    "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.6"
+    "version": "0.2.7"
   },
   "entry": "downscale_nn.js",
   "files": {
     "downscale_nn.glue.js": "1dbdb9bd8bf7c379c22445311a91bd74bcb0e0a5b455911c02f3cf0406f5266e",
     "downscale_nn.js": "5a03e54b9e2dcef22530ff24c999f41cefe1bca5bc8d0800737594bf396e41e7",
     "downscale_nn.ps": "275bf4455ec69c8a3a739fc00755672d374d011ff358e7767677446fc56d86ac",
-    "downscale_nn.wasm": "da14b1c8fe432fdd8ba4c51b85f2f799fc24c77986cd11bb602731d2b60b43b5",
+    "downscale_nn.wasm": "d5ca69e7d8a381a34a67b884e41e24b3e6b2c0267cd4e978a839000e5b677c74",
     "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
     "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
     "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
@@ -19,7 +19,7 @@
   },
   "function": "downscale_nn",
   "glue": "downscale_nn.glue.js",
-  "manifest_sha256": "b99f74ca5223dfc5d5a7323678313bf60b5c9f274c0ef456f92a369f4ebb415a",
+  "manifest_sha256": "d0d8a18ebb9f69e12cefa203a07e932d7e0ae0807b265ec24422348971f9ae95",
   "optimizer": {
     "applied": false,
     "error": null,
