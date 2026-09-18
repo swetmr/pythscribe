@@ -160,8 +160,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--work", default=None)
     ns = ap.parse_args(argv)
     manifest = json.loads(Path(ns.manifest).read_text(encoding="utf-8"))
-    out = Path(ns.out)
-    work = Path(ns.work) if ns.work else Path(tempfile.mkdtemp(prefix="tpv-"))
+    # ABSOLUTE: the a0/run legs run wheel_acceptance.py as a subprocess with a CHANGED cwd (work / a temp
+    # cwd), so a relative --out would resolve under THAT cwd and this reader would miss it ("a0/run wrote
+    # nothing"). Same relative-path-under-changed-cwd class as verify_npm_identity's work dir (codex 2026-09-18).
+    out = Path(ns.out).resolve()
+    work = Path(ns.work).resolve() if ns.work else Path(tempfile.mkdtemp(prefix="tpv-"))
     checkout = Path(ns.checkout).resolve()
     version, target = manifest["version"], ns.target
     ok = True
