@@ -44,6 +44,14 @@ on:
           - pypi
         default: testpypi
 
+# A publish must be the SINGLE writer for its version: two concurrent `pypi` dispatches (or a re-dispatch
+# over a still-running one) can each partially upload the immutable 6-file set and STRAND v<V> -- a
+# non-resumable partial cannot be completed and a delete BURNS the filename forever. Serialize by ref and
+# NEVER cancel a run mid-upload (cancel-in-progress:false queues the second run instead). (codex 2026-09-18)
+concurrency:
+  group: publish-pypi-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   # NEW (codex pass-4): every job here runs require_evidence.py --role promotion, which queries the
@@ -134,6 +142,7 @@ jobs:
           name: evidence-R-TP-${{ github.run_attempt }}
           path: evidence/R-TP.json
           if-no-files-found: error
+          overwrite: true
       - name: Attach R-TP to the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -197,6 +206,7 @@ jobs:
           name: testpypi-leg-${{ matrix.target }}
           path: legs/${{ matrix.target }}/
           if-no-files-found: error
+          overwrite: true   # a re-run replaces the prior leg (one artifact per target -> collector unambiguous)
 
   testpypi-evidence:
     # B4: DISPLAY name == job key (RECORD_PRODUCER_JOB["R-TV"] == "testpypi-evidence"); see the testpypi job.
@@ -241,6 +251,7 @@ jobs:
           name: evidence-R-TV-${{ github.run_attempt }}
           path: evidence/R-TV.json
           if-no-files-found: error
+          overwrite: true
       - name: Attach R-TV to the GitHub Release
         if: always()
         env:
@@ -257,7 +268,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      contents: read
+      contents: write   # gh release upload evidence/PyPI-registry-proof.json (the post-publish set proof)
       actions: read     # gh run download of the build run's artifacts
       id-token: write   # OIDC trusted publishing (no token)
     steps:
@@ -297,9 +308,36 @@ jobs:
           python3 scripts/verify_wheel_set.py --dist dist
           python3 scripts/verify_wheel_clean.py --dist dist
           python3 scripts/verify_wheel_license.py --dist dist --cargo-lock Cargo.lock
-      - name: Publish to PyPI (the same bytes; an already-existing file is a loud failure, never a silent skip)
+      - name: Publish to PyPI (the SAME manifest-bound bytes TestPyPI validated; resumable)
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist/
           attestations: false   # PEP 740 sidecars break assemble_rtp's exact-set check (see TestPyPI step)
-          skip-existing: false
+          # RESUMABLE (codex 2026-09-18): the 6 files are IMMUTABLE and a delete BURNS the name, so a
+          # mid-upload failure must be COMPLETABLE by a fresh re-dispatch. skip-existing:false aborts the
+          # retry on the files that DID land -> v<V> is stranded forever. The bytes are already proven
+          # right (dist == manifest == R-TP.uploaded_files, asserted above) and we own the name (Trusted
+          # Publisher; the first-publish namespace is empty), so an existing file can only be one WE
+          # uploaded. skip-existing:true lets a re-dispatch upload the MISSING files; the post-publish
+          # step then PROVES PyPI serves exactly the manifest's set + digests -- a partial or wrong upload
+          # is caught loudly, never silently skipped.
+          skip-existing: true
+      # (No separate JSON-wait step: assemble_rtp.registry_files_via_json already retries 18x/10s until the
+      # COMPLETE manifest set has propagated, so the proof runs IMMEDIATELY after the publish -- nothing can
+      # rewrite the assembler/manifest/dist between them. fable pass A3.)
+      - name: PROVE PyPI serves EXACTLY the manifest's distribution set + digests (partial/wrong upload -> RED)
+        run: python3 scripts/assemble_rtp.py --manifest release_manifest.json --dist dist --repository-url https://upload.pypi.org/legacy/ --out evidence/PyPI-registry-proof.json
+      - name: Upload the PyPI registry proof (immutable audit artifact, unlike the best-effort Release attach)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-R-PP-${{ github.run_attempt }}
+          path: evidence/PyPI-registry-proof.json
+          if-no-files-found: warn
+          overwrite: true
+      - name: Attach the PyPI registry proof to the Release
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -f evidence/PyPI-registry-proof.json ] && gh release upload "${GITHUB_REF_NAME}" "evidence/PyPI-registry-proof.json#evidence/PyPI-registry-proof.json" --clobber || true

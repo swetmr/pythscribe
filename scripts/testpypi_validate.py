@@ -212,18 +212,24 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[A1..A4] {leg.get('steps')} {leg.get('problems') or ''}")
 
     # 5. the all-features smoke against the installed PUBLIC artifact
-    r = _run([py, "-m", "pip", "install", "pytest>=8", "pytest-timeout>=2", "numpy>=1.26", "gradio>=6,<7", "--index-url", ns.extra_index_url], timeout=900)
-    smoke_cwd = work / "smoke"
-    smoke_cwd.mkdir(exist_ok=True)
-    pf = _run([py, "-c", "import pythscribe; print(pythscribe.__file__)"], env=env, cwd=str(smoke_cwd))
-    pytest_exe = shutil.which("pytest", path=str(scripts)) or str(scripts / "pytest")
-    senv = dict(env, PYTHSCRIBE_REQUIRE_ORACLE="1")
-    r = _run([pytest_exe, str(checkout / SMOKE_TEST), "-p", "no:cacheprovider", "-q", "--rootdir", str(checkout), "-c", str(checkout / "pyproject.toml")], env=senv, timeout=1800, cwd=str(smoke_cwd))
-    smoke = smoke_summary(r.returncode, r.stdout + r.stderr, pf.stdout.strip(), site)
-    smoke["stdout_tail"] = (r.stdout + r.stderr)[-3000:]
-    _write(out, "smoke.json", smoke)
-    ok &= smoke["verdict"] == "pass"
-    print(f"[all-features] {smoke['verdict']} passed={smoke['passed']} failed={smoke['failed']}")
+    dep = _run([py, "-m", "pip", "install", "pytest>=8", "pytest-timeout>=2", "numpy>=1.26", "gradio>=6,<7", "--index-url", ns.extra_index_url], timeout=900)
+    if dep.returncode != 0:
+        # a failed smoke-dep install is a STRUCTURED failure, not a crash into a broken pytest env (codex 2026-09-18)
+        _write(out, "smoke.json", {"verdict": "fail", "problems": [f"smoke dependency install failed (pytest/numpy/gradio): {(dep.stderr or dep.stdout)[-1500:]}"]})
+        ok = False
+        print("[all-features] fail: smoke dependency install failed")
+    else:
+        smoke_cwd = work / "smoke"
+        smoke_cwd.mkdir(exist_ok=True)
+        pf = _run([py, "-c", "import pythscribe; print(pythscribe.__file__)"], env=env, cwd=str(smoke_cwd))
+        pytest_exe = shutil.which("pytest", path=str(scripts)) or str(scripts / "pytest")
+        senv = dict(env, PYTHSCRIBE_REQUIRE_ORACLE="1")
+        r = _run([pytest_exe, str(checkout / SMOKE_TEST), "-p", "no:cacheprovider", "-q", "--rootdir", str(checkout), "-c", str(checkout / "pyproject.toml")], env=senv, timeout=1800, cwd=str(smoke_cwd))
+        smoke = smoke_summary(r.returncode, r.stdout + r.stderr, pf.stdout.strip(), site)
+        smoke["stdout_tail"] = (r.stdout + r.stderr)[-3000:]
+        _write(out, "smoke.json", smoke)
+        ok &= smoke["verdict"] == "pass"
+        print(f"[all-features] {smoke['verdict']} passed={smoke['passed']} failed={smoke['failed']}")
     return 0 if ok else 1
 
 

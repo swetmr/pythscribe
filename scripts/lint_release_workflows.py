@@ -164,6 +164,20 @@ def _pinned_promotion_command(key: str) -> str:
 NPM_IDENTITY_PIN = ('python scripts/verify_npm_identity.py --manifest release_manifest.json '
                     '--dist dist --out evidence/R-NI.json --checkout .')
 
+# The EXACT post-publish PyPI set-proof command (codex astra 2026-09-18). The `pypi` publish is resumable
+# (skip-existing:true), so this proof -- assemble_rtp against PRODUCTION PyPI, asserting the registry serves
+# exactly the manifest's distribution set + digests -- is the only catch for a partial/wrong production
+# upload. Pinning it EXACTLY (like the promotion gates) is what stops the vacuous-proof bypasses a substring
+# check misses: `echo`-prefix, `|| true`, a mispointed --repository-url, or a hidden comment all fail here.
+PYPI_PROOF_PIN = ('python scripts/assemble_rtp.py --manifest release_manifest.json --dist dist '
+                  '--repository-url https://upload.pypi.org/legacy/ --out evidence/PyPI-registry-proof.json')
+
+# The EXACT R-TP command in the `testpypi` job (fable pass C1): the SAME assembler is pinned on the pypi
+# path but was unlinted on the testpypi path, so `|| true` on it or its removal linted GREEN. Pin it too --
+# both fail safe downstream, but a lying assembler on one path deserves the same exact-command guard.
+TESTPYPI_PROOF_PIN = ('python scripts/assemble_rtp.py --manifest release_manifest.json --dist dist '
+                      '--repository-url https://test.pypi.org/legacy/ --out evidence/R-TP.json')
+
 
 def _normalize_gate_run(run_text: str) -> str:
     """Normalize ONLY the leading python interpreter token; everything else is compared exactly."""
@@ -458,6 +472,145 @@ def lint(release: dict, publish: dict) -> list[str]:
     elif not all("SOURCE_DATE_EPOCH=" in e for e in cibw_envs):
         p.append("REPRO: a cibuildwheel CIBW_ENVIRONMENT lacks `SOURCE_DATE_EPOCH=` -- wheels would not be "
                  "byte-reproducible across re-cuts (the class that burned a TestPyPI filename on v0.2.6)")
+    # ---- PP (codex 2026-09-18): the `pypi` publish is RESUMABLE (skip-existing:true), so the POST-publish
+    # set-proof (assemble_rtp against upload.pypi.org -> PyPI SERVES exactly the manifest set + digests) is
+    # the ONLY thing that catches a partial/wrong PRODUCTION upload. This is that gate's PAIRED negative
+    # control: it goes RED if the proof is deleted, mispointed away from PyPI, or reordered before the
+    # publish -- so a green lint can never accompany an unverified irreversible publish (anti-vacuity, d′).
+    pypi_job = (publish.get("jobs") or {}).get("pypi") or {}
+    pypi_steps = _steps(pypi_job)
+    # D1 (fable): the single-writer `concurrency:` guard is a shipped gate -> lint + pair it (removing it, or
+    # cancel-in-progress:true, must go RED: two racing publishes each partial-upload the immutable set).
+    conc = publish.get("concurrency") or {}
+    if not conc:
+        p.append("PP: publish-pypi.yml has no top-level `concurrency:` guard -- concurrent publishes could each "
+                 "partially upload the immutable distribution set for the same version")
+    else:
+        if not str(conc.get("group", "")).strip():
+            p.append("PP: `concurrency.group` is empty -- publishes for the same version (ref) must serialize")
+        if conc.get("cancel-in-progress") is not False:
+            p.append("PP: `concurrency.cancel-in-progress` must be literal false -- a publish must NEVER be cancelled "
+                     "mid-upload (a cancelled run strands a partial set)")
+    # C1 (fable): pin the testpypi R-TP assembler too -- the SAME command is exact-pinned on the pypi path but
+    # was unlinted on the testpypi path (its `|| true` or removal linted GREEN).
+    tp_proofs = [s for s in _steps((publish.get("jobs") or {}).get("testpypi") or {}) if "assemble_rtp.py" in str(s.get("run", ""))]
+    if len(tp_proofs) != 1:
+        p.append(f"PP: the `testpypi` job has {len(tp_proofs)} assemble_rtp steps -- exactly one R-TP emit is expected")
+    else:
+        rt = str(tp_proofs[0].get("run", ""))
+        p += _gate_command_problems(rt, "assemble_rtp.py", "PP", "testpypi R-TP")
+        p += _exact_pin_problems(rt, TESTPYPI_PROOF_PIN, "PP", "testpypi R-TP")
+    # B-1/S-1 (fable pass-2): pin the publish steps' `with:` on BOTH jobs. The `testpypi` job runs FIRST
+    # (gated only by R-NI) -- if its repository-url is edited to production, it IRREVERSIBLY publishes to
+    # PyPI before any R-TV. And attestations MUST stay off (default true) or the sidecars break the exact-set
+    # proof on a correct publish, with no re-dispatch able to recover (each regenerates them).
+    for jobkey, expect_url in (("testpypi", "https://test.pypi.org/legacy/"), ("pypi", None)):
+        pubs = [s for s in _steps((publish.get("jobs") or {}).get(jobkey) or {}) if "gh-action-pypi-publish" in str(s.get("uses", ""))]
+        for ps in pubs:
+            w = ps.get("with") or {}
+            url = w.get("repository-url")
+            if jobkey == "testpypi" and url != expect_url:
+                p.append(f"PP: the `testpypi` publish repository-url is {url!r}, not {expect_url!r} -- a prod URL here "
+                         "would IRREVERSIBLY publish to PyPI from the R-NI-only testpypi job")
+            if jobkey == "pypi" and url is not None and "test.pypi.org" in str(url):
+                p.append("PP: the `pypi` publish repository-url points at TestPyPI -- production must publish to PyPI")
+            if w.get("attestations") is not False:
+                p.append(f"PP: the `{jobkey}` publish must set attestations:false -- PEP 740 sidecars in dist/ break the "
+                         "exact-set proof on a correct publish (and every re-dispatch regenerates them)")
+    # exec-CONTEXT hardening (codex astra pass-4): the step-key allowlist + exact-pin still leave the proof
+    # neuterable by settings OUTSIDE the step -- a JOB-level continue-on-error (a failed proof no longer
+    # fails the run) or a failure-masking defaults.run.shell (workflow OR job scope, e.g. `bash -c '... ||
+    # true'`) that the proof inherits. Enforce the effective execution context too.
+    if "continue-on-error" in pypi_job and pypi_job.get("continue-on-error") is not False:
+        # not `is True`: `continue-on-error: ${{ true }}` / `${{ 1==1 }}` is a STRING expression that also
+        # suppresses job failure -- reject unless the key is literal `false` (codex astra pass-5).
+        p.append(f"PP: the `pypi` job sets continue-on-error: {pypi_job.get('continue-on-error')!r} -- a FAILED "
+                 "post-publish proof would not fail the workflow; only literal `false` (or absence) is permitted")
+    for scope, d in (("workflow", publish.get("defaults")), ("pypi-job", pypi_job.get("defaults"))):
+        run_defaults = (d or {}).get("run") or {}
+        sh = run_defaults.get("shell")
+        if sh is not None and str(sh) not in GATE_STEP_APPROVED_SHELLS:
+            p.append(f"PP: {scope} defaults.run.shell {sh!r} is inherited by the proof and could mask its failure "
+                     f"-- only {sorted(GATE_STEP_APPROVED_SHELLS)} is permitted")
+        if "working-directory" in run_defaults:
+            p.append(f"PP: {scope} defaults.run.working-directory is inherited by the proof and can mispoint it "
+                     "(the manifest/dist it reads); the proof must run from the repo root")
+    # inherited ENVIRONMENT: a workflow/job `env` (or a prior step writing $GITHUB_ENV/$GITHUB_PATH) reaches
+    # the proof and can no-op it -- SHELLOPTS=noexec, BASH_ENV, PYTHONPATH (an auto-imported sitecustomize.py
+    # can stub sys.exit so main() returns 1 but the process exits 0), PATH/LD_PRELOAD shims, etc. A blacklist
+    # of env keys "never converges" (this file's own lesson, lines 141-145 / fable pass); the honest pypi path
+    # has NO env at workflow or job scope, so ALLOWLIST-shape it: forbid `env` at those two scopes outright,
+    # and forbid ANY `$GITHUB_ENV`/`$GITHUB_PATH` write anywhere in the pypi job (codex astra + fable).
+    for scope, env in (("workflow", publish.get("env")), ("pypi-job", pypi_job.get("env"))):
+        if env:
+            p.append(f"PP: {scope} sets `env` ({sorted(env)}) -- inherited by the proof, any env can no-op it "
+                     "(SHELLOPTS/BASH_ENV/PYTHONPATH/PATH/LD_PRELOAD); the pypi path needs none, so it is forbidden here")
+    for s in pypi_steps:
+        if re.search(r"\$?\{?GITHUB_(ENV|PATH)\}?", str(s.get("run", ""))):
+            p.append("PP: a step in the `pypi` job writes $GITHUB_ENV/$GITHUB_PATH -- it can inject an env no-op "
+                     "(SHELLOPTS/BASH_ENV) or a PATH shim (a fake python3) into the proof; the pypi job needs neither")
+            break
+    pub_idxs = [i for i, s in enumerate(pypi_steps) if "gh-action-pypi-publish" in str(s.get("uses", ""))]
+    if not pub_idxs:
+        p.append("PP: publish-pypi.yml `pypi` job has no gh-action-pypi-publish step")
+    else:
+        if len(pub_idxs) > 1:  # a 2nd publisher after the proof would upload OUTSIDE the proof (astra pass-5)
+            p.append(f"PP: the `pypi` job has {len(pub_idxs)} publish steps -- EXACTLY ONE is expected so the "
+                     "post-publish proof covers every upload")
+        for pubi in pub_idxs:
+            if (pypi_steps[pubi].get("with") or {}).get("skip-existing") is not True:
+                p.append("PP: a `pypi` publish step is not `skip-existing: true` (RESUMABLE) -- a partial upload could "
+                         "not be completed by a fresh re-dispatch and would strand the version")
+                break
+    pub_last = max(pub_idxs) if pub_idxs else None
+    # The proof must be an EFFECTIVE gate, not merely PRESENT: a substring check passes when the step is
+    # `echo`-prefixed, `|| true`-suffixed, `continue-on-error`/`if:false`, or points at TestPyPI with a
+    # `# upload.pypi.org` comment (all reproduced GREEN by codex astra). Validate it the SAME way as the
+    # promotion gates: exactly-one invocation + no shell control/comment, an execution-neutral step-key
+    # allowlist, and an EXACT command pin -- every one of those bypasses then fails by construction.
+    proof_idxs = [i for i, s in enumerate(pypi_steps) if "assemble_rtp.py" in str(s.get("run", ""))]
+    if not proof_idxs:
+        p.append("PP: the `pypi` job has NO post-publish set-proof (assemble_rtp.py against PyPI) -- a partial or "
+                 "wrong PRODUCTION upload would go undetected on the irreversible path")
+    elif len(proof_idxs) > 1:
+        p.append(f"PP: the `pypi` job has {len(proof_idxs)} assemble_rtp steps -- EXACTLY ONE post-publish proof is expected")
+    else:
+        pi = proof_idxs[0]
+        proof = pypi_steps[pi]
+        run = str(proof.get("run", ""))
+        p += _gate_command_problems(run, "assemble_rtp.py", "PP", "pypi post-publish proof")
+        p += _gate_step_metadata_problems(proof, "PP", "pypi post-publish proof")
+        p += _exact_pin_problems(run, PYPI_PROOF_PIN, "PP", "pypi post-publish proof")
+        # TIGHTER than the shared gate allowlist: the proof needs NO env (it queries the PUBLIC PyPI JSON;
+        # GITHUB_* is auto-provided) and NO working-directory (it runs from the repo root). Forbidding both
+        # closes the `env: {SHELLOPTS: noexec}` / `env: {BASH_ENV: ...}` no-op and a mispointing
+        # working-directory -- neither of which the general step-key allowlist catches (codex astra pass-4).
+        proof_extra = sorted(k for k in proof if k not in {"name", "id", "run", "shell"})
+        if proof_extra:
+            p.append(f"PP: the post-publish proof step carries disallowed key(s) {proof_extra} -- it may use ONLY "
+                     "name/id/run/shell (env can set SHELLOPTS/BASH_ENV to no-op the command; working-directory can mispoint it)")
+        if pub_last is not None and pi != pub_last + 1:
+            p.append("PP: the post-publish set-proof must run IMMEDIATELY after the (single) publish step -- any step "
+                     "between them (or the proof before a publish) can rewrite assemble_rtp.py / release_manifest.json / "
+                     "dist/ or delay the proof past a second upload (fable pass)")
+    # A4 (fable): "exactly one publisher" also means no OTHER uploader in a run: -- a `twine upload`/`uv publish`
+    # appended after the proof would upload OUTSIDE it. Reject those in any pypi-job run: step.
+    for s in pypi_steps:
+        if re.search(r"\b(twine\s+upload|python\s+-m\s+twine|uv\s+publish)\b", str(s.get("run", ""))):
+            p.append("PP: a `pypi` run: step uploads via twine/uv directly -- only the pinned gh-action-pypi-publish "
+                     "step may upload, so the post-publish proof covers every upload")
+            break
+    # the proof must be RETAINED as an immutable audit artifact, and that upload must be if: always() (astra +
+    # fable: total removal AND dropping `if: always()` -- which skips the upload exactly on the RED case -- both
+    # lint GREEN otherwise).
+    rpp_uploads = [s for s in pypi_steps if "upload-artifact" in str(s.get("uses", ""))
+                   and "PyPI-registry-proof" in str((s.get("with") or {}).get("path", ""))]
+    if not rpp_uploads:
+        p.append("PP: the `pypi` job does not upload the PyPI registry proof (PyPI-registry-proof.json) as an Actions "
+                 "artifact -- the immutable audit record of the post-publish set proof is missing")
+    elif str(rpp_uploads[0].get("if", "")).strip() not in ("always()", "${{ always() }}"):
+        p.append("PP: the PyPI registry-proof artifact upload must be `if: always()` -- otherwise it SKIPS on the "
+                 "failed-proof (RED) case, dropping the audit record exactly when it matters")
     # ---- W1/W2: the native shell-only window
     steps = _steps(jobs[ACCEPTANCE])
     scrub_idx = [i for i, s in enumerate(steps) if str(s.get("id", "")).startswith("scrub")]
