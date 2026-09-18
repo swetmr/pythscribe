@@ -2,14 +2,14 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.7"
+    "version": "0.2.8"
   },
   "entry": "downscale_box.js",
   "files": {
     "downscale_box.glue.js": "bfc474c4a12d2d4224bef67d36db462305ae787f303041718c93db3fc16f2263",
     "downscale_box.js": "45c7271bc0bd3c8347a2f8627f43956ddb4cf5c4dbc759a862dc2766d30a76dd",
     "downscale_box.ps": "fe0dfb08d4c2bb9c6d48c9d84caf85ecb14580c92588ada77d3a4b93bb58c681",
-    "downscale_box.wasm": "6c99293e265099893291c55f30e6610027dabc15dfea613651684a990bd69f14",
+    "downscale_box.wasm": "e9d74dc11d309d710155279096b1f064d15d2186d4cbb3fa6719a096a5eba354",
     "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
     "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
     "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
@@ -19,7 +19,7 @@
   },
   "function": "downscale_box",
   "glue": "downscale_box.glue.js",
-  "manifest_sha256": "aa6be85ee41154d8a38d26af528bf1b799f07daac620aa9ea6da8cfe4fa30ab4",
+  "manifest_sha256": "f233c28884bc8d4359b82bb50cc443b1161fbef0a25e57aadc9106d4c45d3b23",
   "optimizer": {
     "applied": false,
     "error": null,

@@ -2,14 +2,14 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.7"
+    "version": "0.2.8"
   },
   "entry": "count_vowels.js",
   "files": {
     "count_vowels.glue.js": "c0a80997866712e939ab31c371411117ded7cb840e50c031422ee15020f7def3",
     "count_vowels.js": "810c4c3a2c42b568a42f1c8893d1fa31957b4d46309b4314fa450c51311969f1",
     "count_vowels.ps": "4a5cc329006064e4ed11d4365d5db88874b3a2a1df24b3c84878762a245b01e4",
-    "count_vowels.wasm": "951492978fbcd184355790281c9a4205b2a7e40273657142250804dffc309b4e",
+    "count_vowels.wasm": "a1ed374a39420fa56e73ce1cff6c439de852dedcb3b3f4d76b0b42d1e705fe68",
     "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
     "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
     "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
@@ -19,7 +19,7 @@
   },
   "function": "count_vowels",
   "glue": "count_vowels.glue.js",
-  "manifest_sha256": "8e1cb2312ea60a3c93c6866b724ab12c23d14e60f9b45951ed8af204de093b90",
+  "manifest_sha256": "d6e81a62bdf9861a2d7e5ace10193ff7db395bc5b9f886014bc091fd4ed4f426",
   "optimizer": {
     "applied": false,
     "error": null,

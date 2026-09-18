@@ -2,14 +2,14 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.7"
+    "version": "0.2.8"
   },
   "entry": "box_scale.js",
   "files": {
     "box_scale.glue.js": "237ea6b694ccc9bf5c29045ac10ed5387aa4893633d4d343e9fa6c1e437fe6d6",
     "box_scale.js": "15dad1fe3d351f353276f78bb15c6ff33f63d3a2ab525c9a16a0595089ebe255",
     "box_scale.ps": "52d8a1f94e1ad2131b4849a781f6feec69f5820c7802279d96d522d58fb892fe",
-    "box_scale.wasm": "c0cab637663fe43a06b09d79abc1eb2615a32c68a18eb6b16d512bcea79b3e26",
+    "box_scale.wasm": "8ff3e0f7533ccf4292f2c7029887ddf3616ec54cd716f6b57c9a6806853e991b",
     "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
     "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
     "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
@@ -19,7 +19,7 @@
   },
   "function": "box_scale",
   "glue": "box_scale.glue.js",
-  "manifest_sha256": "be96e4826d6c2da8ae0f98366ea1b4e13db464f2510b09eecce64eb41a5f6bc8",
+  "manifest_sha256": "5206d90d9d9d3ea3fc9ec3ba5e07a569a7a07ee75d920d8216eaa2c9cf762232",
   "optimizer": {
     "applied": false,
     "error": null,

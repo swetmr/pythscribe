@@ -2,14 +2,14 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.7"
+    "version": "0.2.8"
   },
   "entry": "luhn_ok.js",
   "files": {
     "luhn_ok.glue.js": "594eecaaa3f89be8ccf88875923c06cd4f795a8e32a2bfe08e2c90bc30672874",
     "luhn_ok.js": "790d8559e02f4697a2585e1f89436f4ef89bb584bff7c31194291df1d9234f6b",
     "luhn_ok.ps": "f41d51e9d2a21ec47e77a3e425cc4d203b8488ac87229bceeddd88654b12d5bd",
-    "luhn_ok.wasm": "fa45771ddd89878bb69eccb765cbb80ce99393010d5e75da010f3a507bf7d2ab",
+    "luhn_ok.wasm": "8355438a18b65401bd27add18a02ea8f021396ce8c542df69e737f94151d7884",
     "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
     "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
     "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
@@ -19,7 +19,7 @@
   },
   "function": "luhn_ok",
   "glue": "luhn_ok.glue.js",
-  "manifest_sha256": "9ba01ed5872b319795f4b31619228ee01e46f6daf9e00a869e5e33bc9b359c09",
+  "manifest_sha256": "c3f46dc19e8fc1512f71e3d91172646c0ac8746bab9ec212b7736ed4c8163e7f",
   "optimizer": {
     "applied": false,
     "error": null,

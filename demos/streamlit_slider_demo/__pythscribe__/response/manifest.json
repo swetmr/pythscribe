@@ -2,7 +2,7 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.7"
+    "version": "0.2.8"
   },
   "entry": "response.js",
   "files": {
@@ -15,11 +15,11 @@
     "response.glue.js": "8f5bc2bd7089a0db224f5a04a3cc3db3a55f7a1e75509c45780af469cf50e5d8",
     "response.js": "43c9086a4bb3ad902d7d736bebf2f1bcf3e37f247f931f9f7dca1c80a98d324c",
     "response.ps": "a8558dcc8819e30c6ebd7f60610885ddfd00425b3ba91bf6b337693593b8ae92",
-    "response.wasm": "d4cbee0d3e8f3ad628b4e829922e843836b10a1493f2c48de5bc4e58ba48fd65"
+    "response.wasm": "7bfb95273f83f6c5ba5784d0cc48add32693b7ed3935189122bcc7cb2a250030"
   },
   "function": "response",
   "glue": "response.glue.js",
-  "manifest_sha256": "833ce11f1426eb541554abbeb9bfa303bdc2af58c1db092e9084eaea57ddb741",
+  "manifest_sha256": "e946b07154d56d91f94ee55554189c3dc8cd5cbfa802508171740cb96ce83a48",
   "optimizer": {
     "applied": false,
     "error": null,
