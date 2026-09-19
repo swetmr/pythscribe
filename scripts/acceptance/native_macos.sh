@@ -10,7 +10,7 @@
 #     a0       (admin)       PATH check + every node file on the box is under ~ctl or externals/ AND fails the app probe
 #     app      (as app)      venv from the wheelhouse (offline), A1..A4 via wheel_acceptance.py run
 #     a4b      (admin)       fail-closed boundary check (native_node_boundary.py check --step A4b) + shared-temp check
-#     a5-app   (as app)      [gradio,server] from the wheelhouse; build the demo kernel; serve on 127.0.0.1:7860
+#     a5-app   (as app)      [gradio] from the wheelhouse; build the demo kernel; serve on 127.0.0.1:7860
 #     a5-ctl   (as ctl)      Chromium drives the app over loopback TCP only -> a5.json
 #     a5b      (admin)       boundary re-check (--step A5b) + the diagnostic sampler log
 #     stop                   stop the app (the leg's node_free verdict is fixed from a0/a4b/a5b outputs)
@@ -122,7 +122,7 @@ case "$PHASE" in
     log "A1..A4 as app (offline venv from the wheelhouse; cwd outside the checkout; only hello.py staged)"
     W="$STAGE/dist/$ACC_WHEEL"
     as_app "$PY" -m venv "$APP_HOME/venv"
-    as_app "$APP_HOME/venv/bin/pip" install --quiet --no-index --find-links "$STAGE/wheelhouse" "${W}[server]"
+    as_app "$APP_HOME/venv/bin/pip" install --quiet --no-index --find-links "$STAGE/wheelhouse" "${W}"   # bare: wasmtime is a CORE dep (0.2.9)
     as_app mkdir -p "$APP_HOME/cwd"
     as_app cp "$STAGE/hello.py" "$STAGE/scripts/wheel_acceptance.py" "$APP_HOME/cwd/"
     as_app "$APP_HOME/venv/bin/pyths" --version   # Docker-executability control: the candidate runs NATIVELY here
@@ -138,9 +138,9 @@ case "$PHASE" in
     endlog ;;
 
   a5-app)
-    log "A5 (app side): [gradio,server] from the wheelhouse; build the demo kernel node-free; serve on loopback"
+    log "A5 (app side): [gradio] from the wheelhouse; build the demo kernel node-free; serve on loopback"
     W="$STAGE/dist/$ACC_WHEEL"
-    as_app "$APP_HOME/venv/bin/pip" install --quiet --no-index --find-links "$STAGE/wheelhouse" "${W}[gradio,server]"
+    as_app "$APP_HOME/venv/bin/pip" install --quiet --no-index --find-links "$STAGE/wheelhouse" "${W}[gradio]"
     as_app mkdir -p "$APP_HOME/gradio"
     as_app cp "$STAGE/gradio/app.py" "$STAGE/gradio/kernels.py" "$APP_HOME/gradio/"
     (cd "$APP_HOME/gradio" && as_app "$APP_HOME/venv/bin/pyths" build kernels.py)

@@ -2,7 +2,7 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.8"
+    "version": "0.2.9"
   },
   "entry": "viterbi.js",
   "files": {
@@ -15,11 +15,11 @@
     "viterbi.glue.js": "7a99545a7b4217464388acd17e7c0602475c4de052ae7c5d1be5c4da9f1e2e78",
     "viterbi.js": "602b04865ec3b82b910dcdee44067d66958491d4dd939479ab6db5922f5db9f4",
     "viterbi.ps": "afd81e8bfa3da054ffb7ee4994475326c98424609cff010204713b97d7c583b6",
-    "viterbi.wasm": "4a0d2678b2f29b0fae8ad412120166965f9a35cf6a305c8f8ef18fdb48298d1b"
+    "viterbi.wasm": "161a62da6f8cdf3cf63d37355e2024c9a0593ab7cf3d7ebe8d293c90ede49259"
   },
   "function": "viterbi",
   "glue": "viterbi.glue.js",
-  "manifest_sha256": "3aa67a5404594e306d05108688d55018f2ea68cf22387ff59a88335c473cc10e",
+  "manifest_sha256": "6446ec17f200ff561a2d95cb2f07f6a299c3d971321117991c12e759f6a8e2a1",
   "optimizer": {
     "applied": false,
     "error": null,

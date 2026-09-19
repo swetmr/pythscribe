@@ -1,6 +1,6 @@
 # pythscribe @wasm demos — minimal dependencies.
-# pythscribe bundles the `pyths` compiler + runtime; the extras add the demo hosts.
-pythscribe[gradio,streamlit,server]
+# pythscribe bundles the `pyths` compiler + the wasm runtime (wasmtime is a core dependency); the extras add the demo hosts.
+pythscribe[gradio,streamlit]
 numpy
 pillow
 # to run the two notebooks:

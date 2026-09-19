@@ -4,15 +4,15 @@
 #   bash scripts/acceptance/linux_containers.sh <phase>
 #   phases, IN ORDER (each its own `run:` step in release.yml):
 #     acquire  (network on)  pull the app + controller images; build the OFFLINE wheelhouse INSIDE the app image
-#                            (`pip download "<W>[server,gradio]"`, deps bound to W's metadata, resolved natively on the
+#                            (`pip download "<W>[gradio]"` -- wasmtime is a CORE dep; deps bound to W's metadata, resolved natively on the
 #                            leg's platform -- aarch64 under QEMU); assert no other pythscribe-* in it
 #     start                  internal-only docker network; the APP container (python:3.12-slim -- no node anywhere;
 #                            networking = the internal net only) with the stage mounted READ-ONLY
 #     a0                     explicit `command -v node/npm` exit + `find /` for node files -> any hit exit 1 -> a0.json
-#     app                    fresh venv; pip install --no-index --find-links wheelhouse "<abs W>[server]"; A1..A4 from
+#     app                    fresh venv; pip install --no-index --find-links wheelhouse "<abs W>" (bare); A1..A4 from
 #                            /work/cwd (outside any checkout; only hello.py + the runner script staged) -> leg.json
 #     a4b                    pre-A5 filesystem re-check (container legs: the same absence check) -> a4b.json
-#     a5-app                 [gradio,server] from the wheelhouse; build the demo kernel; serve on 0.0.0.0:7860 (internal net)
+#     a5-app                 [gradio] from the wheelhouse; build the demo kernel; serve on 0.0.0.0:7860 (internal net)
 #     a5-ctl                 the CONTROLLER container (Playwright + Chromium pre-installed, same internal net, no egress)
 #                            loads http://app:7860 -> a5.json
 #     a5b                    post-A5 re-check: no node file exists + the /proc sampler saw no node process -> a5b.json
@@ -44,7 +44,7 @@ case "$PHASE" in
     cp "$GITHUB_WORKSPACE"/examples/gradio-wasm/{app.py,kernels.py} "$STAGE/gradio/"
     # deps resolved by the leg's OWN platform/interpreter, bound to the candidate's metadata
     docker run --rm --platform "$ACC_PLATFORM" -v "$STAGE:/stage" "$APP_IMAGE" \
-      pip download --quiet "${W_IN}[server,gradio]" --dest /stage/wheelhouse
+      pip download --quiet "${W_IN}[gradio]" --dest /stage/wheelhouse
     python3 "$GITHUB_WORKSPACE/scripts/wheel_acceptance.py" bind --wheel "$STAGE/dist/$ACC_WHEEL" --manifest "$STAGE/release_manifest.json" \
       --target "$ACC_TARGET" --wheelhouse "$STAGE/wheelhouse" --out "$OUT/bind.json"
     # `pip download` ran as ROOT inside the container (-v mount), so $STAGE/wheelhouse is root-owned and a
@@ -74,7 +74,7 @@ case "$PHASE" in
   app)
     echo "::group::[linux:app] fresh venv; offline install by ABSOLUTE PATH with extras; A1..A4 from /work/cwd"
     app app sh -c "python -m venv /work/venv && /work/venv/bin/pip list --format=freeze"
-    app app sh -c "/work/venv/bin/pip install --quiet --no-index --find-links /stage/wheelhouse '${W_IN}[server]'"
+    app app sh -c "/work/venv/bin/pip install --quiet --no-index --find-links /stage/wheelhouse '${W_IN}'"   # bare: wasmtime is CORE (0.2.9)
     app app sh -c 'cp /stage/hello.py /stage/scripts/wheel_acceptance.py /work/cwd/'
     app -d app python /stage/scripts/wheel_acceptance.py sampler --out /out/sampler.log
     app -w /work/cwd -e PATH=/work/venv/bin:/usr/local/bin:/usr/bin:/bin app /work/venv/bin/python /work/cwd/wheel_acceptance.py run \
@@ -87,8 +87,8 @@ case "$PHASE" in
     echo "::endgroup::" ;;
 
   a5-app)
-    echo "::group::[linux:a5-app] [gradio,server] from the wheelhouse; build the demo kernel; serve on the internal net"
-    app app sh -c "/work/venv/bin/pip install --quiet --no-index --find-links /stage/wheelhouse '${W_IN}[gradio,server]'"
+    echo "::group::[linux:a5-app] [gradio] from the wheelhouse; build the demo kernel; serve on the internal net"
+    app app sh -c "/work/venv/bin/pip install --quiet --no-index --find-links /stage/wheelhouse '${W_IN}[gradio]'"
     app app sh -c 'cp /stage/gradio/app.py /stage/gradio/kernels.py /work/gradio/'
     app -w /work/gradio -e PATH=/work/venv/bin:/usr/local/bin:/usr/bin:/bin app /work/venv/bin/pyths build kernels.py
     app -d -w /work/gradio -e PATH=/work/venv/bin:/usr/local/bin:/usr/bin:/bin -e GRADIO_SERVER_NAME=0.0.0.0 -e GRADIO_SERVER_PORT=7860 app \

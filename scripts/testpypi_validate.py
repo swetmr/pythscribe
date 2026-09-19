@@ -9,7 +9,8 @@ Runs ON the target's runner (publish-pypi.yml matrix). It validates the PUBLIC a
   1. `pip download pythscribe==<V> --no-deps --only-binary=:all: --index-url <TestPyPI>` -> exactly the
      manifest-named wheel for this target; sha256 == manifest `wheel_sha256` BEFORE anything is installed
      (download.json; a wheel that is not the manifest-bound bytes is refused -- never installed);
-  2. a fresh venv; `pip install "<downloaded wheel>[server]"` (deps from the extra index); assert pythscribe
+  2. a fresh venv; `pip install "<downloaded wheel>"` BARE (wasmtime is a CORE dep, so the plain install
+     must yield the server path -- the bare-install gate); deps from the extra index; assert pythscribe
      imports from the venv's site-packages (never a checkout);
   3. A0 -- PATH scrubbed to the system dirs + the venv scripts dir and NO node file under the venv
      (scripts/wheel_acceptance.py a0 --root <venv>) -> a0.json. Topology `native-scrubbed-path`: the OS-user
@@ -186,7 +187,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # 2. venv + install the PUBLIC wheel by absolute path (deps from the extra index)
     py, scripts = make_venv(work / "venv")
-    r = _run([py, "-m", "pip", "install", f"{wheel}[server]", "--index-url", ns.extra_index_url], timeout=900)
+    # BARE install (no extra): wasmtime is a CORE dep, so this proves `@wasm` runs SERVER-side from a
+    # plain `pip install pythscribe` on every target platform -- the bare-install gate (0.2.9 #3).
+    r = _run([py, "-m", "pip", "install", str(wheel), "--index-url", ns.extra_index_url], timeout=900)
     if r.returncode != 0:
         _write(out, "leg.json", {"verdict": "fail", "problems": [f"pip install failed: {r.stderr[-1500:]}"]})
         _write(out, "a0.json", {"verdict": "fail", "problems": ["not run: install failed"]})

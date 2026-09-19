@@ -1,6 +1,6 @@
 {
   "name": "next-plugin-pyths",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Next.js plugin for PythScribe — compile .ps and .psc files to JavaScript with Fast Refresh",
   "main": "index.js",
   "type": "module",

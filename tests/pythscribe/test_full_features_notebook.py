@@ -134,6 +134,9 @@ def _run_notebook(name: str, tmp_path, needles: list[str], produces: str):
     env = dict(os.environ)
     os.environ["NB_FAST"] = "1"
     os.environ["PYTHONUTF8"] = "1"
+    # 0.2.9: every notebook executed under the test suite / CI runs its timing gates SOFT (warn, never raise) --
+    # shared runners are noisy; a plain local `jupyter` run (no env) stays HARD (demos/wasm_features_demo.ipynb)
+    os.environ["PYTHSCRIBE_PERF_MODE"] = "soft"
     try:
         client = nbclient.NotebookClient(nb, timeout=900, kernel_name="python3", resources={"metadata": {"path": str(work)}})
         client.execute()

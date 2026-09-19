@@ -5,7 +5,7 @@ COMPILER_VERSION, and every manifest records the pin it was built with. Bump the
 constants (one-line commit) when the compiler moves.
 """
 
-COMPILER_VERSION = "0.2.8"
+COMPILER_VERSION = "0.2.9"
 COMPILER_COMMIT = "e1b3b94baf49c110292ca259b6e9778ac288cb0b"
 
 # M2.1 (spec 13-09-26 §5.6, Layer 2): the range of compiler versions whose PREBUILT artifacts

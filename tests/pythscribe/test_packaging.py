@@ -62,9 +62,13 @@ def test_p1_wheel_vendors_everything_and_sdist_excludes_the_compiler_trees(dist)
     text = zipfile.ZipFile(dist["wheel"]).read(meta).decode("utf-8")
     assert "License-Expression: MIT AND LicenseRef-FSL-1.1-ALv2" in text  # M5: the mixed wheel (tests/pythscribe/test_wheel_m5.py)
     assert "Requires-Dist: gradio" in text and 'extra == "gradio"' in text  # an EXTRA, never a base dep
-    assert not any(line.startswith("Requires-Dist:") and "extra" not in line for line in text.splitlines()), "base deps must be empty"
+    # 0.2.9: wasmtime is the ONE core dependency (the `@wasm` server path works on a bare install);
+    # every other Requires-Dist is extra-gated. A resurrected `[server]` extra, or wasmtime demoted to
+    # an extra, or any second base dep -> RED.
+    base = [line for line in text.splitlines() if line.startswith("Requires-Dist:") and "extra" not in line]
+    assert len(base) == 1 and base[0].startswith("Requires-Dist: wasmtime"), f"base deps must be exactly wasmtime: {base}"
+    assert 'extra == "server"' not in text and "Provides-Extra: server" not in text
     assert "Project-URL: Source, https://github.com/swetmr/pythscribe" in text
-    assert "wasmtime" in text and 'extra == "server"' in text
     # the sdist is the pip package, not the monorepo
     members = tarfile.open(dist["sdist"]).getnames()
     assert not any("/crates/" in m or "/verification/" in m or "/npm/" in m or "/packages/" in m or "/examples/" in m or "/node_modules/" in m for m in members), [m for m in members if "/crates/" in m][:5]
@@ -149,7 +153,10 @@ def test_p2_import_pythscribe_in_a_venv_with_no_frameworks(dist, tmp_path):
     assert "pip install streamlit" in out["st"], out
     assert out["vendored"].startswith("present but needs gradio"), out
     assert "site-packages" in out["vendored_path"].replace("\\", "/") and "gradio_wasmfunction" in out["vendored_path"], out
-    assert out["art_mode"] == "browser" and "wasmtime-py is not installed" in out["art_reason"] and out["art_status"] == "resolved", out
+    # 0.2.9: the venv above was made with `--no-deps`, so the CORE wasmtime is deliberately absent here (the control's
+    # premise, asserted above); the why-not is the one reinstall message, never an extra
+    assert out["art_mode"] == "browser" and "the wasm runtime (wasmtime) is not available" in out["art_reason"] and out["art_status"] == "resolved", out
+    assert "[server]" not in out["art_reason"], out
     assert out["browser_client_js_bytes"] > 1000, out  # fix B: the in-tab client .js is installed with the wheel
     assert out["scalar_client_js_bytes"] > 1000 and out["client_side_importable"] is True, out  # fix A: likewise, gradio-free
     assert out["noart_mode"] == "fallback" and out["noart_status"] == "absent", out

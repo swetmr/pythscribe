@@ -2,14 +2,14 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.8"
+    "version": "0.2.9"
   },
   "entry": "pii_scan.js",
   "files": {
     "pii_scan.glue.js": "0589a256d17ebf8795ff8cd5d2d38eb105bdeef93f59a0dd8c788ffd4dada9f1",
     "pii_scan.js": "90ba5ad29f87e6e20c4b6cc88443749c15b7f49a9e84b9310b80d1b28a6f9c0e",
     "pii_scan.ps": "e446e0a7c722e9e0747e39714aa6638ed0c09ae448b9ac69716575a34b93e537",
-    "pii_scan.wasm": "bb9fc1a11e6245fde515c9f82f8d73f1f5a456d8a41b8538ec0d54319e597a03",
+    "pii_scan.wasm": "2d2e7321a396640299b3ac4fe096148a3ac7e9a1afb61f24c82b66a4f4e5f4d1",
     "pyths-runtime/classes.js": "c8b1b2afa3ceccd04e3d594cffae84bd671b90717f6d7c8ec1b8a9ce8df05d28",
     "pyths-runtime/index.js": "edb69930116d6587730b7938272ab4c3a49da409d85c42ed8b961bb1603a49da",
     "pyths-runtime/operators.js": "7ac2973ed1dc2047c77630584b813e169103625130d74fadf99c7868295f3ce3",
@@ -19,7 +19,7 @@
   },
   "function": "pii_scan",
   "glue": "pii_scan.glue.js",
-  "manifest_sha256": "d00e75545d9ff31a2af935a7e3d4376178dadb7a3f2a69c73f1993618675acd9",
+  "manifest_sha256": "3a5ad32bbda24d263db15d35a4d8762bcf2fa884cd3ca8f5160e16ab14b17b36",
   "optimizer": {
     "applied": false,
     "error": null,

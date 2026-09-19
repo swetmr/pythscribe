@@ -285,7 +285,10 @@ jobs:
           # M6.4 (validation §K): the README's `<!-- spot -->` install/usage blocks RUN against the installed wheel
           # in cibuildwheel's fresh test venv (pip lines bound to the shipped wheel via pip's direct_url.json; node-free
           # PATH; Node-tagged blocks are deferred to M7's web-parity job, never counted as passed).
-          CIBW_TEST_COMMAND: python {project}/scripts/wheel_m1_spots.py {project} && python {project}/scripts/readme_spots.py --readme {project}/README.md --run
+          # 0.2.9 (shift-left): wheel_server_spot.py proves, on the BARE wheel install cibuildwheel makes (core deps
+          # only -> wasmtime), that a literal `@wasm` kernel runs on the in-process SERVER path -- RED if wasmtime
+          # ever regresses to an extra (the 0.2.8 footgun: a silent Python fallback with no speedup).
+          CIBW_TEST_COMMAND: python {project}/scripts/wheel_m1_spots.py {project} && python {project}/scripts/readme_spots.py --readme {project}/README.md --run && python {project}/scripts/wheel_server_spot.py {project}
       - name: Verify the leg's wheel (tag == this leg; all-wheels clean gate; M5 licence gate bound to Cargo.lock)
         run: |
           python scripts/verify_wheel_set.py --dist wheelhouse --no-sdist --expect ${{ matrix.tag }}
@@ -511,7 +514,7 @@ jobs:
           # (also a native leg) keeps the POSIX path unchanged.
           WHL_DIR="$(pwd)/dist"
           case "${RUNNER_OS:-}" in Windows) WHL_DIR="$(cygpath -w "$WHL_DIR")" ;; esac
-          pip download "${WHL_DIR}/${ACC_WHEEL}[server,gradio]" --dest wheelhouse
+          pip download "${WHL_DIR}/${ACC_WHEEL}[gradio]" --dest wheelhouse   # wasmtime is a CORE dep (0.2.9: no [server] extra)
           python scripts/wheel_acceptance.py bind --wheel "dist/$ACC_WHEEL" --manifest release_manifest.json --target "$ACC_TARGET" --wheelhouse wheelhouse --out bind.json
       - name: Set up QEMU (aarch64 app container)
         if: matrix.platform == 'linux/arm64'
@@ -538,7 +541,7 @@ jobs:
         if: matrix.topology == 'container'
         shell: bash
         run: bash scripts/acceptance/linux_containers.sh a4b
-      - name: "[container] A5 app side -- [gradio,server]; serve on the internal net"
+      - name: "[container] A5 app side -- [gradio]; serve on the internal net"
         if: matrix.topology == 'container'
         shell: bash
         run: bash scripts/acceptance/linux_containers.sh a5-app
@@ -600,11 +603,11 @@ jobs:
         if: matrix.topology == 'native' && runner.os == 'Windows'
         shell: pwsh
         run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase a4b
-      - name: "[native] A5 app side -- [gradio,server]; serve on loopback as app"
+      - name: "[native] A5 app side -- [gradio]; serve on loopback as app"
         if: matrix.topology == 'native' && runner.os == 'macOS'
         shell: bash
         run: bash scripts/acceptance/native_macos.sh a5-app
-      - name: "[native] A5 app side -- [gradio,server]; serve on loopback as app"
+      - name: "[native] A5 app side -- [gradio]; serve on loopback as app"
         if: matrix.topology == 'native' && runner.os == 'Windows'
         shell: pwsh
         run: pwsh -File scripts/acceptance/native_windows.ps1 -Phase a5-app

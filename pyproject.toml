@@ -8,8 +8,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pythscribe"
-version = "0.2.8"
-description = "`@wasm` for ordinary Python: run a compiled kernel in the browser tab, in-process on the server (sandboxed, GIL-free, bit-for-bit), or as plain Python -- with a load-bearing fallback and framework adapters (Gradio first)."
+version = "0.2.9"
+description = "`@wasm` for ordinary Python: sandboxed WebAssembly, in the browser or on the server."
 readme = "pythscribe/README.md"
 requires-python = ">=3.10"
 # M5 (spec 13-09-26): the wheel is MIXED -- the pip runtime, the adapters and the vendored JS runtime
@@ -38,12 +38,15 @@ classifiers = [
   "Topic :: Software Development :: Compilers",
   "Topic :: Scientific/Engineering",
 ]
-# Deliberately NO runtime dependencies: `import pythscribe` must work in plain CPython
-# with neither the compiler, nor wasmtime, nor any framework installed (plan §5/§6:
-# fallback-first). The adapters LAZY-import their framework; the server path lazy-imports
-# wasmtime. Every extra below adds DEPENDENCIES only -- the pythscribe code (both adapters,
-# the vendored Gradio component, the server runtime) always ships (bundle-all-in-one).
-dependencies = []
+# CORE dependency: `wasmtime` powers the in-process `@wasm` SERVER path -- the package's headline
+# capability -- so it ships with the base install. Rationale (pip_packaging.md): an extra must NOT
+# gate a code path that would otherwise work; `@wasm` is core, and wasmtime is a small, pure binary
+# wheel available on every target platform. `import pythscribe` still works in plain CPython
+# (wasmtime is LAZY-imported by the server path, never at import time), and the plain-Python
+# fallback still covers any non-compilable kernel. The framework EXTRAS below add DEPENDENCIES only
+# -- the pythscribe code (both adapters, the vendored Gradio component, the server runtime) always
+# ships (bundle-all-in-one).
+dependencies = ["wasmtime>=48"]
 
 [project.scripts]
 # M1.1: the Python LAUNCHER -- `build` (+ the M7 set) in Python, everything else forwarded verbatim
@@ -57,10 +60,11 @@ Issues = "https://github.com/swetmr/pythscribe/issues"
 Documentation = "https://github.com/swetmr/pythscribe/blob/main/pythscribe/README.md"
 
 [project.optional-dependencies]
-server = ["wasmtime>=48"]
+# NOTE: there is deliberately NO `server` extra -- wasmtime is a CORE dependency (above), so the
+# `@wasm` server path works on a bare `pip install pythscribe`. Extras are REAL Python dep-sets only.
 gradio = ["gradio>=6,<7"]
 streamlit = ["streamlit>=1.37"]
-all = ["wasmtime>=48", "gradio>=6,<7", "streamlit>=1.37"]  # NEVER nodejs-wheel-binaries (validation §J-extras)
+all = ["gradio>=6,<7", "streamlit>=1.37"]  # frameworks only; NEVER nodejs-wheel-binaries (validation §J-extras)
 # M7.1 (user LOCKED 2026-09-13): the SINGLE opt-in extra that vendors a Node runtime for the `.ps` frontend
 # tooling (`pyths new / install / dev`) on a machine without Node on PATH. Declared here (M6.4) because the
 # README's environment table names it and the README gate (scripts/readme_spots.py) refuses an undeclared

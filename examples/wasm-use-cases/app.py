@@ -2,7 +2,7 @@
 browser tab (the M1 Gradio component) AND in-process on the server (wasmtime), the two
 IEEE-754 bit patterns shown side by side with the CPython body's.
 
-    pip install pythscribe[gradio,server]
+    pip install pythscribe[gradio]        # wasmtime (the server path) is a core dependency
     python -m pythscribe.build examples/wasm-use-cases/kernels.py     # explicit build
     python examples/wasm-use-cases/app.py
 

@@ -1,6 +1,6 @@
 {
   "name": "pyths-runtime",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Runtime library for PythScribe — Write Python, Ship to the Web",
   "type": "module",
   "main": "src/index.js",

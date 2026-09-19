@@ -330,7 +330,9 @@ def test_f2b_no_validator_never_publishes_and_states_the_tab_path_limitation(tmp
     opt = manifest["optimizer"]
     assert opt["applied"] is False and opt["id"] == AMBIENT.id  # available-vs-applied: the identity is still recorded
     assert opt["error"] == NO_VALIDATOR_ERROR
-    assert "no validator available (pip install pythscribe[server]); optimized output not adopted" in opt["error"]
+    # 0.2.9: wasmtime is CORE (no `[server]` extra) -- the error names the validator + the reinstall, never an extra
+    assert "no validator available" in opt["error"] and "wasmtime" in opt["error"] and "optimized output not adopted" in opt["error"]
+    assert "[server]" not in opt["error"]
     assert "applies to browser-tab artifacts too" in opt["error"]  # surface (3): the manifest
     assert info.wasm.read_bytes() == ref  # the ORIGINAL is the artifact, byte-identical
     assert manifest["files"][manifest["wasm"]] == _sha(ref)
@@ -339,7 +341,8 @@ def test_f2b_no_validator_never_publishes_and_states_the_tab_path_limitation(tmp
     # above: names the validator requirement + "applies to browser-tab artifacts too") and the doctor line.
     # The PyPI readme (pythscribe/README.md) is now a minimal landing page and delegates this detail to the
     # repo (user 2026-09-18), so the doc binding is the code surfaces, not that file's prose.
-    assert TAB_PATH_SENTENCE in NO_VALIDATOR_DOCTOR_LINE and "install `pythscribe[server]`" in NO_VALIDATOR_DOCTOR_LINE
+    assert TAB_PATH_SENTENCE in NO_VALIDATOR_DOCTOR_LINE and "install `wasmtime`" in NO_VALIDATOR_DOCTOR_LINE
+    assert "[server]" not in NO_VALIDATOR_DOCTOR_LINE and "[server]" not in TAB_PATH_SENTENCE  # no extra names the validator
     assert "validator" in NO_VALIDATOR_DOCTOR_LINE  # the doctor line names the validator requirement
     assert _bits(_run_hello(src)[0]) == _bits(3.0)  # and the unoptimized artifact is a valid one
 
@@ -740,7 +743,8 @@ def test_f8f_ii_type_invalid_without_wasmtime_is_never_published(tmp_path, monke
 def test_f8f_mutant_publish_on_structural_walk_is_caught(tmp_path, monkeypatch):
     """PAIRED CONTROL for the publish gate (rev-6 B1): with the validator neutered (the rev-5 hole --
     a section walk 'validating' the module), the type-invalid output IS published and hashed as fresh,
-    and a `[server]` instantiation then FAILS. This proves the wasmtime gate is load-bearing: the
+    and a server-path instantiation (`ServerKernel.from_artifact`, under the CORE wasmtime runtime --
+    0.2.9: no `[server]` extra) then FAILS. This proves the wasmtime gate is load-bearing: the
     F8f assertions discriminate the mutant."""
     _require_toolchain()
     from pythscribe.runtime import ServerKernel, WasmTrap

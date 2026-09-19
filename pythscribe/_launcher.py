@@ -207,7 +207,7 @@ def _probe_wasmtime() -> dict:
         "key": "wasmtime", "label": "wasmtime", "present": ok,
         "detail": "importable" if ok else "not installed",
         "unlocks": "in-process server execution of `@wasm` (sandboxed, GIL-free)",
-        **({} if ok else {"fix": "`pip install pythscribe[server]`"}),
+        **({} if ok else {"fix": "wasmtime ships with pythscribe; `pip install --upgrade pythscribe` (or `pip install wasmtime`)"}),
     }
 
 

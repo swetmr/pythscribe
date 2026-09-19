@@ -31,6 +31,13 @@ isomorphism. Honest about where NumPy/Numba win — the point is fidelity + brow
 
 Run: open in Jupyter and run all cells.
 
+**Speedup gate (0.2.9).** The notebook carries a benchmark of record (`BENCHMARK_SPEEDUPS`: the
+median-of-100 `@wasm` speedup over plain Python per kernel, all seven on the `server` path) and refuses a
+run where any kernel drops below half its benchmark or below 1.0×. A plain local run is **HARD** (an
+`AssertionError` stops it); set `PYTHSCRIBE_PERF_MODE=soft` to get a `WARNING` per kernel instead — the
+mode CI / shared runners use, since timing is host-varying and must never red a shared runner. The gate
+is exercised both ways by `tests/pythscribe/test_wasm_speedup.py`.
+
 ## 3. `streamlit_slider_demo/` — Streamlit, a slider with **zero server reruns**
 Streamlit reruns the whole script on every widget interaction. This demo puts a compiled-`@wasm`
 slider (recomputes **inside the component iframe**, 0 reruns, a few ms) beside a native `st.slider`

@@ -2,7 +2,7 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.8"
+    "version": "0.2.9"
   },
   "entry": "rms_gain.js",
   "files": {
@@ -15,11 +15,11 @@
     "rms_gain.glue.js": "52bfeabbb756e2226d050ff5b9227068d22d707ea927016dc9b112305573d4a7",
     "rms_gain.js": "3eef73edd51ab1e23f0321fe8f6c48eba156cac2f9fda5f8e2fdbff8dbd5f749",
     "rms_gain.ps": "0efa9cb97e59afce0c82f4fd8a5b5c21abbb98ca74cff89757c851de4462d325",
-    "rms_gain.wasm": "4c2b22834ffa617d554d87e1665a798dcbed3d95983826acac73fd75b2f70b0e"
+    "rms_gain.wasm": "2f974519ad6d9fa9e4302f1870a754c8359deb2ceeccf5401f3927fd18e2389a"
   },
   "function": "rms_gain",
   "glue": "rms_gain.glue.js",
-  "manifest_sha256": "0fd5238114e1fe1f406c4d47cffdf1cc8ab340c01399b5048d7bea078ddcb0e4",
+  "manifest_sha256": "405f2bb05f5f6c1a3ccd810702dfd99b7145cc1faf82982cbd3eae46364e1d77",
   "optimizer": {
     "applied": false,
     "error": null,

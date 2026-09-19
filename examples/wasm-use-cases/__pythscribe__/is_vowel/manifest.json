@@ -2,18 +2,18 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.8"
+    "version": "0.2.9"
   },
   "entry": "is_vowel.js",
   "files": {
     "is_vowel.glue.js": "51ccd26cf12b4baf7ab4ec0e3e8ba473f7460fb8115e0637a171b74410c96102",
     "is_vowel.js": "abb5a9ee7de52a0bfa8ac9877221a9dcd9ff46aa592691ef2811f7ed02fdf773",
     "is_vowel.ps": "3bee9c5bb9472ec52b93d4fb38cbddec31f00a5b849d39b3ce39c2c296e4cb4c",
-    "is_vowel.wasm": "eaa369bcede20d694a7923754c370a9b1be337ff0cd1d6338f9f3edb518f97aa"
+    "is_vowel.wasm": "cf05d49128694cce4ff222bf91d1d4a1476fab22bcd4698d745f61b6b3fe8ee7"
   },
   "function": "is_vowel",
   "glue": "is_vowel.glue.js",
-  "manifest_sha256": "6fa5179164b56f62e13e20ef342a9ba0469d3b2be0f801c8586e783e87da788e",
+  "manifest_sha256": "0b489c7a10abbdd33d57b3b091cf283e470bed0cc3edcdac27b65e9742e330f4",
   "optimizer": {
     "applied": false,
     "error": null,

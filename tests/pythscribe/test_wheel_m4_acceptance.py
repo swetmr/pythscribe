@@ -861,7 +861,8 @@ def test_run_a2_a4_through_the_shipped_path_when_a_wheel_is_buildable(tmp_path):
     venv = tmp_path / "venv"
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
     py = venv / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
-    r = subprocess.run([str(py), "-m", "pip", "install", "--quiet", f"{whl}[server]"], capture_output=True, text=True, timeout=900)
+    # 0.2.9: BARE install -- wasmtime is a CORE dependency (no `[server]` extra); A3/A4 then prove the server path runs
+    r = subprocess.run([str(py), "-m", "pip", "install", "--quiet", str(whl)], capture_output=True, text=True, timeout=900)
     assert r.returncode == 0, r.stderr[-2000:]
     cwd = tmp_path / "cwd"
     cwd.mkdir()

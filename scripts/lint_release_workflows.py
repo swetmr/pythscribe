@@ -24,6 +24,24 @@ mutated copies to prove every rule fires):
       BEFORE scripts/verify_npm_identity.py; `npm-publish` runs the evidence step BEFORE `publish.mjs`.
   M3  `release` (the GitHub Release of binaries) needs `manifest` (binaries never reach the Release without one).
   M4  the wheel legs' CIBW_TEST_COMMAND runs scripts/readme_spots.py --run (validation §K).
+  M4b (0.2.9) the wheel legs' cibuildwheel TEST CONTEXT is EXACT-PINNED, not presence-checked: exactly one
+      cibuildwheel step, whose `run:` is the pinned `pipx run cibuildwheel==X --output-dir wheelhouse` (no
+      `--config-file`/extra flags), execution-neutral step keys only, CIBW_TEST_COMMAND == the pinned
+      `python m1_spots && python readme_spots --run && python wheel_server_spot` (an `echo` swap, `;`/`||`,
+      a masking `pip install wasmtime &&` prefix, a comment -- all differ -> RED), NO other CIBW_TEST_* /
+      CIBW_BEFORE_TEST* key (a per-OS `CIBW_TEST_COMMAND_<OS>` override, `CIBW_TEST_SKIP`, `CIBW_TEST_EXTRAS`,
+      `CIBW_TEST_REQUIRES`, `CIBW_BEFORE_TEST`) at step/job/workflow scope, CIBW_ENVIRONMENT* pinned, NO
+      `[tool.cibuildwheel]` table in pyproject.toml (the other config channel), the cibuildwheel VERSION pinned
+      exactly, and NO `$GITHUB_ENV`/`$GITHUB_PATH` writer in the wheel job other than the exact-pinned B_t staging
+      step (a runtime `CIBW_TEST_SKIP=*` write is invisible to a static env scan). Root fix vs the codex 0.2.9
+      presence-check bypass class (echo-swap / per-OS override / test-skip / $GITHUB_ENV injection).
+  GP  (0.2.9 r4) the WHOLE `wheel` job is GOLDEN-PINNED: job keys == {name, needs, runs-on, strategy, steps}, the
+      job values and the complete step list EXACTLY (uses@ref + with, if, shell, run text, env) -- any extra /
+      missing / reordered / edited step is RED by construction, which closes the $GITHUB_ENV / github-script /
+      arbitrary-step injection class outright (M4b's finer checks are subsumed but kept for their messages).
+  GP-WF (0.2.9 r5) the WORKFLOW level too: top-level keys == {name, on, permissions, env, jobs} (a root `defaults:`
+      -- whose `run.shell` is inherited by the shell-less cibuildwheel step -- or any other root key is RED) and the
+      workflow `env` pinned exactly.
   P1  publish-pypi.yml: `testpypi` gates with `--need R-BA R-NI`, `pypi` with `--need R-BA R-NI R-TP R-TV`;
       NO `python -m build` anywhere (no rebuild); both publication jobs run verify_dist_manifest.py before the
       publish action (pypi with `--rtp`); a `testpypi-validate` matrix covering every TRIPLE_TO_TAG target needs
@@ -231,6 +249,275 @@ def _exact_pin_problems(run_text: str, expected: str, label: str, key: str) -> l
     return []
 
 
+# ── M4b (0.2.9): the wheel legs' cibuildwheel TEST CONTEXT, exact-pinned ─────────────────────────────────
+# A presence check ("wheel_server_spot.py appears in CIBW_TEST_COMMAND") is the exact bypass class this file
+# forbids elsewhere: `echo .../wheel_server_spot.py` (present, not executed), a per-OS `CIBW_TEST_COMMAND_WINDOWS`
+# that drops it, `CIBW_TEST_SKIP` that skips the platform, `;`/`||` that swallow its failure, or a
+# `pip install wasmtime &&` prefix that masks the bare-install premise. Root fix: pin the WHOLE test context.
+# the EXACT cibuildwheel invocation incl. the VERSION (codex round 3: a `==3.0.0` downgrade must be RED; a bump is a
+# deliberate one-line pin change the reviewer sees)
+PINNED_CIBW_RUN = "pipx run cibuildwheel==4.2.1 --output-dir wheelhouse"
+# `$GITHUB_ENV` / `$GITHUB_PATH` writes: a prior `run:` step in the `wheel` job can inject `CIBW_TEST_SKIP=*` (or any
+# CIBW_*/PIP_*/PYTHSCRIBE_* key) at RUNTIME, invisible to a static `env:` scan (codex round 3). Same regex + discipline
+# as the PP proof job; the wheel job has exactly ONE legitimate writer (the B_t staging step publishing
+# PYTHSCRIBE_RELEASE_BINARY_SHA256), allowlisted by EXACT pin of its `run:` -- any other writer, or any edit to it, is RED.
+GITHUB_ENV_WRITE_RE = re.compile(r"\$?\{?GITHUB_(ENV|PATH)\}?")
+PINNED_WHEEL_GITHUB_ENV_WRITER = (
+    'set -eux d="artifacts/pyths-${{ matrix.target }}" f="$(ls "$d"/pyths-*.*)" case "$f" in *.tar.gz) tar xzf "$f" -C "$d" ;; '
+    '*.zip) unzip -o "$f" -d "$d" ;; esac mkdir -p pythscribe/_bin cp "$d/${{ matrix.binary }}" "pythscribe/_bin/${{ matrix.binary }}" '
+    'chmod +x "pythscribe/_bin/${{ matrix.binary }}" || true python - <<\'EOF\' >> "$GITHUB_ENV" import hashlib, os '
+    'p = "artifacts/pyths-${{ matrix.target }}/${{ matrix.binary }}" '
+    'print("PYTHSCRIBE_RELEASE_BINARY_SHA256=" + hashlib.sha256(open(p, "rb").read()).hexdigest()) EOF'
+)
+PINNED_CIBW_TEST_COMMAND = (
+    "python {project}/scripts/wheel_m1_spots.py {project} && "
+    "python {project}/scripts/readme_spots.py --readme {project}/README.md --run && "
+    "python {project}/scripts/wheel_server_spot.py {project}"
+)
+# every CIBW key that shapes WHAT runs in the test venv / WHETHER it runs; only CIBW_TEST_COMMAND (pinned) is
+# admitted, and only on the cibuildwheel step itself
+CIBW_TEST_CONTEXT_PREFIXES = ("CIBW_TEST_", "CIBW_BEFORE_TEST")
+# the build/test environment injection channel: pinned exactly (a `PYTHSCRIBE_MODE=` / `PYTHSCRIBE_PYTHS=` here
+# would mask the gate's premise), and no per-OS `CIBW_ENVIRONMENT_<OS>` sibling
+PINNED_CIBW_ENVIRONMENT = {
+    "CIBW_ENVIRONMENT": "PYTHSCRIBE_WHEEL_PLATFORM=${{ matrix.tag }} PYTHSCRIBE_RELEASE_BINARY_SHA256=${{ env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }} SOURCE_DATE_EPOCH=1704067200",
+    "CIBW_ENVIRONMENT_PASS_LINUX": "PYTHSCRIBE_WHEEL_PLATFORM PYTHSCRIBE_RELEASE_BINARY_SHA256",
+}
+
+
+def _ws(s: object) -> str:
+    return " ".join(str(s).split())
+
+
+def _cibw_test_context_problems(release: dict, wheel: dict, pyproject_text: str | None) -> list[str]:
+    p: list[str] = []
+    cibw = [s for s in _steps(wheel) if "cibuildwheel" in _run_text(s)]
+    if len(cibw) != 1:
+        return [f"M4b: the `wheel` job must have EXACTLY ONE cibuildwheel step, found {len(cibw)}"]
+    step = cibw[0]
+    run = _ws(_run_text(step))
+    if run != PINNED_CIBW_RUN:
+        p.append(f"M4b: the `wheel` cibuildwheel step is not the EXACT pinned invocation {PINNED_CIBW_RUN!r} (a version "
+                 f"change/downgrade, an extra flag such as `--config-file`/`--only`, or a wrapper opens another test-context "
+                 f"channel; a bump is a deliberate one-line pin change); got: {run!r}")
+    # RUNTIME env injection: any `run:` step of the wheel job writing $GITHUB_ENV / $GITHUB_PATH reaches cibuildwheel
+    # (e.g. `echo "CIBW_TEST_SKIP=*" >> "$GITHUB_ENV"` in an earlier step skips the gate while every static `env:`
+    # scan stays green). Allowlist-shape (PP discipline): exactly the pinned B_t staging writer, nothing else.
+    writers = [(i, s) for i, s in enumerate(_steps(wheel)) if GITHUB_ENV_WRITE_RE.search(_run_text(s))]
+    for i, s in writers:
+        if _ws(_run_text(s)) != PINNED_WHEEL_GITHUB_ENV_WRITER:
+            p.append(f"M4b: `wheel` job step {i} ({s.get('name', '?')!r}) writes $GITHUB_ENV/$GITHUB_PATH and is not the pinned "
+                     f"B_t staging step -- a runtime write reaches cibuildwheel (`CIBW_TEST_SKIP=*`, a `CIBW_TEST_COMMAND=`, a "
+                     f"PIP_*/PYTHSCRIBE_* injection, a PATH shim) and drops/masks the bare-install server gate; only the exact "
+                     f"pinned writer is admitted")
+    if not any(_ws(_run_text(s)) == PINNED_WHEEL_GITHUB_ENV_WRITER for _, s in writers):
+        p.append("M4b: the `wheel` job's pinned B_t staging step (the one admitted $GITHUB_ENV writer, publishing "
+                 "PYTHSCRIBE_RELEASE_BINARY_SHA256) is missing or edited -- the pin is the allowlist")
+    p += _gate_step_metadata_problems(step, "M4b", "wheel")  # continue-on-error / if / background / custom shell -> RED
+    env = step.get("env") or {}
+    if not isinstance(env, dict):
+        return p + ["M4b: the `wheel` cibuildwheel step `env:` must be a mapping"]
+    got = _ws(env.get("CIBW_TEST_COMMAND", ""))
+    if got != PINNED_CIBW_TEST_COMMAND:
+        p.append("M4b: the `wheel` legs' CIBW_TEST_COMMAND is not the EXACT pinned test command (root fix vs the "
+                 "presence-check bypass class: an `echo` swap, `;`/`||` chaining, a masking `pip install ... &&` prefix, "
+                 "a comment, a dropped segment -- ANY deviation fails by construction).\n"
+                 f"      expected: {PINNED_CIBW_TEST_COMMAND}\n      got:      {got!r}")
+    for key, want in PINNED_CIBW_ENVIRONMENT.items():
+        if _ws(env.get(key, "")) != want:
+            p.append(f"M4b: the `wheel` cibuildwheel step `{key}` is not the exact pinned value (an injected "
+                     f"PYTHSCRIBE_* variable here masks the bare-install gate's premise); expected {want!r}, got {_ws(env.get(key, ''))!r}")
+    # job-scope `env` on `wheel`: the honest job has none, so it is forbidden outright (allowlist-shape, PP discipline --
+    # a job env is inherited by cibuildwheel's test venv: PIP_NO_DEPS/PIP_CONSTRAINT/PYTHSCRIBE_* mask the gate's premise)
+    if wheel.get("env"):
+        p.append(f"M4b: the `wheel` job sets a job-scope `env` ({sorted(wheel['env'])}) -- inherited by cibuildwheel's build "
+                 f"and test venv (PIP_*/PYTHSCRIBE_*/CIBW_* can drop or mask the bare-install server gate); the wheel job needs none")
+    # every CIBW test-context / environment key anywhere it could reach cibuildwheel: step, job, workflow scope
+    scopes = [("workflow", release.get("env") or {}), ("job `wheel`", wheel.get("env") or {})]
+    scopes += [(f"step {i} ({s.get('name', '?')!r})", s.get("env") or {}) for i, s in enumerate(_steps(wheel))]
+    for label, scope_env in scopes:
+        if not isinstance(scope_env, dict):
+            continue
+        for k in scope_env:
+            ku = str(k).upper()
+            is_ctx = ku.startswith(CIBW_TEST_CONTEXT_PREFIXES) or ku.startswith("CIBW_ENVIRONMENT")
+            allowed_here = scope_env is env and (ku == "CIBW_TEST_COMMAND" or ku in PINNED_CIBW_ENVIRONMENT)
+            if is_ctx and not allowed_here:
+                p.append(f"M4b: `{k}` at {label} scope is refused -- only the pinned CIBW_TEST_COMMAND / CIBW_ENVIRONMENT(_PASS_LINUX) "
+                         f"on the cibuildwheel step may shape the wheel test context (a per-OS `CIBW_TEST_COMMAND_<OS>` override, "
+                         f"`CIBW_TEST_SKIP`, `CIBW_TEST_EXTRAS`/`CIBW_TEST_REQUIRES`/`CIBW_BEFORE_TEST`, or an environment injection "
+                         f"would drop, skip, or mask the bare-install server gate)")
+    # the other configuration channel: pyproject's [tool.cibuildwheel] (test-command / test-skip / before-test ...)
+    if pyproject_text is None:
+        pyproject_text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    import tomllib
+
+    try:
+        tool = (tomllib.loads(pyproject_text).get("tool") or {})
+    except tomllib.TOMLDecodeError as e:
+        return p + [f"M4b: pyproject.toml is not valid TOML ({e})"]
+    if "cibuildwheel" in tool:
+        p.append("M4b: pyproject.toml declares a `[tool.cibuildwheel]` table -- the wheel test context is pinned in release.yml "
+                 "ONLY (a `test-command`/`test-skip`/`before-test` here silently overrides or drops the bare-install server gate)")
+    return p
+
+
+# ── GP (codex 0.2.9 round 4): the GOLDEN PIN of the whole `wheel` job ────────────────────────────────────────────
+# Presence checks and write-scans kept leaking channels (an indirect `V=CIBW_TEST_SKIP; echo "$V=*" >> $GITHUB_ENV`,
+# a `uses: actions/github-script` step calling core.exportVariable(...)). ROOT FIX, the PP promotion-gate shape: the
+# job's step list must be EXACTLY this enumerated list, in order -- every `uses:` at its pinned ref (+ its `with:`),
+# every `run:` by exact whitespace-normalized text, the conditional QEMU step WITH its exact `if:`, and NO other step
+# key. ANY extra / missing / reordered / edited step, and any job key beyond name/needs/runs-on/strategy/steps, is RED
+# by construction -- no arbitrary step can exist, so no injection step can. Generated from the honest job and kept
+# verbatim; a legitimate change (an action bump, a new step) is a deliberate pin edit the reviewer sees.
+PINNED_WHEEL_JOB_KEYS: frozenset[str] = frozenset({"name", "needs", "runs-on", "strategy", "steps"})
+PINNED_WHEEL_JOB = {'name': 'Wheel ${{ matrix.tag }}',
+ 'needs': 'build',
+ 'runs-on': '${{ matrix.os }}',
+ 'strategy': {'fail-fast': False,
+              'matrix': {'include': [{'archs': 'x86_64',
+                                      'binary': 'pyths',
+                                      'os': 'ubuntu-latest',
+                                      'tag': 'manylinux_2_28_x86_64',
+                                      'target': 'x86_64-unknown-linux-gnu'},
+                                     {'archs': 'aarch64',
+                                      'binary': 'pyths',
+                                      'os': 'ubuntu-latest',
+                                      'tag': 'manylinux_2_28_aarch64',
+                                      'target': 'aarch64-unknown-linux-gnu'},
+                                     {'archs': 'x86_64',
+                                      'binary': 'pyths',
+                                      'os': 'macos-latest',
+                                      'tag': 'macosx_11_0_x86_64',
+                                      'target': 'x86_64-apple-darwin'},
+                                     {'archs': 'arm64',
+                                      'binary': 'pyths',
+                                      'os': 'macos-latest',
+                                      'tag': 'macosx_11_0_arm64',
+                                      'target': 'aarch64-apple-darwin'},
+                                     {'archs': 'AMD64',
+                                      'binary': 'pyths.exe',
+                                      'os': 'windows-latest',
+                                      'tag': 'win_amd64',
+                                      'target': 'x86_64-pc-windows-msvc'}]}}}
+PINNED_WHEEL_STEPS: list[dict] = [{'uses': 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262'},
+ {'uses': 'actions/setup-python@v5', 'with': {'python-version': '3.12'}},
+ {'name': 'Download the finalized binary B_t',
+  'uses': 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
+  'with': {'name': 'pyths-${{ matrix.target }}', 'path': 'artifacts/pyths-${{ matrix.target }}'}},
+ {'name': 'Stage B_t at pythscribe/_bin/ (byte-for-byte; the identity the passthrough re-checks)',
+  'run': 'set -eux d="artifacts/pyths-${{ matrix.target }}" f="$(ls "$d"/pyths-*.*)" case "$f" in *.tar.gz) tar xzf '
+         '"$f" -C "$d" ;; *.zip) unzip -o "$f" -d "$d" ;; esac mkdir -p pythscribe/_bin cp "$d/${{ matrix.binary }}" '
+         '"pythscribe/_bin/${{ matrix.binary }}" chmod +x "pythscribe/_bin/${{ matrix.binary }}" || true python - '
+         '<<\'EOF\' >> "$GITHUB_ENV" import hashlib, os p = "artifacts/pyths-${{ matrix.target }}/${{ matrix.binary '
+         '}}" print("PYTHSCRIBE_RELEASE_BINARY_SHA256=" + hashlib.sha256(open(p, "rb").read()).hexdigest()) EOF',
+  'shell': 'bash'},
+ {'if': "matrix.archs == 'aarch64'",
+  'name': 'Set up QEMU (aarch64 container)',
+  'uses': 'docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392'},
+ {'env': {'CIBW_ARCHS': '${{ matrix.archs }}',
+          'CIBW_BUILD': 'cp312-*',
+          'CIBW_BUILD_FRONTEND': 'build',
+          'CIBW_ENVIRONMENT': 'PYTHSCRIBE_WHEEL_PLATFORM=${{ matrix.tag }} PYTHSCRIBE_RELEASE_BINARY_SHA256=${{ '
+                              'env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }} SOURCE_DATE_EPOCH=1704067200',
+          'CIBW_ENVIRONMENT_PASS_LINUX': 'PYTHSCRIBE_WHEEL_PLATFORM PYTHSCRIBE_RELEASE_BINARY_SHA256',
+          'CIBW_MANYLINUX_AARCH64_IMAGE': 'manylinux_2_28',
+          'CIBW_MANYLINUX_X86_64_IMAGE': 'manylinux_2_28',
+          'CIBW_REPAIR_WHEEL_COMMAND_LINUX': 'auditwheel show {wheel} && python '
+                                             '/project/scripts/wheel_passthrough.py {wheel} {dest_dir} --binary '
+                                             '/project/artifacts/pyths-${{ matrix.target }}/pyths --binary-sha256 '
+                                             '${{ env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }} --tag ${{ matrix.tag }} '
+                                             '--require-auditwheel',
+          'CIBW_REPAIR_WHEEL_COMMAND_MACOS': 'delocate-listdeps {wheel} && python scripts/wheel_passthrough.py '
+                                             '{wheel} {dest_dir} --binary artifacts/pyths-${{ matrix.target }}/pyths '
+                                             '--binary-sha256 ${{ env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }} --tag ${{ '
+                                             'matrix.tag }} --require-otool',
+          'CIBW_REPAIR_WHEEL_COMMAND_WINDOWS': 'python scripts/wheel_passthrough.py {wheel} {dest_dir} --binary '
+                                               'artifacts/pyths-${{ matrix.target }}/pyths.exe --binary-sha256 ${{ '
+                                               'env.PYTHSCRIBE_RELEASE_BINARY_SHA256 }} --tag ${{ matrix.tag }}',
+          'CIBW_SKIP': '*-musllinux*',
+          'CIBW_TEST_COMMAND': 'python {project}/scripts/wheel_m1_spots.py {project} && python '
+                               '{project}/scripts/readme_spots.py --readme {project}/README.md --run && python '
+                               '{project}/scripts/wheel_server_spot.py {project}'},
+  'name': 'Build the platform wheel (cibuildwheel; passthrough repair hook; M1 exit SPOTs as the test)',
+  'run': 'pipx run cibuildwheel==4.2.1 --output-dir wheelhouse'},
+ {'name': "Verify the leg's wheel (tag == this leg; all-wheels clean gate; M5 licence gate bound to Cargo.lock)",
+  'run': 'python scripts/verify_wheel_set.py --dist wheelhouse --no-sdist --expect ${{ matrix.tag }} python '
+         'scripts/verify_wheel_clean.py --dist wheelhouse python scripts/verify_wheel_license.py --dist wheelhouse '
+         '--cargo-lock Cargo.lock'},
+ {'name': 'Upload wheel',
+  'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+  'with': {'if-no-files-found': 'error',
+           'name': 'wheel-${{ matrix.tag }}',
+           'overwrite': True,
+           'path': 'wheelhouse/*.whl'}}]
+
+
+# GP-WF (codex round 5): the WORKFLOW level of release.yml. A root `defaults.run.shell` (e.g. `bash --noprofile --norc
+# -c "export CIBW_TEST_SKIP=*; exec bash -e '{0}'"`) is inherited by every step WITHOUT an explicit `shell:` -- the
+# cibuildwheel step -- and injects env invisibly to every job/step pin. Same shape as the job pin: the honest workflow
+# has exactly these top-level keys (PyYAML parses `on:` as the boolean True) and exactly this `env`; ANY other key
+# (`defaults`, `concurrency`, ...) or env deviation is RED. Levels that can reach a step's shell/env, all pinned now:
+# workflow env + defaults (here), job keys incl. env/defaults/container/uses (PINNED_WHEEL_JOB_KEYS), step shell/env
+# (_canon_step), earlier steps writing $GITHUB_ENV/$GITHUB_PATH (the step list itself is pinned).
+PINNED_WORKFLOW_KEYS: frozenset = frozenset({"name", True, "permissions", "env", "jobs"})
+PINNED_WORKFLOW_ENV = {"PLAYWRIGHT_VERSION": "1.55.0"}
+
+
+def _workflow_level_golden_pin_problems(release: dict) -> list[str]:
+    p: list[str] = []
+    keys = set(release)
+    if keys != PINNED_WORKFLOW_KEYS:
+        shown = sorted(("on" if k is True else str(k)) for k in keys)
+        p.append(f"GP-WF: release.yml top-level keys {shown} != the GOLDEN PIN ['env', 'jobs', 'name', 'on', 'permissions'] "
+                 f"(extra: {sorted(('on' if k is True else str(k)) for k in keys - PINNED_WORKFLOW_KEYS)}) -- a workflow "
+                 f"`defaults.run.shell` is inherited by every step without an explicit `shell:` (the cibuildwheel step) and "
+                 f"can `export CIBW_TEST_SKIP=*` around it; `concurrency`/any other root key is refused the same way")
+    if release.get("env") != PINNED_WORKFLOW_ENV:
+        p.append(f"GP-WF: release.yml workflow `env` is not the GOLDEN PIN {PINNED_WORKFLOW_ENV!r}; got {release.get('env')!r} "
+                 f"(inherited by every job and step)")
+    return p
+
+
+def _canon_step(s: dict) -> dict:
+    """A step as the golden pin compares it: `run` and every `env` value whitespace-normalized, everything
+    else (uses / with / if / shell / name / any other key) verbatim."""
+    out: dict = {}
+    for k, v in s.items():
+        if k == "run":
+            out[k] = _ws(v)
+        elif k == "env" and isinstance(v, dict):
+            out[k] = {ek: _ws(ev) for ek, ev in v.items()}
+        else:
+            out[k] = v
+    return out
+
+
+def _wheel_job_golden_pin_problems(wheel: dict) -> list[str]:
+    p: list[str] = []
+    keys = set(wheel)
+    if keys != PINNED_WHEEL_JOB_KEYS:
+        p.append(f"GP: the `wheel` job keys {sorted(keys)} != the GOLDEN PIN {sorted(PINNED_WHEEL_JOB_KEYS)} (extra: "
+                 f"{sorted(keys - PINNED_WHEEL_JOB_KEYS)}, missing: {sorted(PINNED_WHEEL_JOB_KEYS - keys)}) -- a job-level "
+                 f"env/container/defaults/timeout can reshape or mask every step")
+    for k, want in PINNED_WHEEL_JOB.items():
+        if wheel.get(k) != want:
+            p.append(f"GP: the `wheel` job `{k}` is not the GOLDEN PIN value; expected {want!r}, got {wheel.get(k)!r}")
+    steps = _steps(wheel)
+    if len(steps) != len(PINNED_WHEEL_STEPS):
+        p.append(f"GP: the `wheel` job has {len(steps)} steps, the GOLDEN PIN has {len(PINNED_WHEEL_STEPS)} -- an extra step "
+                 f"(any `run:` that writes $GITHUB_ENV, any `uses: actions/github-script` exportVariable, any action at all) "
+                 f"or a removed step is refused by construction")
+    for i, (got, want) in enumerate(zip(steps, PINNED_WHEEL_STEPS)):
+        got_c = _canon_step(got)
+        if got_c != want:
+            diff = sorted(k for k in set(got_c) | set(want) if got_c.get(k) != want.get(k))
+            p.append(f"GP: `wheel` job step {i} ({got.get('name', got.get('uses', '?'))!r}) differs from the GOLDEN PIN in "
+                     f"{diff} -- every step is pinned exactly (uses@ref, with, if, shell, run text, env); expected "
+                     f"{ {k: want.get(k) for k in diff} !r}, got { {k: got_c.get(k) for k in diff} !r}")
+    return p
+
+
 def parse_need(text: str) -> set[str] | None:
     """The SET of records after a `--need` flag in a require_evidence.py invocation (tokens are
     consumed until the next non-record token), or None when there is no `--need`."""
@@ -374,7 +661,8 @@ def _transitive_needs(jobs: dict, start: str) -> set[str]:
     return out
 
 
-def lint(release: dict, publish: dict) -> list[str]:
+def lint(release: dict, publish: dict, pyproject_text: str | None = None) -> list[str]:
+    """`pyproject_text` (M4b): the repo's pyproject.toml text; None reads the checked-out file."""
     p: list[str] = []
     jobs = release.get("jobs") or {}
     # ---- G1: graph
@@ -455,7 +743,7 @@ def lint(release: dict, publish: dict) -> list[str]:
         for k in inputs:
             if k.lower() in ("role", "mode", "evidence_role", "skip_evidence"):
                 p.append(f"R1: {label} exposes `{k}` as a workflow_dispatch input -- the role/gate must be a step literal")
-    p += lint_m6(release, publish)
+    p += lint_m6(release, publish, pyproject_text)
     # ---- PERM (codex pass-4): effective `actions: read` for every evidence/CI-consuming job in BOTH workflows
     p += actions_read_problems(release, "release.yml")
     p += actions_read_problems(publish, "publish-pypi.yml")
@@ -649,7 +937,7 @@ def json_dumps_env(s: dict) -> str:
     return " ".join(str(v) for v in env.values()) if isinstance(env, dict) else ""
 
 
-def lint_m6(release: dict, publish: dict) -> list[str]:
+def lint_m6(release: dict, publish: dict, pyproject_text: str | None = None) -> list[str]:
     """The M6 producers + promotion gates (plan M6.1-M6.5)."""
     p: list[str] = []
     jobs = release.get("jobs") or {}
@@ -751,6 +1039,12 @@ def lint_m6(release: dict, publish: dict) -> list[str]:
             test_cmd = str(env["CIBW_TEST_COMMAND"])
     if "readme_spots.py" not in test_cmd or "--run" not in test_cmd:
         p.append("M4: the `wheel` legs' CIBW_TEST_COMMAND does not run `scripts/readme_spots.py --run` (validation §K)")
+    # ---- M4b (0.2.9): the bare-install SERVER gate (wheel_server_spot.py) must EXECUTE on every wheel leg -- the whole
+    # cibuildwheel test context is exact-pinned (see _cibw_test_context_problems; a presence check was bypassable)
+    p += _cibw_test_context_problems(release, wheel, pyproject_text)
+    # ---- GP (codex r4): the GOLDEN PIN of the whole `wheel` job -- subsumes every injection channel by construction
+    p += _wheel_job_golden_pin_problems(wheel)
+    p += _workflow_level_golden_pin_problems(release)  # GP-WF (codex r5): root defaults/env/any other key
     # ---- P1: publish-pypi.yml
     pj = publish.get("jobs") or {}
     for key in ("testpypi", "pypi"):

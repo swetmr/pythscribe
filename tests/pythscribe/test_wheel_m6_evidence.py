@@ -100,7 +100,7 @@ def _files_json(files: dict[str, bytes]) -> dict[str, str]:
 
 def make_wheel(path: Path, *, triple: str, binary: bytes, version: str = VERSION, pin_version: str = VERSION,
                runtime: dict[str, bytes] = RUNTIME_FILES, scaffolder: dict[str, bytes] = SCAFFOLDER_FILES,
-               extras=("server", "gradio", "streamlit", "all", "test", "web-bundled")) -> Path:
+               extras=("gradio", "streamlit", "all", "test", "web-bundled")) -> Path:  # 0.2.9: no `server` extra
     path.parent.mkdir(parents=True, exist_ok=True)
     meta = f"Metadata-Version: 2.4\nName: pythscribe\nVersion: {version}\n" + "".join(f"Provides-Extra: {e}\n" for e in extras)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
@@ -880,9 +880,15 @@ def test_k_static_green_on_the_real_readme_and_spots_extracted():
 
 
 def test_k_controls_each_false_claim_is_red():
-    # a non-existent extra in a command
-    bad = README.replace('pip install "pythscribe[server]"', 'pip install "pythscribe[nope]"', 1)
+    # a non-existent extra in a command. 0.2.9: the `[server]` install line no longer exists (wasmtime is
+    # CORE), so mutate a line that DOES exist -- the `[web-bundled]` one -- and assert the mutation LANDED
+    # (a no-op replace would make this control vacuous; codex 0.2.9 review blocker 3).
+    assert 'pip install "pythscribe[web-bundled]"' in README
+    bad = README.replace('pip install "pythscribe[web-bundled]"', 'pip install "pythscribe[nope]"', 1)
+    assert bad != README
     assert any("pythscribe[nope]" in x for x in rs.static_checks(bad, DECLARED))
+    # a resurrected [server] extra (0.2.9 removed it: wasmtime is a core dependency) -> RED
+    assert any("pythscribe[server]" in x for x in rs.check_extras(README + "\n`pip install pythscribe[server]`\n", DECLARED))
     # an extra the wheel does not declare (the wheel's Provides-Extra is the authority in the acceptance run)
     assert any("web-bundled" in x for x in rs.static_checks(README, DECLARED - {"web-bundled"}))
     # a resurrected [web] extra
@@ -1007,7 +1013,7 @@ def test_k_run_mode_executes_the_readme_spots_against_the_shipped_wheel(host_whe
             return rs.run_spots([rs.Block(line=1, lang="bash", code=code, section="Installation")], python=py, wheel=whl, node=False, pip_args=["--no-index", "--no-deps"])
 
     # uv PRESENT: exactly one spawn, of the real uv, with the bound wheel (+ extras) and the pinned target interpreter
-    for code, want_req in (("uv pip install pythscribe\n", str(whl)), ('uv pip install "pythscribe[server]"\n', f"{whl}[server]")):
+    for code, want_req in (("uv pip install pythscribe\n", str(whl)), ('uv pip install "pythscribe[gradio]"\n', f"{whl}[gradio]")):  # 0.2.9: no `server` extra
         ok = _uv_spots(code, present=True)
         assert ok.problems == [] and len(ok.passed) == 1 and ok.deferred == [], ok
         assert len(spawned) == 1, spawned
@@ -1220,6 +1226,14 @@ def test_wf_m6_each_rule_fires():
         if isinstance(s.get("env"), dict) and "CIBW_TEST_COMMAND" in s["env"]:
             s["env"]["CIBW_TEST_COMMAND"] = "python {project}/scripts/wheel_m1_spots.py {project}"
     assert any("readme_spots.py --run" in x for x in wl.lint(mut, pub))
+    # M4b (0.2.9): a wheel leg without the bare-install SERVER gate (the same mutant dropped it too) -> RED
+    assert any("wheel_server_spot.py" in x for x in wl.lint(mut, pub))
+    mut = copy.deepcopy(rel)
+    for s in mut["jobs"]["wheel"]["steps"]:
+        if isinstance(s.get("env"), dict) and "CIBW_TEST_COMMAND" in s["env"]:
+            s["env"]["CIBW_TEST_COMMAND"] = s["env"]["CIBW_TEST_COMMAND"].replace(" && python {project}/scripts/wheel_server_spot.py {project}", "")
+            assert "wheel_server_spot.py" not in s["env"]["CIBW_TEST_COMMAND"]  # the mutation landed (never vacuous)
+    assert any("wheel_server_spot.py" in x for x in wl.lint(mut, pub)) and not any("readme_spots.py --run" in x for x in wl.lint(mut, pub))
     # P1: the testpypi gate needing R-TP (a cycle: R-TP is produced by that job); the pypi gate missing R-TV
     mutp = copy.deepcopy(pub)
     for s in mutp["jobs"]["testpypi"]["steps"]:

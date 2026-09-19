@@ -74,8 +74,7 @@ pyths compile counter.ps -o counter.js
 
 <!-- spot -->
 ```bash
-pip install pythscribe              # compiler + `pyths` CLI + runtime + adapters -- node-free, offline
-pip install "pythscribe[server]"    # + wasmtime: run @wasm kernels in-process (sandboxed, GIL-free)
+pip install pythscribe              # everything: compiler + `pyths` CLI + wasm runtime + `@wasm` + adapters -- node-free, offline
 uv pip install pythscribe           # or with uv -- a faster drop-in for pip (extras work the same)
 ```
 
@@ -103,7 +102,7 @@ pyths build kernels.py    # or build explicitly: a verified js+wasm artifact at 
 pyths doctor              # what this machine can do
 ```
 
-Without the build (or without `[server]`) the function is still your function — plain Python runs, and `binding_of(sum_sq).mode` tells you which path ran. The deep reference for the pip package — the three modes, the sandbox, typed arrays, the Gradio/Streamlit adapters, the honest Numba/NumPy split — is [`pythscribe/README.md`](./pythscribe/README.md).
+Without the build step the function is still your function — plain Python runs, and `binding_of(sum_sq).mode` tells you which path ran (the wasm runtime ships in the base install, so `@wasm` runs in-process out of the box). The deep reference for the pip package — the three modes, the sandbox, typed arrays, the Gradio/Streamlit adapters, the honest Numba/NumPy split — is [`pythscribe/README.md`](./pythscribe/README.md).
 
 ### Demos
 
@@ -124,7 +123,7 @@ Not sure what your machine can do? `pyths doctor`.
 
 Prebuilt wheels: Linux x86_64/aarch64 (glibc 2.28+), macOS x86_64/arm64, Windows x64. On any other platform `pip install` builds from source **without** the compiler: prebuilt `__pythscribe__/` artifacts and the Python fallback still work; `pyths build`/`pyths compile` do not — `pyths doctor` will say so.
 
-Extras add *dependencies* only, never PythScribe code: `[server]` (wasmtime), `[gradio]`, `[streamlit]`, `[all]` (those three), `[web-bundled]` (a vendored Node for the frontend tooling; `[all]` deliberately does not pull it).
+wasmtime is a **core dependency**, not an extra — `@wasm` runs in-process on a plain `pip install pythscribe`. Extras add *dependencies* only, never PythScribe code: `[gradio]`, `[streamlit]`, `[all]` (both frameworks), `[web-bundled]` (a vendored Node for the frontend tooling; `[all]` deliberately does not pull it).
 
 ### The `.ps` frontend (React / Next.js) — with any Node on PATH
 

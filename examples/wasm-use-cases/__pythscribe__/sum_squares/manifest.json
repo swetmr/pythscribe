@@ -2,7 +2,7 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.8"
+    "version": "0.2.9"
   },
   "entry": "sum_squares.js",
   "files": {
@@ -15,11 +15,11 @@
     "sum_squares.glue.js": "2cb31dba380dc8bbea8f2cfe841d68c0360ebc08deac8a5afbae2075e11fae6b",
     "sum_squares.js": "8ff494e5557dcbf78cb196d9dbeacb3bf66ba4650198e38ee3791c1baf5e99c3",
     "sum_squares.ps": "e0441722b0266446fd2e0842bb205f6ca5f715315033636379a750d89b4a512b",
-    "sum_squares.wasm": "8c7faf78a1feb0e7f11680d875b20482c492be5dd1c5ee761d4a1666a42913d1"
+    "sum_squares.wasm": "6b87e49aa8ec5107b92874d7f532995eb5766325179dd252a6d726416b9cede1"
   },
   "function": "sum_squares",
   "glue": "sum_squares.glue.js",
-  "manifest_sha256": "6d45c0c409be72343ea547e16aacfe8b5d8a0748e9925646ccce5be53bed5ce2",
+  "manifest_sha256": "9106ac54abbcdc73b1ae3c3bd000c60e27c26d5f2faad4ee5ecf39dfbe8d5ffd",
   "optimizer": {
     "applied": false,
     "error": null,

@@ -833,4 +833,5 @@ def test_wf_release_yml_repair_hooks_are_passthrough_and_never_repair():
         assert tag in text, tag
     assert "scripts/verify_wheel_set.py" in text and "scripts/verify_wheel_clean.py" in text
     assert "CIBW_TEST_COMMAND" in text and "wheel_m1_spots.py" in text
+    assert "wheel_server_spot.py" in text  # 0.2.9: the bare-install SERVER gate runs on every wheel leg (wasmtime is CORE)
     assert "MACOSX_DEPLOYMENT_TARGET" in text and "11.0" in text and ".2.28" in text  # the by-construction floors

@@ -429,7 +429,7 @@ DEFAULT_MEMORY_BYTES = 256 * 1024 * 1024
 
 
 class RuntimeUnavailable(RuntimeError):
-    """wasmtime-py is not installed (`pip install pythscribe[server]`)."""
+    """the wasm runtime (wasmtime) is not available -- it ships with pythscribe (`pip install --upgrade pythscribe`)."""
 
 
 class ServerFfiError(RuntimeError):
@@ -471,7 +471,8 @@ def _wasmtime():
         import wasmtime
     except ImportError as e:
         raise RuntimeUnavailable(
-            "the server path needs wasmtime-py: `pip install pythscribe[server]` (or `pip install wasmtime`)"
+            "the server path needs the wasm runtime (wasmtime), which ships with pythscribe: "
+            "`pip install --upgrade pythscribe` (or `pip install wasmtime`)"
         ) from e
     return wasmtime
 

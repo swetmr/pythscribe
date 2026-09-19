@@ -109,7 +109,7 @@ switch ($Phase) {
     WriteCmd "$APP_HOME\run.cmd" @(
       "set TMP=$APP_HOME\tmp", "set TEMP=$APP_HOME\tmp", "set PATH=$APP_HOME\venv\Scripts;C:\Windows\System32;C:\Windows",
       "`"$PY`" -m venv $APP_HOME\venv || exit /b 1",
-      "$APP_HOME\venv\Scripts\pip.exe install --quiet --no-index --find-links $STAGE\wheelhouse `"$W[server]`" || exit /b 1",
+      "$APP_HOME\venv\Scripts\pip.exe install --quiet --no-index --find-links $STAGE\wheelhouse `"$W`" || exit /b 1",
       "$APP_HOME\venv\Scripts\pyths.exe --version || exit /b 1",
       "cd /d $APP_HOME\cwd",
       "$APP_HOME\venv\Scripts\python.exe $APP_HOME\cwd\wheel_acceptance.py run --manifest $STAGE\release_manifest.json --target $env:ACC_TARGET --checkout $env:GITHUB_WORKSPACE --hello $APP_HOME\cwd\hello.py --out $OUT_APP\leg.json > $OUT_APP\run.log 2>&1 || exit /b 1")
@@ -125,14 +125,14 @@ switch ($Phase) {
     Write-Host "::endgroup::"
   }
   "a5-app" {
-    Write-Host "::group::[native_windows:a5-app] [gradio,server] from the wheelhouse; build the demo kernel; serve on loopback"
+    Write-Host "::group::[native_windows:a5-app] [gradio] from the wheelhouse; build the demo kernel; serve on loopback"
     $W = "$STAGE\dist\$env:ACC_WHEEL"
     New-Item -ItemType Directory -Force -Path "$APP_HOME\gradio" | Out-Null
     Copy-Item "$STAGE\gradio\app.py", "$STAGE\gradio\kernels.py" "$APP_HOME\gradio\"
     icacls "$APP_HOME\gradio" /grant "app:(OI)(CI)F" | Out-Null
     WriteCmd "$APP_HOME\a5-prep.cmd" @(
       "set TMP=$APP_HOME\tmp", "set TEMP=$APP_HOME\tmp", "set PATH=$APP_HOME\venv\Scripts;C:\Windows\System32;C:\Windows",
-      "$APP_HOME\venv\Scripts\pip.exe install --quiet --no-index --find-links $STAGE\wheelhouse `"$W[gradio,server]`" || exit /b 1",
+      "$APP_HOME\venv\Scripts\pip.exe install --quiet --no-index --find-links $STAGE\wheelhouse `"$W[gradio]`" || exit /b 1",
       "cd /d $APP_HOME\gradio", "$APP_HOME\venv\Scripts\pyths.exe build kernels.py || exit /b 1")
     RunAs "app" $env:ACC_APP_PASSWORD "$APP_HOME\a5-prep.cmd" "$APP_HOME\gradio" | Out-Null
     WriteCmd "$APP_HOME\a5-serve.cmd" @(

@@ -374,21 +374,28 @@ def _requested_fuel(explicit: int | None) -> int | None:
     return v
 
 
+NO_RUNTIME_WHY = "the wasm runtime (wasmtime) is not available -- it ships with pythscribe; reinstall with `pip install --upgrade pythscribe`"
+
+
 def _server_capability(binding: WasmBinding) -> tuple[Any, str]:
-    """Try to bind the server path. Returns (ServerKernel, '') or (None, why-not)."""
+    """Try to bind the server path. Returns (ServerKernel, '') or (None, why-not).
+
+    ORDER IS LOAD-BEARING: the wasmtime probe runs LAST among the static preconditions (artifact,
+    FFI grammar, list use), so a `NO_RUNTIME_WHY` why-not means every OTHER server precondition
+    already passed -- wasmtime is the SOLE blocker. `_warn_if_no_runtime` keys on exactly that."""
     from . import runtime
     from .ffi import FfiError, signature_of
 
     if binding.artifact is None:
         return None, f"no usable artifact ({binding.artifact_status})"
-    if not runtime.wasmtime_available():
-        return None, "wasmtime-py is not installed (pip install pythscribe[server])"
     try:
         signature_of(binding)
     except FfiError as e:
         return None, f"signature outside the FFI grammar: {e}"
     if binding.list_use_problem:
         return None, f"the server path cannot honour this kernel's list use: {binding.list_use_problem}"
+    if not runtime.wasmtime_available():
+        return None, NO_RUNTIME_WHY
     try:
         sandbox = runtime.Sandbox(fuel=binding.fuel)
         kernel = runtime.ServerKernel.from_artifact(binding.artifact, sandbox=sandbox)
@@ -403,6 +410,33 @@ def _server_capability(binding: WasmBinding) -> tuple[Any, str]:
         # cache eviction) -> treat as unbindable and fall back, never let it escape.
         return None, f"cannot load the artifact's .wasm under wasmtime: {e}"
     return kernel, ""
+
+
+_warned_no_runtime = False
+_warn_lock = threading.Lock()  # the once-flag's check-and-set is atomic (a 2-thread probe emitted 2 warnings before)
+
+
+def _warn_if_no_runtime(binding: "WasmBinding", why_not: str) -> None:
+    """LOUD, once-per-process: if `@wasm` degraded to the Python path SOLELY because the wasm
+    runtime (wasmtime) is absent, say so -- a silent no-speedup is the footgun that made users
+    think `@wasm` was broken. wasmtime is a CORE dependency, so this fires only on a stripped /
+    partial install. PRECISE by construction: `why_not` is `NO_RUNTIME_WHY` only when a usable
+    artifact is bound AND the signature is inside the FFI grammar AND the list use is honourable
+    (`_server_capability` probes wasmtime LAST) -- i.e. the kernel WOULD run server-side and
+    reinstalling wasmtime is the fix. A genuine fallback (no artifact, non-compilable kernel, FFI
+    grammar, list use) never reaches here, whether or not wasmtime happens to be installed."""
+    global _warned_no_runtime
+    if why_not != NO_RUNTIME_WHY:
+        return  # degraded for some OTHER reason -- reinstalling wasmtime cannot help; stay quiet
+    with _warn_lock:
+        if _warned_no_runtime:
+            return
+        _warned_no_runtime = True
+    log.warning(
+        "pythscribe: the wasm runtime (wasmtime) is not available, so `@wasm` kernels run as plain "
+        "Python with NO speedup. wasmtime ships with pythscribe -- reinstall with "
+        "`pip install --upgrade pythscribe` (or `pip install wasmtime`). Run `pyths doctor` to check."
+    )
 
 
 def resolve_mode(binding: WasmBinding, requested: str) -> None:
@@ -427,8 +461,10 @@ def resolve_mode(binding: WasmBinding, requested: str) -> None:
         binding.server, binding.mode_reason, binding.mode = server, "auto: artifact + wasmtime + FFI grammar", "server"  # server before mode (free-threaded safe)
     elif binding.artifact is not None:
         binding.mode, binding.mode_reason = "browser", f"auto: artifact bound, server path unavailable ({why_not})"
+        _warn_if_no_runtime(binding, why_not)  # ONLY here: an artifact is bound, so wasmtime can be the sole blocker
         log.info("pythscribe: `%s` mode=browser (%s)", binding.name, why_not)
     else:
+        # no artifact at all: reinstalling wasmtime cannot change this outcome -> never the runtime warning
         binding.mode, binding.mode_reason = "fallback", f"auto: {why_not}"
 
 

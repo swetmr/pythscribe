@@ -2,7 +2,7 @@
   "compiler": {
     "commit": "e1b3b94baf49c110292ca259b6e9778ac288cb0b",
     "name": "pyths",
-    "version": "0.2.8"
+    "version": "0.2.9"
   },
   "entry": "threshold_lum.js",
   "files": {
@@ -15,11 +15,11 @@
     "threshold_lum.glue.js": "6205680ceb955d25c5652e1139a9425dd90f48e4f7537659544f79d3dae019ef",
     "threshold_lum.js": "8c8aa8355924f8a84fb049e743847497bc428c5abc8b23667e5ede03f420bb7d",
     "threshold_lum.ps": "8f0a38069717e249dc74b242d2dd23c4b433a6d312dd68392e3ded4c2e2c691f",
-    "threshold_lum.wasm": "b49882cadebf55ea86d6d1b5ba09286b1c70f7a5e056af04cfe36a745d59f0b6"
+    "threshold_lum.wasm": "120387f3f7b8f9ee212a82912ece1a3d854e2bcb8c3553fecf6e2e18671532f4"
   },
   "function": "threshold_lum",
   "glue": "threshold_lum.glue.js",
-  "manifest_sha256": "758ddf8d010f7a64f307e5ea54db662f3e1242721cfaa12867cb45fcac3fd180",
+  "manifest_sha256": "dae667ebb40d3dd74b3a0cff84a989ca00380d743a6630e4b083ee2ce9f174e1",
   "optimizer": {
     "applied": false,
     "error": null,

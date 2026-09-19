@@ -693,9 +693,12 @@ def test_r6_server_unavailable_when_wasmtime_missing_degrades_to_browser(K, tmp_
     monkeypatch.setattr(rt, "wasmtime_available", lambda: False)
     mod = import_module_from(_copy_uc(tmp_path, K, True, "nowt"))
     b = binding_of(mod.edit_distance)
-    assert b.mode == "browser" and "wasmtime-py is not installed" in b.mode_reason
+    # 0.2.9: wasmtime is a CORE dep -- the why-not is the ONE constant (`NO_RUNTIME_WHY`: reinstall, never an extra)
+    from pythscribe.decorators import NO_RUNTIME_WHY
+
+    assert b.mode == "browser" and NO_RUNTIME_WHY in b.mode_reason and "[server]" not in b.mode_reason, b.mode_reason
     monkeypatch.setenv("PYTHSCRIBE_MODE", "server")
-    with pytest.raises(ModeError, match="wasmtime-py is not installed"):
+    with pytest.raises(ModeError, match=r"the wasm runtime \(wasmtime\) is not available"):
         import_module_from(_copy_uc(tmp_path, K, True, "nowt2"))
 
 

@@ -5,10 +5,14 @@ server (sandboxed, GIL-free, bit-for-bit), or as plain Python when nothing is bu
 tell which.**
 
 ```bash
-pip install pythscribe            # the decorator, the loader, the fallback, both framework adapters
-pip install pythscribe[server]    # + wasmtime: run kernels in-process on the server
-pip install pythscribe[gradio]    # + Gradio (the custom component ships inside the wheel)
+pip install pythscribe               # everything: the @wasm decorator, the compiler, the wasm runtime, both adapters
+pip install pythscribe[gradio]       # + Gradio (the custom component ships inside the wheel)
+pip install pythscribe[streamlit]    # + Streamlit
+pip install pythscribe[web-bundled]  # + a vendored Node for the `.ps` frontend tooling (uses system Node if present)
 ```
+
+`@wasm` runs in-process (compiled to WebAssembly) out of the box — the wasm runtime ships in the base
+install. Run `pyths doctor` to see what your machine can do (compiler, wasm runtime, Node, adapters).
 
 ```python
 from pythscribe import wasm

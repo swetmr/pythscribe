@@ -37,11 +37,11 @@ Three separations, each a gate (plan §M3, blocker #9):
     Only published, wasmtime-validated bytes are ever hashed into the manifest.
 
 KNOWN LIMITATION (rev-7 SF-D, documented, not silently shipped): the only zero-crate-churn WASM
-validator available to the Python build today is `wasmtime` (a `[server]` extra), so a base /
-`[gradio]` / `[streamlit]` install whose kernels run ONLY in the browser tab gets UNOPTIMIZED
-artifacts unless `wasmtime` is importable -- a size/perf regression, never a correctness one (the
-unoptimized artifact is valid and `applied: false` is truthful). Stated in `optimizer.error`, in
-`pyths doctor`'s optimiser line (`NO_VALIDATOR_DOCTOR_LINE`, M7) and in the README `[server]` line.
+validator available to the Python build today is `wasmtime` -- now a CORE dependency, so it is
+normally present; only a stripped install (wasmtime removed) gets UNOPTIMIZED artifacts -- a
+size/perf regression, never a correctness one (the unoptimized artifact is valid and
+`applied: false` is truthful). Stated in `optimizer.error`, in `pyths doctor`'s optimiser line
+(`NO_VALIDATOR_DOCTOR_LINE`, M7) and in the README optimiser note.
 Follow-up (v0.2.6): `pyths check --wasm <file>` backed by the compiler's own `wasmparser`.
 """
 from __future__ import annotations
@@ -88,11 +88,11 @@ WASM_OPT_FEATURE_FLAGS = ("--enable-mutable-globals",)
 PRESERVED_SECTIONS = ("pythscribe.generated", "pyths.abi")
 # The one sentence the three surfaces (manifest error, doctor line, README) must carry (rev-7 SF-D).
 TAB_PATH_SENTENCE = (
-    "optimized output is adopted only when a validator is installed: `pip install wasmtime` or "
-    "`pythscribe[server]` -- this applies to browser-tab artifacts too"
+    "optimized output is adopted only when a validator is installed: `pip install wasmtime` (it ships "
+    "with pythscribe) -- this applies to browser-tab artifacts too"
 )
-NO_VALIDATOR_ERROR = f"no validator available (pip install pythscribe[server]); optimized output not adopted ({TAB_PATH_SENTENCE})"
-NO_VALIDATOR_DOCTOR_LINE = f"optimizer found but no validator: install `pythscribe[server]` to adopt optimized output ({TAB_PATH_SENTENCE})"
+NO_VALIDATOR_ERROR = f"no validator available (wasmtime ships with pythscribe; `pip install wasmtime`); optimized output not adopted ({TAB_PATH_SENTENCE})"
+NO_VALIDATOR_DOCTOR_LINE = f"optimizer found but no validator: install `wasmtime` to adopt optimized output ({TAB_PATH_SENTENCE})"
 # A wall-clock bound on the optimizer subprocess; a hung/killed optimizer is a failed pass (degrade).
 OPTIMIZER_TIMEOUT_S = 300.0
 _VERSION_RE = re.compile(r"version\s+(\S+)")

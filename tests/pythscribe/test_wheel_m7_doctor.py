@@ -81,7 +81,10 @@ def test_wasmtime_line_flips_with_importability(monkeypatch):
     assert _by_key()["wasmtime"]["present"] is True
     monkeypatch.setattr(_launcher, "_importable", lambda m: False)
     absent = _by_key()["wasmtime"]
-    assert absent["present"] is False and absent["fix"] == "`pip install pythscribe[server]`"
+    # 0.2.9: wasmtime is a CORE dep (no `[server]` extra) -- the fix is a reinstall, never an extra
+    assert absent["present"] is False
+    assert absent["fix"] == "wasmtime ships with pythscribe; `pip install --upgrade pythscribe` (or `pip install wasmtime`)"
+    assert "[server]" not in absent["fix"]
 
 
 def test_gradio_line_flips_with_importability(monkeypatch):

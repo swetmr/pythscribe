@@ -4,7 +4,8 @@ Frontend parity from the base wheel + the single `[web-bundled]` extra + `pyths 
 ships its PAIRED NEGATIVE CONTROL (the anti-vacuity paired-control convention); the ones that cannot be exercised by input alone
 (a source mutation) are mutation-verified RED by hand and named in the final report.
 
-  M7-1   base carries no Node; extras-set == {server, gradio, streamlit, all, test, web-bundled}
+  M7-1   base carries no Node; extras-set == {gradio, streamlit, all, test, web-bundled} (0.2.9: NO
+         `server` extra -- wasmtime is a CORE dependency; a resurrected [server] -> RED)
          (a resurrected [web] or an [optimize] extra -> RED); nodejs-wheel-binaries ONLY under
          web-bundled (never `all`). Control: add nodejs to base deps -> RED (that is a pyproject
          mutation; the extras-set assertion here catches it).
@@ -47,7 +48,7 @@ SCAFFOLDER = REPO / "pythscribe" / "_web" / "create-pyths-app"
 SCRIPTS = REPO / "scripts"
 NODE = shutil.which("node")
 SKIP_PACKAGING = os.environ.get("PYTHSCRIBE_SKIP_PACKAGING") == "1"
-DECLARED_EXTRAS = {"server", "gradio", "streamlit", "all", "test", "web-bundled"}
+DECLARED_EXTRAS = {"gradio", "streamlit", "all", "test", "web-bundled"}  # 0.2.9: wasmtime is CORE, no `server` extra
 
 
 def _run(args, timeout=120, **kw) -> subprocess.CompletedProcess:
@@ -126,8 +127,8 @@ def test_m7_1_extras_set_is_exactly_the_declared_set(built_wheel):
 
 
 def test_m7_1_web_bundled_is_the_only_node_carrier(built_wheel):
-    """nodejs-wheel-binaries is pulled ONLY by [web-bundled]; `all` == wasmtime+gradio+streamlit and
-    does NOT drag in a ~90 MB Node (validation §J-extras)."""
+    """nodejs-wheel-binaries is pulled ONLY by [web-bundled]; `all` == gradio+streamlit (wasmtime comes
+    in as a CORE dep, 0.2.9) and does NOT drag in a ~90 MB Node (validation §J-extras)."""
     md = _wheel_metadata(built_wheel)
     node_lines = [l for l in md.splitlines() if l.startswith("Requires-Dist") and "nodejs-wheel-binaries" in l]
     assert node_lines, "web-bundled must pull nodejs-wheel-binaries"
@@ -137,10 +138,18 @@ def test_m7_1_web_bundled_is_the_only_node_carrier(built_wheel):
     assert all_lines and not any("nodejs" in l for l in all_lines), all_lines
 
 
-def test_m7_1_base_requires_dist_has_no_unconditional_dependency(built_wheel):
+def test_m7_1_base_requires_dist_is_exactly_wasmtime(built_wheel):
+    """0.2.9: the ONE unconditional dependency is `wasmtime` (the `@wasm` server path -- the headline
+    capability -- must work on a bare `pip install pythscribe`; it was wrongly a `[server]` extra in 0.2.8).
+    Everything else stays extra-gated: no Node, no framework, no second base dep (a nodejs/gradio/streamlit
+    line without an `extra ==` marker, or a wasmtime line WITH one, -> RED). `import pythscribe` itself
+    still needs nothing (wasmtime is lazy-imported by the server path)."""
     md = _wheel_metadata(built_wheel)
     unconditional = [l for l in md.splitlines() if l.startswith("Requires-Dist") and "extra ==" not in l]
-    assert unconditional == [], unconditional  # `import pythscribe` is dependency-free
+    assert len(unconditional) == 1 and unconditional[0].startswith("Requires-Dist: wasmtime"), unconditional
+    assert not any(("nodejs" in l or "gradio" in l or "streamlit" in l) for l in unconditional), unconditional
+    assert not any(l.startswith("Requires-Dist: wasmtime") and "extra ==" in l and 'extra == "test"' not in l for l in md.splitlines()), "wasmtime demoted to an extra"
+    assert "Provides-Extra: server" not in md
 
 
 # ============================================================ M7-2 resolver order + notices
